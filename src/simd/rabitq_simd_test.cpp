@@ -48,7 +48,11 @@ using namespace vsag;
             neon = neon::Func(query, base, dim, inv_sqrt_d);     \
             REQUIRE(std::abs(gt - neon) < 1e-4);                 \
         }                                                        \
-    };
+        if (SimdStatus::SupportSVE()) {                          \
+            auto sve = sve::Func(query, base, dim, inv_sqrt_d);  \
+            REQUIRE(std::abs(gt - sve) < 1e-4);                  \
+        }                                                        \
+    }
 
 #define TEST_ACCURACY_SQ4(Func)                                                \
     {                                                                          \
@@ -62,7 +66,11 @@ using namespace vsag;
             float res = avx512vpopcntdq::Func(codes.data(), bits.data(), dim); \
             REQUIRE(fixtures::dist_t(gt) == fixtures::dist_t(res));            \
         }                                                                      \
-    };
+        if (SimdStatus::SupportSVE()) {                                        \
+            float sve = sve::Func(codes.data(), bits.data(), dim);             \
+            REQUIRE(fixtures::dist_t(gt) == fixtures::dist_t(sve));            \
+        }                                                                      \
+    }
 
 #define BENCHMARK_SIMD_COMPUTE_SQ4(Simd, Comp)          \
     BENCHMARK_ADVANCED(#Simd #Comp) {                   \
