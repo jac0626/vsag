@@ -54,11 +54,17 @@ using namespace vsag;
                                lb.data(),                          \
                                diff.data(),                        \
                                dim);                               \
+        auto sve = sve::Func(codes1.data() + i * code_size,        \
+                               codes2.data() + i * code_size,      \
+                               lb.data(),                          \
+                               diff.data(),                        \
+                               dim);                               \
         REQUIRE(fixtures::dist_t(gt) == fixtures::dist_t(sse));    \
         REQUIRE(fixtures::dist_t(gt) == fixtures::dist_t(avx));    \
         REQUIRE(fixtures::dist_t(gt) == fixtures::dist_t(avx2));   \
         REQUIRE(fixtures::dist_t(gt) == fixtures::dist_t(avx512)); \
         REQUIRE(fixtures::dist_t(gt) == fixtures::dist_t(neon));   \
+        REQUIRE(fixtures::dist_t(gt) == fixtures::dist_t(sve));   \
     }
 
 TEST_CASE("SQ4 SIMD Compute Codes", "[ut][simd]") {
@@ -121,4 +127,5 @@ TEST_CASE("SQ4 SIMD Compute Benchmark", "[ut][simd][!benchmark]") {
     BENCHMARK_SIMD_COMPUTE(avx2, SQ4ComputeIP);
     BENCHMARK_SIMD_COMPUTE(avx512, SQ4ComputeIP);
     BENCHMARK_SIMD_COMPUTE(neon, SQ4ComputeIP);
+    BENCHMARK_SIMD_COMPUTE(sve, SQ4ComputeIP);
 }
