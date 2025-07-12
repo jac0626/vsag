@@ -255,6 +255,7 @@ TEST_CASE("FP32 Benchmark", "[ut][simd][!benchmark]") {
     auto vec1 = fixtures::generate_vectors(count * 2, dim);
     std::vector<float> vec2(vec1.begin() + count, vec1.end());
     BENCHMARK_SIMD_COMPUTE(generic, FP32ComputeIP);
+<<<<<<< HEAD
     BENCHMARK_SIMD_COMPUTE(sse, FP32ComputeIP);
     BENCHMARK_SIMD_COMPUTE(avx, FP32ComputeIP);
     BENCHMARK_SIMD_COMPUTE(avx2, FP32ComputeIP);
@@ -269,6 +270,40 @@ TEST_CASE("FP32 Benchmark", "[ut][simd][!benchmark]") {
     BENCHMARK_SIMD_COMPUTE(avx512, FP32ComputeL2Sqr);
     BENCHMARK_SIMD_COMPUTE(neon, FP32ComputeL2Sqr);
     BENCHMARK_SIMD_COMPUTE(sve, FP32ComputeL2Sqr);
+=======
+    if (SimdStatus::SupportSSE()) {
+        BENCHMARK_SIMD_COMPUTE(sse, FP32ComputeIP);
+    }
+    if (SimdStatus::SupportAVX()) {
+        BENCHMARK_SIMD_COMPUTE(avx, FP32ComputeIP);
+    }
+    if (SimdStatus::SupportAVX2()) {
+        BENCHMARK_SIMD_COMPUTE(avx2, FP32ComputeIP);
+    }
+    if (SimdStatus::SupportAVX512()) {
+        BENCHMARK_SIMD_COMPUTE(avx512, FP32ComputeIP);
+    }
+    if (SimdStatus::SupportNEON()) {
+        BENCHMARK_SIMD_COMPUTE(neon, FP32ComputeIP);
+    }
+
+    BENCHMARK_SIMD_COMPUTE(generic, FP32ComputeL2Sqr);
+    if (SimdStatus::SupportSSE()) {
+        BENCHMARK_SIMD_COMPUTE(sse, FP32ComputeL2Sqr);
+    }
+    if (SimdStatus::SupportAVX()) {
+        BENCHMARK_SIMD_COMPUTE(avx, FP32ComputeL2Sqr);
+    }
+    if (SimdStatus::SupportAVX2()) {
+        BENCHMARK_SIMD_COMPUTE(avx2, FP32ComputeL2Sqr);
+    }
+    if (SimdStatus::SupportAVX512()) {
+        BENCHMARK_SIMD_COMPUTE(avx512, FP32ComputeL2Sqr);
+    }
+    if (SimdStatus::SupportNEON()) {
+        BENCHMARK_SIMD_COMPUTE(neon, FP32ComputeL2Sqr);
+    }
+>>>>>>> 3877815 (fix(simd): Add CPU support detection to benchmark tests)
 }
 
 #define BENCHMARK_SIMD_COMPUTE_BATCH4(Simd, Comp)        \
@@ -296,18 +331,42 @@ TEST_CASE("FP32 Benchmark Batch4", "[ut][simd][!benchmark]") {
     auto vec1 = fixtures::generate_vectors(count * 2, dim);
     std::vector<float> vec2(vec1.begin() + count, vec1.end());
     BENCHMARK_SIMD_COMPUTE_BATCH4(generic, FP32ComputeIPBatch4);
-    BENCHMARK_SIMD_COMPUTE_BATCH4(sse, FP32ComputeIPBatch4);
-    BENCHMARK_SIMD_COMPUTE_BATCH4(avx, FP32ComputeIPBatch4);
-    BENCHMARK_SIMD_COMPUTE_BATCH4(avx2, FP32ComputeIPBatch4);
-    BENCHMARK_SIMD_COMPUTE_BATCH4(avx512, FP32ComputeIPBatch4);
-    BENCHMARK_SIMD_COMPUTE_BATCH4(neon, FP32ComputeIPBatch4);
-    BENCHMARK_SIMD_COMPUTE_BATCH4(sve, FP32ComputeIPBatch4);
+    if (SimdStatus::SupportSSE()) {
+        BENCHMARK_SIMD_COMPUTE_BATCH4(sse, FP32ComputeIPBatch4);
+    }
+    if (SimdStatus::SupportAVX()) {
+        BENCHMARK_SIMD_COMPUTE_BATCH4(avx, FP32ComputeIPBatch4);
+    }
+    if (SimdStatus::SupportAVX2()) {
+        BENCHMARK_SIMD_COMPUTE_BATCH4(avx2, FP32ComputeIPBatch4);
+    }
+    if (SimdStatus::SupportAVX512()) {
+        BENCHMARK_SIMD_COMPUTE_BATCH4(avx512, FP32ComputeIPBatch4);
+    }
+    if (SimdStatus::SupportNEON()) {
+        BENCHMARK_SIMD_COMPUTE_BATCH4(neon, FP32ComputeIPBatch4);
+    }
+    if (SimdStatus::SupportSVE()) {
+        BENCHMARK_SIMD_COMPUTE_BATCH4(sve, FP32ComputeIPBatch4);
+    }
 
     BENCHMARK_SIMD_COMPUTE_BATCH4(generic, FP32ComputeL2SqrBatch4);
-    BENCHMARK_SIMD_COMPUTE_BATCH4(sse, FP32ComputeL2SqrBatch4);
-    BENCHMARK_SIMD_COMPUTE_BATCH4(avx, FP32ComputeL2SqrBatch4);
-    BENCHMARK_SIMD_COMPUTE_BATCH4(avx2, FP32ComputeL2SqrBatch4);
-    BENCHMARK_SIMD_COMPUTE_BATCH4(avx512, FP32ComputeL2SqrBatch4);
-    BENCHMARK_SIMD_COMPUTE_BATCH4(neon, FP32ComputeL2SqrBatch4);
-    BENCHMARK_SIMD_COMPUTE_BATCH4(sve, FP32ComputeL2SqrBatch4);
+    if (SimdStatus::SupportSSE()) {
+        BENCHMARK_SIMD_COMPUTE_BATCH4(sse, FP32ComputeL2SqrBatch4);
+    }
+    if (SimdStatus::SupportAVX()) {
+        BENCHMARK_SIMD_COMPUTE_BATCH4(avx, FP32ComputeL2SqrBatch4);
+    }
+    if (SimdStatus::SupportAVX2()) {
+        BENCHMARK_SIMD_COMPUTE_BATCH4(avx2, FP32ComputeL2SqrBatch4);
+    }
+    if (SimdStatus::SupportAVX512()) {
+        BENCHMARK_SIMD_COMPUTE_BATCH4(avx512, FP32ComputeL2SqrBatch4);
+    }
+    if (SimdStatus::SupportNEON()) {
+        BENCHMARK_SIMD_COMPUTE_BATCH4(neon, FP32ComputeL2SqrBatch4);
+    }
+    if (SimdStatus::SupportSVE()) {
+        BENCHMARK_SIMD_COMPUTE_BATCH4(sve, FP32ComputeL2SqrBatch4);
+    }
 }

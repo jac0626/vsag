@@ -189,41 +189,107 @@ TEST_CASE("Bit Operator (AND, OR, XOR, NOT)", "[!benchmark][simd]") {
 
     SECTION("Bit Operator And") {
         BENCHMARK_BIT_OPERATOR_COMPUTE(generic, BitAnd);
+<<<<<<< HEAD
         BENCHMARK_BIT_OPERATOR_COMPUTE(sse, BitAnd);
         BENCHMARK_BIT_OPERATOR_COMPUTE(avx, BitAnd);
         BENCHMARK_BIT_OPERATOR_COMPUTE(avx2, BitAnd);
         BENCHMARK_BIT_OPERATOR_COMPUTE(avx512, BitAnd);
         BENCHMARK_BIT_OPERATOR_COMPUTE(neon, BitAnd);
         BENCHMARK_BIT_OPERATOR_COMPUTE(sve, BitAnd);
+=======
+        if (SimdStatus::SupportSSE()) {
+            BENCHMARK_BIT_OPERATOR_COMPUTE(sse, BitAnd);
+        }
+        if (SimdStatus::SupportAVX()) {
+            BENCHMARK_BIT_OPERATOR_COMPUTE(avx, BitAnd);
+        }
+        if (SimdStatus::SupportAVX2()) {
+            BENCHMARK_BIT_OPERATOR_COMPUTE(avx2, BitAnd);
+        }
+        if (SimdStatus::SupportAVX512()) {
+            BENCHMARK_BIT_OPERATOR_COMPUTE(avx512, BitAnd);
+        }
+        if (SimdStatus::SupportNEON()) {
+            BENCHMARK_BIT_OPERATOR_COMPUTE(neon, BitAnd);
+        }
+>>>>>>> 3877815 (fix(simd): Add CPU support detection to benchmark tests)
     }
 
     SECTION("Bit Operator Or") {
         BENCHMARK_BIT_OPERATOR_COMPUTE(generic, BitOr);
+<<<<<<< HEAD
         BENCHMARK_BIT_OPERATOR_COMPUTE(sse, BitOr);
         BENCHMARK_BIT_OPERATOR_COMPUTE(avx, BitOr);
         BENCHMARK_BIT_OPERATOR_COMPUTE(avx2, BitOr);
         BENCHMARK_BIT_OPERATOR_COMPUTE(avx512, BitOr);
         BENCHMARK_BIT_OPERATOR_COMPUTE(neon, BitOr);
         BENCHMARK_BIT_OPERATOR_COMPUTE(sve, BitOr);
+=======
+        if (SimdStatus::SupportSSE()) {
+            BENCHMARK_BIT_OPERATOR_COMPUTE(sse, BitOr);
+        }
+        if (SimdStatus::SupportAVX()) {
+            BENCHMARK_BIT_OPERATOR_COMPUTE(avx, BitOr);
+        }
+        if (SimdStatus::SupportAVX2()) {
+            BENCHMARK_BIT_OPERATOR_COMPUTE(avx2, BitOr);
+        }
+        if (SimdStatus::SupportAVX512()) {
+            BENCHMARK_BIT_OPERATOR_COMPUTE(avx512, BitOr);
+        }
+        if (SimdStatus::SupportNEON()) {
+            BENCHMARK_BIT_OPERATOR_COMPUTE(neon, BitOr);
+        }
+>>>>>>> 3877815 (fix(simd): Add CPU support detection to benchmark tests)
     }
 
     SECTION("Bit Operator Xor") {
         BENCHMARK_BIT_OPERATOR_COMPUTE(generic, BitXor);
+<<<<<<< HEAD
         BENCHMARK_BIT_OPERATOR_COMPUTE(sse, BitXor);
         BENCHMARK_BIT_OPERATOR_COMPUTE(avx, BitXor);
         BENCHMARK_BIT_OPERATOR_COMPUTE(avx2, BitXor);
         BENCHMARK_BIT_OPERATOR_COMPUTE(avx512, BitXor);
         BENCHMARK_BIT_OPERATOR_COMPUTE(neon, BitXor);
         BENCHMARK_BIT_OPERATOR_COMPUTE(sve, BitXor);
+=======
+        if (SimdStatus::SupportSSE()) {
+            BENCHMARK_BIT_OPERATOR_COMPUTE(sse, BitXor);
+        }
+        if (SimdStatus::SupportAVX()) {
+            BENCHMARK_BIT_OPERATOR_COMPUTE(avx, BitXor);
+        }
+        if (SimdStatus::SupportAVX2()) {
+            BENCHMARK_BIT_OPERATOR_COMPUTE(avx2, BitXor);
+        }
+        if (SimdStatus::SupportAVX512()) {
+            BENCHMARK_BIT_OPERATOR_COMPUTE(avx512, BitXor);
+        }
+        if (SimdStatus::SupportNEON()) {
+            BENCHMARK_BIT_OPERATOR_COMPUTE(neon, BitXor);
+        }
+>>>>>>> 3877815 (fix(simd): Add CPU support detection to benchmark tests)
     }
 
     SECTION("Bit Operator Not") {
         BENCHMARK_BIT_NOT_COMPUTE(generic, BitNot);
-        BENCHMARK_BIT_NOT_COMPUTE(sse, BitNot);
-        BENCHMARK_BIT_NOT_COMPUTE(avx, BitNot);
-        BENCHMARK_BIT_NOT_COMPUTE(avx2, BitNot);
-        BENCHMARK_BIT_NOT_COMPUTE(avx512, BitNot);
-        BENCHMARK_BIT_NOT_COMPUTE(neon, BitNot);
-        BENCHMARK_BIT_NOT_COMPUTE(sve, BitNot);
+        if (SimdStatus::SupportSSE()) {
+            BENCHMARK_BIT_NOT_COMPUTE(sse, BitNot);
+        }
+        if (SimdStatus::SupportAVX()) {
+            BENCHMARK_BIT_NOT_COMPUTE(avx, BitNot);
+        }
+        if (SimdStatus::SupportAVX2()) {
+            BENCHMARK_BIT_NOT_COMPUTE(avx2, BitNot);
+        }
+        if (SimdStatus::SupportAVX512()) {
+            BENCHMARK_BIT_NOT_COMPUTE(avx512, BitNot);
+        }
+        if (SimdStatus::SupportNEON()) {
+            BENCHMARK_BIT_NOT_COMPUTE(neon, BitNot);
+        }
+        if (SimdStatus::SupportSVE()) {
+            BENCHMARK_BIT_NOT_COMPUTE(sve, BitNot);
+        }
     }
 }

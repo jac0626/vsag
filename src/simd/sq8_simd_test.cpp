@@ -157,10 +157,22 @@ TEST_CASE("SQ8 SIMD Compute Benchmark", "[ut][simd][!benchmark]") {
     auto lb = fixtures::generate_vectors(1, dim, true, 180);
     auto diff = fixtures::generate_vectors(1, dim, true, 6217);
     BENCHMARK_SIMD_COMPUTE_QUERY(generic, SQ8ComputeIP);
-    BENCHMARK_SIMD_COMPUTE_QUERY(sse, SQ8ComputeIP);
-    BENCHMARK_SIMD_COMPUTE_QUERY(avx, SQ8ComputeIP);
-    BENCHMARK_SIMD_COMPUTE_QUERY(avx2, SQ8ComputeIP);
-    BENCHMARK_SIMD_COMPUTE_QUERY(avx512, SQ8ComputeIP);
-    BENCHMARK_SIMD_COMPUTE_QUERY(neon, SQ8ComputeIP);
-    BENCHMARK_SIMD_COMPUTE_QUERY(sve, SQ8ComputeIP);
+    if (SimdStatus::SupportSSE()) {
+        BENCHMARK_SIMD_COMPUTE_QUERY(sse, SQ8ComputeIP);
+    }
+    if (SimdStatus::SupportAVX()) {
+        BENCHMARK_SIMD_COMPUTE_QUERY(avx, SQ8ComputeIP);
+    }
+    if (SimdStatus::SupportAVX2()) {
+        BENCHMARK_SIMD_COMPUTE_QUERY(avx2, SQ8ComputeIP);
+    }
+    if (SimdStatus::SupportAVX512()) {
+        BENCHMARK_SIMD_COMPUTE_QUERY(avx512, SQ8ComputeIP);
+    }
+    if (SimdStatus::SupportNEON()) {
+        BENCHMARK_SIMD_COMPUTE_QUERY(neon, SQ8ComputeIP);
+    }
+    if (SimdStatus::SupportSVE()) {
+        BENCHMARK_SIMD_COMPUTE_QUERY(sve, SQ8ComputeIP);
+    }
 }
