@@ -1,4 +1,3 @@
-
 // Copyright 2024-present the vsag project
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -106,10 +105,22 @@ TEST_CASE("PQFastScan Benchmark", "[ut][simd][!benchmark]") {
     std::vector<int32_t> gt(32);
 
     BENCHMARK_SIMD_COMPUTE(generic, PQFastScanLookUp32);
-    BENCHMARK_SIMD_COMPUTE(sse, PQFastScanLookUp32);
-    BENCHMARK_SIMD_COMPUTE(avx, PQFastScanLookUp32);
-    BENCHMARK_SIMD_COMPUTE(avx2, PQFastScanLookUp32);
-    BENCHMARK_SIMD_COMPUTE(avx512, PQFastScanLookUp32);
-    BENCHMARK_SIMD_COMPUTE(neon, PQFastScanLookUp32);
-    BENCHMARK_SIMD_COMPUTE(sve, PQFastScanLookUp32);
+    if (SimdStatus::SupportSSE()) {
+        BENCHMARK_SIMD_COMPUTE(sse, PQFastScanLookUp32);
+    }
+    if (SimdStatus::SupportAVX()) {
+        BENCHMARK_SIMD_COMPUTE(avx, PQFastScanLookUp32);
+    }
+    if (SimdStatus::SupportAVX2()) {
+        BENCHMARK_SIMD_COMPUTE(avx2, PQFastScanLookUp32);
+    }
+    if (SimdStatus::SupportAVX512()) {
+        BENCHMARK_SIMD_COMPUTE(avx512, PQFastScanLookUp32);
+    }
+    if (SimdStatus::SupportNEON()) {
+        BENCHMARK_SIMD_COMPUTE(neon, PQFastScanLookUp32);
+    }
+    if (SimdStatus::SupportSVE()) {
+        BENCHMARK_SIMD_COMPUTE(sve, PQFastScanLookUp32);
+    }
 }

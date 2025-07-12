@@ -1,4 +1,3 @@
-
 // Copyright 2024-present the vsag project
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -98,9 +97,19 @@ TEST_CASE("Normalize Benchmark", "[ut][simd][!benchmark]") {
     auto vec1 = fixtures::generate_vectors(count * 2, dim);
     std::vector<float> vec2(vec1.begin() + count, vec1.end());
     BENCHMARK_SIMD_COMPUTE(generic, Normalize);
-    BENCHMARK_SIMD_COMPUTE(sse, Normalize);
-    BENCHMARK_SIMD_COMPUTE(avx2, Normalize);
-    BENCHMARK_SIMD_COMPUTE(avx512, Normalize);
-    BENCHMARK_SIMD_COMPUTE(neon, Normalize);
-    BENCHMARK_SIMD_COMPUTE(sve, Normalize);
+    if (SimdStatus::SupportSSE()) {
+        BENCHMARK_SIMD_COMPUTE(sse, Normalize);
+    }
+    if (SimdStatus::SupportAVX2()) {
+        BENCHMARK_SIMD_COMPUTE(avx2, Normalize);
+    }
+    if (SimdStatus::SupportAVX512()) {
+        BENCHMARK_SIMD_COMPUTE(avx512, Normalize);
+    }
+    if (SimdStatus::SupportNEON()) {
+        BENCHMARK_SIMD_COMPUTE(neon, Normalize);
+    }
+    if (SimdStatus::SupportSVE()) {
+        BENCHMARK_SIMD_COMPUTE(sve, Normalize);
+    }
 }
