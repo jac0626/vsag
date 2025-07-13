@@ -674,6 +674,17 @@ VecRescale(float* data, size_t dim, float val) {
 }
 
 void
+RotateOp(float* data, int idx, int dim_, int step) {
+#if defined(ENABLE_SVE)
+    // TODO: SVE implementation here
+    neon::RotateOp(data, idx, dim_, step);
+#else
+    neon::RotateOp(data, idx, dim_, step);
+#endif
+}
+
+
+void
 FHTRotate(float* data, size_t dim_) {
 #if defined(ENABLE_SVE)
     // TODO: SVE implementation here
