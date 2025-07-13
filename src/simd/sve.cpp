@@ -82,8 +82,31 @@ PQDistanceFloat256(const void* single_dim_centers, float single_dim_val, void* r
 float
 FP32ComputeIP(const float* RESTRICT query, const float* RESTRICT codes, uint64_t dim) {
 #if defined(ENABLE_SVE)
-    // TODO: SVE implementation here
-    return neon::FP32ComputeIP(query, codes, dim);
+    svfloat32_t sum_vec = svdup_f32(0.0f);
+    uint64_t i = 0;
+    
+    const uint64_t step = svcntw();
+
+    
+    svbool_t pg = svwhilelt_b32(i, dim);
+    do {
+        
+        svprfw(svptrue_b32(), query + i + step, SV_PLDL1KEEP);
+        svprfw(svptrue_b32(), codes + i + step, SV_PLDL1KEEP);
+        
+        
+        svfloat32_t q_vec = svld1_f32(pg, query + i);
+        svfloat32_t c_vec = svld1_f32(pg, codes + i);
+        
+        
+        sum_vec = svmla_f32_m(pg, sum_vec, q_vec, c_vec);
+
+        i += step;
+        pg = svwhilelt_b32(i, dim);
+    } while (svptest_any(svptrue_b32(), pg)); 
+
+    
+    return svaddv_f32(svptrue_b32(), sum_vec);
 #else
     return neon::FP32ComputeIP(query, codes, dim);
 #endif
@@ -92,8 +115,27 @@ FP32ComputeIP(const float* RESTRICT query, const float* RESTRICT codes, uint64_t
 float
 FP32ComputeL2Sqr(const float* RESTRICT query, const float* RESTRICT codes, uint64_t dim) {
 #if defined(ENABLE_SVE)
-    // TODO: SVE implementation here
-    return neon::FP32ComputeL2Sqr(query, codes, dim);
+    svfloat32_t sum_vec = svdup_f32(0.0f);
+    uint64_t i = 0;
+    const uint64_t step = svcntw();
+
+    svbool_t pg = svwhilelt_b32(i, dim);
+    do {
+        svprfw(svptrue_b32(), query + i + step, SV_PLDL1KEEP);
+        svprfw(svptrue_b32(), codes + i + step, SV_PLDL1KEEP);
+
+        svfloat32_t q_vec = svld1_f32(pg, query + i);
+        svfloat32_t c_vec = svld1_f32(pg, codes + i);
+       
+        svfloat32_t diff = svsub_f32_z(pg, q_vec, c_vec);
+       
+        sum_vec = svmla_f32_m(pg, sum_vec, diff, diff);
+
+        i += step;
+        pg = svwhilelt_b32(i, dim);
+    } while (svptest_any(svptrue_b32(), pg));
+
+    return svaddv_f32(svptrue_b32(), sum_vec);
 #else
     return neon::FP32ComputeL2Sqr(query, codes, dim);
 #endif
@@ -111,9 +153,49 @@ FP32ComputeIPBatch4(const float* RESTRICT query,
                     float& result3,
                     float& result4) {
 #if defined(ENABLE_SVE)
-    // TODO: SVE implementation here
-    neon::FP32ComputeIPBatch4(
-        query, dim, codes1, codes2, codes3, codes4, result1, result2, result3, result4);
+    
+    svfloat32_t res1_vec = svdup_f32(0.0f);
+    svfloat32_t res2_vec = svdup_f32(0.0f);
+    svfloat32_t res3_vec = svdup_f32(0.0f);
+    svfloat32_t res4_vec = svdup_f32(0.0f);
+
+    uint64_t i = 0;
+    const uint64_t step = svcntw();
+
+    svbool_t pg = svwhilelt_b32(i, dim);
+    do {
+        
+        svprfw(svptrue_b32(), query + i + step, SV_PLDL1KEEP);
+        svprfw(svptrue_b32(), codes1 + i + step, SV_PLDL1KEEP);
+        svprfw(svptrue_b32(), codes2 + i + step, SV_PLDL1KEEP);
+        svprfw(svptrue_b32(), codes3 + i + step, SV_PLDL1KEEP);
+        svprfw(svptrue_b32(), codes4 + i + step, SV_PLDL1KEEP);
+        
+        
+        svfloat32_t q_vec = svld1_f32(pg, query + i);
+
+        
+        svfloat32_t c1_vec = svld1_f32(pg, codes1 + i);
+        res1_vec = svmla_f32_m(pg, res1_vec, q_vec, c1_vec);
+
+        svfloat32_t c2_vec = svld1_f32(pg, codes2 + i);
+        res2_vec = svmla_f32_m(pg, res2_vec, q_vec, c2_vec);
+
+        svfloat32_t c3_vec = svld1_f32(pg, codes3 + i);
+        res3_vec = svmla_f32_m(pg, res3_vec, q_vec, c3_vec);
+
+        svfloat32_t c4_vec = svld1_f32(pg, codes4 + i);
+        res4_vec = svmla_f32_m(pg, res4_vec, q_vec, c4_vec);
+
+        i += step;
+        pg = svwhilelt_b32(i, dim);
+    } while (svptest_any(svptrue_b32(), pg));
+
+    
+    result1 = svaddv_f32(svptrue_b32(), res1_vec);
+    result2 = svaddv_f32(svptrue_b32(), res2_vec);
+    result3 = svaddv_f32(svptrue_b32(), res3_vec);
+    result4 = svaddv_f32(svptrue_b32(), res4_vec);
 #else
     neon::FP32ComputeIPBatch4(
         query, dim, codes1, codes2, codes3, codes4, result1, result2, result3, result4);
@@ -132,9 +214,48 @@ FP32ComputeL2SqrBatch4(const float* RESTRICT query,
                        float& result3,
                        float& result4) {
 #if defined(ENABLE_SVE)
-    // TODO: SVE implementation here
-    neon::FP32ComputeL2SqrBatch4(
-        query, dim, codes1, codes2, codes3, codes4, result1, result2, result3, result4);
+    svfloat32_t res1_vec = svdup_f32(0.0f);
+    svfloat32_t res2_vec = svdup_f32(0.0f);
+    svfloat32_t res3_vec = svdup_f32(0.0f);
+    svfloat32_t res4_vec = svdup_f32(0.0f);
+
+    uint64_t i = 0;
+    const uint64_t step = svcntw();
+
+    svbool_t pg = svwhilelt_b32(i, dim);
+    do {
+        svprfw(svptrue_b32(), query + i + step, SV_PLDL1KEEP);
+        svprfw(svptrue_b32(), codes1 + i + step, SV_PLDL1KEEP);
+        svprfw(svptrue_b32(), codes2 + i + step, SV_PLDL1KEEP);
+        svprfw(svptrue_b32(), codes3 + i + step, SV_PLDL1KEEP);
+        svprfw(svptrue_b32(), codes4 + i + step, SV_PLDL1KEEP);
+
+        svfloat32_t q_vec = svld1_f32(pg, query + i);
+
+        svfloat32_t c1_vec = svld1_f32(pg, codes1 + i);
+        svfloat32_t d1_vec = svsub_f32_z(pg, q_vec, c1_vec);
+        res1_vec = svmla_f32_m(pg, res1_vec, d1_vec, d1_vec);
+
+        svfloat32_t c2_vec = svld1_f32(pg, codes2 + i);
+        svfloat32_t d2_vec = svsub_f32_z(pg, q_vec, c2_vec);
+        res2_vec = svmla_f32_m(pg, res2_vec, d2_vec, d2_vec);
+
+        svfloat32_t c3_vec = svld1_f32(pg, codes3 + i);
+        svfloat32_t d3_vec = svsub_f32_z(pg, q_vec, c3_vec);
+        res3_vec = svmla_f32_m(pg, res3_vec, d3_vec, d3_vec);
+
+        svfloat32_t c4_vec = svld1_f32(pg, codes4 + i);
+        svfloat32_t d4_vec = svsub_f32_z(pg, q_vec, c4_vec);
+        res4_vec = svmla_f32_m(pg, res4_vec, d4_vec, d4_vec);
+
+        i += step;
+        pg = svwhilelt_b32(i, dim);
+    } while (svptest_any(svptrue_b32(), pg));
+
+    result1 = svaddv_f32(svptrue_b32(), res1_vec);
+    result2 = svaddv_f32(svptrue_b32(), res2_vec);
+    result3 = svaddv_f32(svptrue_b32(), res3_vec);
+    result4 = svaddv_f32(svptrue_b32(), res4_vec);
 #else
     neon::FP32ComputeL2SqrBatch4(
         query, dim, codes1, codes2, codes3, codes4, result1, result2, result3, result4);
@@ -144,8 +265,18 @@ FP32ComputeL2SqrBatch4(const float* RESTRICT query,
 void
 FP32Sub(const float* x, const float* y, float* z, uint64_t dim) {
 #if defined(ENABLE_SVE)
-    // TODO: SVE implementation here
-    neon::FP32Sub(x, y, z, dim);
+    uint64_t i = 0;
+    const uint64_t step = svcntw();
+    svbool_t pg = svwhilelt_b32(i, dim);
+    do {
+        svfloat32_t x_vec = svld1_f32(pg, x + i);
+        svfloat32_t y_vec = svld1_f32(pg, y + i);
+        svfloat32_t z_vec = svsub_f32_z(pg, x_vec, y_vec);
+        svst1_f32(pg, z + i, z_vec);
+
+        i += step;
+        pg = svwhilelt_b32(i, dim);
+    } while (svptest_any(svptrue_b32(), pg));
 #else
     neon::FP32Sub(x, y, z, dim);
 #endif
@@ -154,8 +285,18 @@ FP32Sub(const float* x, const float* y, float* z, uint64_t dim) {
 void
 FP32Add(const float* x, const float* y, float* z, uint64_t dim) {
 #if defined(ENABLE_SVE)
-    // TODO: SVE implementation here
-    neon::FP32Add(x, y, z, dim);
+    uint64_t i = 0;
+    const uint64_t step = svcntw();
+    svbool_t pg = svwhilelt_b32(i, dim);
+    do {
+        svfloat32_t x_vec = svld1_f32(pg, x + i);
+        svfloat32_t y_vec = svld1_f32(pg, y + i);
+        svfloat32_t z_vec = svadd_f32_z(pg, x_vec, y_vec);
+        svst1_f32(pg, z + i, z_vec);
+
+        i += step;
+        pg = svwhilelt_b32(i, dim);
+    } while (svptest_any(svptrue_b32(), pg));
 #else
     neon::FP32Add(x, y, z, dim);
 #endif
@@ -164,8 +305,18 @@ FP32Add(const float* x, const float* y, float* z, uint64_t dim) {
 void
 FP32Mul(const float* x, const float* y, float* z, uint64_t dim) {
 #if defined(ENABLE_SVE)
-    // TODO: SVE implementation here
-    neon::FP32Mul(x, y, z, dim);
+    uint64_t i = 0;
+    const uint64_t step = svcntw();
+    svbool_t pg = svwhilelt_b32(i, dim);
+    do {
+        svfloat32_t x_vec = svld1_f32(pg, x + i);
+        svfloat32_t y_vec = svld1_f32(pg, y + i);
+        svfloat32_t z_vec = svmul_f32_z(pg, x_vec, y_vec);
+        svst1_f32(pg, z + i, z_vec);
+
+        i += step;
+        pg = svwhilelt_b32(i, dim);
+    } while (svptest_any(svptrue_b32(), pg));
 #else
     neon::FP32Mul(x, y, z, dim);
 #endif
@@ -174,8 +325,18 @@ FP32Mul(const float* x, const float* y, float* z, uint64_t dim) {
 void
 FP32Div(const float* x, const float* y, float* z, uint64_t dim) {
 #if defined(ENABLE_SVE)
-    // TODO: SVE implementation here
-    neon::FP32Div(x, y, z, dim);
+    uint64_t i = 0;
+    const uint64_t step = svcntw();
+    svbool_t pg = svwhilelt_b32(i, dim);
+    do {
+        svfloat32_t x_vec = svld1_f32(pg, x + i);
+        svfloat32_t y_vec = svld1_f32(pg, y + i);
+        svfloat32_t z_vec = svdiv_f32_z(pg, x_vec, y_vec);
+        svst1_f32(pg, z + i, z_vec);
+
+        i += step;
+        pg = svwhilelt_b32(i, dim);
+    } while (svptest_any(svptrue_b32(), pg));
 #else
     neon::FP32Div(x, y, z, dim);
 #endif
@@ -184,8 +345,20 @@ FP32Div(const float* x, const float* y, float* z, uint64_t dim) {
 float
 FP32ReduceAdd(const float* x, uint64_t dim) {
 #if defined(ENABLE_SVE)
-    // TODO: SVE implementation here
-    return neon::FP32ReduceAdd(x, dim);
+    svfloat32_t sum_vec = svdup_f32(0.0f);
+    uint64_t i = 0;
+    const uint64_t step = svcntw();
+    svbool_t pg = svwhilelt_b32(i, dim);
+    do {
+        svfloat32_t x_vec = svld1_f32(pg, x + i);
+        
+        sum_vec = svadd_f32_m(pg, sum_vec, x_vec);
+
+        i += step;
+        pg = svwhilelt_b32(i, dim);
+    } while (svptest_any(svptrue_b32(), pg));
+    
+    return svaddv_f32(svptrue_b32(), sum_vec);
 #else
     return neon::FP32ReduceAdd(x, dim);
 #endif
