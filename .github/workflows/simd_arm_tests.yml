@@ -9,7 +9,7 @@ jobs:
     runs-on: ubuntu-22.04-arm
 
     steps:
-      - name: Checkout vsag-arm-simd branch
+      - name: Checkout test-simd branch
         uses: actions/checkout@v4
         with:
           ref: test-simd
@@ -21,7 +21,7 @@ jobs:
         run:  sudo bash ./scripts/deps/install_deps_ubuntu.sh
 
       - name: Build test executables
-        run: make cov
+        run: cmake -B build -S .&&cmake --build build -j6
 
       - name: Create log directory
         run: mkdir log
