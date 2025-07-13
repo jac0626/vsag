@@ -1,0 +1,37 @@
+name: ARM SIMD Unit Tests
+
+on:
+  workflow_dispatch:
+
+jobs:
+  test-arm-simd:
+    name: Run ARM SIMD Tests
+    runs-on: ubuntu-22.04-arm
+
+    steps:
+      - name: Checkout vsag-arm-simd branch
+        uses: actions/checkout@v4
+        with:
+          ref: vsag-arm-simd
+
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential
+      
+      - name: Install dependencies
+        run:  sudo bash ./scripts/deps/install_deps_ubuntu.sh
+
+      - name: Build test executables
+        run: make cov
+
+      - name: Create log directory
+        run: mkdir log
+
+      - name: Run SIMD unit tests
+        run: ./build/tests/unittests -d yes "[ut][simd]" -a --order rand --allow-running-no-tests -o "./log/unittest.log"
+
+      - name: Upload test logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: arm-unittest-logs
+          path: ./log/unittest.log
