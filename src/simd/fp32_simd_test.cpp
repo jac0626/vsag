@@ -216,8 +216,9 @@ using namespace vsag;
             for (uint64_t j = 0; j < 4; ++j) {                                           \
                 REQUIRE(fixtures::dist_t(gts[j]) == fixtures::dist_t(result[j]));        \
             }
-        }
-    };
+}
+}
+;
 
 TEST_CASE("FP32 SIMD Compute", "[ut][simd]") {
     const std::vector<int64_t> dims = {8, 16, 32, 256};
