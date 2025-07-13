@@ -21,14 +21,12 @@
 
 #include "simd.h"
 
-
 #if defined(__ARM_FEATURE_SVE_BF16)
 #include <arm_bf16.h>
 #endif
 #if defined(__ARM_FEATURE_SVE_FP16)
 #include <arm_fp16.h>
 #endif
-
 
 #define PORTABLE_ALIGN32 __attribute__((aligned(32)))
 #define PORTABLE_ALIGN64 __attribute__((aligned(64)))
@@ -114,9 +112,11 @@ FP32ComputeIPBatch4(const float* RESTRICT query,
                     float& result4) {
 #if defined(ENABLE_SVE)
     // TODO: SVE implementation here
-    neon::FP32ComputeIPBatch4(query, dim, codes1, codes2, codes3, codes4, result1, result2, result3, result4);
+    neon::FP32ComputeIPBatch4(
+        query, dim, codes1, codes2, codes3, codes4, result1, result2, result3, result4);
 #else
-    neon::FP32ComputeIPBatch4(query, dim, codes1, codes2, codes3, codes4, result1, result2, result3, result4);
+    neon::FP32ComputeIPBatch4(
+        query, dim, codes1, codes2, codes3, codes4, result1, result2, result3, result4);
 #endif
 }
 
@@ -133,9 +133,11 @@ FP32ComputeL2SqrBatch4(const float* RESTRICT query,
                        float& result4) {
 #if defined(ENABLE_SVE)
     // TODO: SVE implementation here
-    neon::FP32ComputeL2SqrBatch4(query, dim, codes1, codes2, codes3, codes4, result1, result2, result3, result4);
+    neon::FP32ComputeL2SqrBatch4(
+        query, dim, codes1, codes2, codes3, codes4, result1, result2, result3, result4);
 #else
-    neon::FP32ComputeL2SqrBatch4(query, dim, codes1, codes2, codes3, codes4, result1, result2, result3, result4);
+    neon::FP32ComputeL2SqrBatch4(
+        query, dim, codes1, codes2, codes3, codes4, result1, result2, result3, result4);
 #endif
 }
 

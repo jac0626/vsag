@@ -255,22 +255,6 @@ TEST_CASE("FP32 Benchmark", "[ut][simd][!benchmark]") {
     auto vec1 = fixtures::generate_vectors(count * 2, dim);
     std::vector<float> vec2(vec1.begin() + count, vec1.end());
     BENCHMARK_SIMD_COMPUTE(generic, FP32ComputeIP);
-<<<<<<< HEAD
-    BENCHMARK_SIMD_COMPUTE(sse, FP32ComputeIP);
-    BENCHMARK_SIMD_COMPUTE(avx, FP32ComputeIP);
-    BENCHMARK_SIMD_COMPUTE(avx2, FP32ComputeIP);
-    BENCHMARK_SIMD_COMPUTE(avx512, FP32ComputeIP);
-    BENCHMARK_SIMD_COMPUTE(neon, FP32ComputeIP);
-    BENCHMARK_SIMD_COMPUTE(sve, FP32ComputeIP);
-
-    BENCHMARK_SIMD_COMPUTE(generic, FP32ComputeL2Sqr);
-    BENCHMARK_SIMD_COMPUTE(sse, FP32ComputeL2Sqr);
-    BENCHMARK_SIMD_COMPUTE(avx, FP32ComputeL2Sqr);
-    BENCHMARK_SIMD_COMPUTE(avx2, FP32ComputeL2Sqr);
-    BENCHMARK_SIMD_COMPUTE(avx512, FP32ComputeL2Sqr);
-    BENCHMARK_SIMD_COMPUTE(neon, FP32ComputeL2Sqr);
-    BENCHMARK_SIMD_COMPUTE(sve, FP32ComputeL2Sqr);
-=======
     if (SimdStatus::SupportSSE()) {
         BENCHMARK_SIMD_COMPUTE(sse, FP32ComputeIP);
     }
@@ -285,6 +269,9 @@ TEST_CASE("FP32 Benchmark", "[ut][simd][!benchmark]") {
     }
     if (SimdStatus::SupportNEON()) {
         BENCHMARK_SIMD_COMPUTE(neon, FP32ComputeIP);
+    }
+    if (SimdStatus::SupportSVE()) {
+        BENCHMARK_SIMD_COMPUTE(sve, FP32ComputeIP);
     }
 
     BENCHMARK_SIMD_COMPUTE(generic, FP32ComputeL2Sqr);
@@ -303,7 +290,9 @@ TEST_CASE("FP32 Benchmark", "[ut][simd][!benchmark]") {
     if (SimdStatus::SupportNEON()) {
         BENCHMARK_SIMD_COMPUTE(neon, FP32ComputeL2Sqr);
     }
->>>>>>> 3877815 (fix(simd): Add CPU support detection to benchmark tests)
+    if (SimdStatus::SupportSVE()) {
+        BENCHMARK_SIMD_COMPUTE(sve, FP32ComputeIP);
+    }
 }
 
 #define BENCHMARK_SIMD_COMPUTE_BATCH4(Simd, Comp)        \

@@ -1,4 +1,3 @@
-
 // Copyright 2024-present the vsag project
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -189,14 +188,6 @@ TEST_CASE("Bit Operator (AND, OR, XOR, NOT)", "[!benchmark][simd]") {
 
     SECTION("Bit Operator And") {
         BENCHMARK_BIT_OPERATOR_COMPUTE(generic, BitAnd);
-<<<<<<< HEAD
-        BENCHMARK_BIT_OPERATOR_COMPUTE(sse, BitAnd);
-        BENCHMARK_BIT_OPERATOR_COMPUTE(avx, BitAnd);
-        BENCHMARK_BIT_OPERATOR_COMPUTE(avx2, BitAnd);
-        BENCHMARK_BIT_OPERATOR_COMPUTE(avx512, BitAnd);
-        BENCHMARK_BIT_OPERATOR_COMPUTE(neon, BitAnd);
-        BENCHMARK_BIT_OPERATOR_COMPUTE(sve, BitAnd);
-=======
         if (SimdStatus::SupportSSE()) {
             BENCHMARK_BIT_OPERATOR_COMPUTE(sse, BitAnd);
         }
@@ -212,19 +203,13 @@ TEST_CASE("Bit Operator (AND, OR, XOR, NOT)", "[!benchmark][simd]") {
         if (SimdStatus::SupportNEON()) {
             BENCHMARK_BIT_OPERATOR_COMPUTE(neon, BitAnd);
         }
->>>>>>> 3877815 (fix(simd): Add CPU support detection to benchmark tests)
+        if (SimdStatus::SupportSVE()) {
+            BENCHMARK_BIT_OPERATOR_COMPUTE(sve, BitAnd);
+        }
     }
 
     SECTION("Bit Operator Or") {
         BENCHMARK_BIT_OPERATOR_COMPUTE(generic, BitOr);
-<<<<<<< HEAD
-        BENCHMARK_BIT_OPERATOR_COMPUTE(sse, BitOr);
-        BENCHMARK_BIT_OPERATOR_COMPUTE(avx, BitOr);
-        BENCHMARK_BIT_OPERATOR_COMPUTE(avx2, BitOr);
-        BENCHMARK_BIT_OPERATOR_COMPUTE(avx512, BitOr);
-        BENCHMARK_BIT_OPERATOR_COMPUTE(neon, BitOr);
-        BENCHMARK_BIT_OPERATOR_COMPUTE(sve, BitOr);
-=======
         if (SimdStatus::SupportSSE()) {
             BENCHMARK_BIT_OPERATOR_COMPUTE(sse, BitOr);
         }
@@ -240,19 +225,13 @@ TEST_CASE("Bit Operator (AND, OR, XOR, NOT)", "[!benchmark][simd]") {
         if (SimdStatus::SupportNEON()) {
             BENCHMARK_BIT_OPERATOR_COMPUTE(neon, BitOr);
         }
->>>>>>> 3877815 (fix(simd): Add CPU support detection to benchmark tests)
+        if (SimdStatus::SupportSVE()) {
+            BENCHMARK_BIT_OPERATOR_COMPUTE(sve, BitOr);
+        }
     }
 
     SECTION("Bit Operator Xor") {
         BENCHMARK_BIT_OPERATOR_COMPUTE(generic, BitXor);
-<<<<<<< HEAD
-        BENCHMARK_BIT_OPERATOR_COMPUTE(sse, BitXor);
-        BENCHMARK_BIT_OPERATOR_COMPUTE(avx, BitXor);
-        BENCHMARK_BIT_OPERATOR_COMPUTE(avx2, BitXor);
-        BENCHMARK_BIT_OPERATOR_COMPUTE(avx512, BitXor);
-        BENCHMARK_BIT_OPERATOR_COMPUTE(neon, BitXor);
-        BENCHMARK_BIT_OPERATOR_COMPUTE(sve, BitXor);
-=======
         if (SimdStatus::SupportSSE()) {
             BENCHMARK_BIT_OPERATOR_COMPUTE(sse, BitXor);
         }
@@ -268,7 +247,9 @@ TEST_CASE("Bit Operator (AND, OR, XOR, NOT)", "[!benchmark][simd]") {
         if (SimdStatus::SupportNEON()) {
             BENCHMARK_BIT_OPERATOR_COMPUTE(neon, BitXor);
         }
->>>>>>> 3877815 (fix(simd): Add CPU support detection to benchmark tests)
+        if (SimdStatus::SupportSVE()) {
+            BENCHMARK_BIT_OPERATOR_COMPUTE(sve, BitXor);
+        }
     }
 
     SECTION("Bit Operator Not") {
