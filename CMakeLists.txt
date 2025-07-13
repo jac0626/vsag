@@ -177,32 +177,16 @@ endif ()
 
 # thirdparties of lib
 include (cmake/CheckSIMDCompilerFlag.cmake)
-include (ExternalProject)
-include (extern/json/json.cmake)
-include (extern/antlr4/antlr4.cmake)
-include (extern/boost/boost.cmake)
-include (extern/openblas/openblas.cmake)
-include (extern/mkl/mkl.cmake)
-include (extern/diskann/diskann.cmake)
-include (extern/spdlog/spdlog.cmake)
+
 include (extern/catch2/catch2.cmake)
 include (extern/cpuinfo/cpuinfo.cmake)
 include (extern/fmt/fmt.cmake)
-include (extern/thread_pool/thread_pool.cmake)
-include (extern/roaringbitmap/roaringbitmap.cmake)
 
-include_directories (${CMAKE_CURRENT_BINARY_DIR}/spdlog/install/include)
+
 include_directories (include)
 include_directories (src)
 
-# thirdparties of tools, cannot compile with _GLIBCXX_USE_CXX11_ABI=0
-if (ENABLE_TOOLS AND ENABLE_CXX11_ABI)
-    include (extern/hdf5/hdf5.cmake)
-    include (extern/argparse/argparse.cmake)
-    include (extern/yaml-cpp/yaml-cpp.cmake)
-    include (extern/tabulate/tabulate.cmake)
-    include (extern/cpr/cpr.cmake)
-endif ()
+
 
 set (CMAKE_CXX_STANDARD 17)
 set (CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -227,90 +211,10 @@ if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
     set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} -Wno-incompatible-pointer-types-discards-qualifiers")
 endif ()
 
-# code coverage configuration
-add_library (coverage_config INTERFACE)
-if (ENABLE_COVERAGE AND CMAKE_CXX_COMPILER_ID MATCHES "GNU|Clang" AND NOT WIN32 AND NOT APPLE)
-    target_compile_options (coverage_config INTERFACE
-        -O0
-        -g
-        --coverage
-        -fprofile-update=atomic
-    )
-    target_link_options (coverage_config INTERFACE --coverage)
-endif ()
-
-# asan
-if (ENABLE_ASAN)
-    if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang" OR (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND NOT CMAKE_CXX_COMPILER_VERSION VERSION_LESS 7.0))
-        message (STATUS "Compiling with AddressSanitizer and UndefinedBehaviorSanitizer")
-        set (ASAN_FLAGS "-g -fsanitize=address,undefined -fno-omit-frame-pointer -fno-optimize-sibling-calls -fsanitize-recover=address -fno-sanitize=vptr")
-    else ()
-        message (STATUS "Compiling with AddressSanitizer")
-        set (ASAN_FLAGS "-g -fsanitize=address -fno-omit-frame-pointer -static-libasan")
-    endif ()
-
-    set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${ASAN_FLAGS}")
-    set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${ASAN_FLAGS}")
-    set (CMAKE_LD_FLAGS "${CMAKE_LD_FLAGS} ${ASAN_FLAGS}")
-endif ()
-
-# tsan
-if (ENABLE_TSAN)
-    if (ENABLE_ASAN)
-        message (FATAL_ERROR "ENABLE_TSAN cannot be combined with ENABLE_ASAN")
-    endif ()
-    set (CMAKE_REQUIRED_FLAGS "-fsanitize=thread")
-    set (ENV{TSAN_OPTIONS} "report_atomic_races=0")
-    add_compile_options (-fsanitize=thread)
-    add_compile_options (-g)
-    set (CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -fsanitize=thread")
-endif ()
 
 # sources
 add_subdirectory (src)
-add_subdirectory (mockimpl)
-if (ENABLE_EXAMPLES)
-    add_subdirectory (examples/cpp)
-endif ()
 
-if (ENABLE_TOOLS AND ENABLE_CXX11_ABI)
-    add_subdirectory (tools)
-endif ()
+add_subdirectory (tests)
 
 
-# tests
-if (ENABLE_TESTS)
-    target_compile_definitions(vsag PRIVATE ENABLE_TESTS)
-    add_subdirectory (tests)
-endif ()
-
-# pybinds
-if (ENABLE_PYBINDS)
-    find_package (Python3 REQUIRED COMPONENTS Interpreter Development.Module)
-    include (extern/pybind11/pybind11.cmake)
-    pybind11_add_module (_pyvsag python_bindings/binding.cpp)
-    target_compile_options (_pyvsag PRIVATE -fopenmp)
-    target_link_libraries (_pyvsag PRIVATE pybind11::module vsag)
-endif ()
-
-# install
-install (DIRECTORY include/
-        DESTINATION "${CMAKE_INSTALL_INCLUDEDIR}")
-install (TARGETS vsag
-        LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}")
-install (TARGETS vsag_static
-        LIBRARY DESTINATION "${CMAKE_INSTALL_LIBDIR}")
-if (ENABLE_TESTS AND USE_CXX11_ABI)
-    install (TARGETS test_performance
-            LIBRARY DESTINATION "${CMAKE_INSTALL_BINDIR}")
-endif ()
-
-# version
-find_package (Git)
-add_custom_target (version
-        ${CMAKE_COMMAND} -D SRC=${CMAKE_CURRENT_SOURCE_DIR}/src/version.h.in
-        -D DST=${CMAKE_CURRENT_SOURCE_DIR}/src/version.h
-        -D GIT_EXECUTABLE=${GIT_EXECUTABLE}
-        -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/GenerateVersionHeader.cmake
-)
-add_dependencies (vsag version)

@@ -13,7 +13,7 @@
 // limitations under the License.
 
 #pragma once
-
+#include<algorithm>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -24,8 +24,6 @@
 #include <vector>
 
 #include "simd/normalize.h"
-#include "typing.h"
-#include "vsag/vsag.h"
 
 namespace fixtures {
 
@@ -42,18 +40,6 @@ CopyVector(const std::vector<T>& vec) {
     return result;
 }
 
-template <typename T>
-T*
-CopyVector(const vsag::Vector<T>& vec, vsag::Allocator* allocator) {
-    T* result;
-    if (allocator) {
-        result = (T*)allocator->Allocate(sizeof(T) * vec.size());
-    } else {
-        result = new T[vec.size()];
-    }
-    memcpy(result, vec.data(), vec.size() * sizeof(T));
-    return result;
-}
 
 template <typename T, typename RT = typename std::enable_if<std::is_integral_v<T>, T>::type>
 std::vector<RT>
@@ -82,28 +68,13 @@ GenerateVectors(uint64_t count, uint32_t dim, int seed = 47, bool need_normalize
     }
     if (need_normalize) {
         for (int64_t i = 0; i < count; ++i) {
-            vsag::Normalize(vectors.data() + i * dim, vectors.data() + i * dim, dim);
+            vsag::generic::Normalize(vectors.data() + i * dim, vectors.data() + i * dim, dim);
         }
     }
     return vectors;
 }
 
-std::vector<vsag::SparseVector>
-GenerateSparseVectors(uint32_t count,
-                      uint32_t max_dim = 100,
-                      uint32_t max_id = 1000,
-                      float min_val = -1,
-                      float max_val = 1,
-                      int seed = 47);
 
-vsag::Vector<vsag::SparseVector>
-GenerateSparseVectors(vsag::Allocator* allocator,
-                      uint32_t count,
-                      uint32_t max_dim = 100,
-                      uint32_t max_id = 10000,
-                      float min_val = -1,
-                      float max_val = 1,
-                      int seed = 47);
 
 std::pair<std::vector<float>, std::vector<uint8_t>>
 GenerateBinaryVectorsAndCodes(uint32_t count, uint32_t dim, int seed = 47);
@@ -126,47 +97,18 @@ generate_ids_and_vectors(int64_t num_elements,
                          bool need_normalize = true,
                          int seed = 47);
 
-vsag::IndexPtr
-generate_index(const std::string& name,
-               const std::string& metric_type,
-               int64_t num_vectors,
-               int64_t dim,
-               std::vector<int64_t>& ids,
-               std::vector<float>& vectors,
-               bool use_conjugate_graph = false);
 
 std::vector<char>
 generate_extra_infos(uint64_t count, uint32_t size, int seed = 47);
 
-vsag::AttributeSet*
-generate_attributes(uint64_t count,
-                    uint32_t max_term_count = 100,
-                    uint32_t max_value_count = 100,
-                    int seed = 97);
 
-float
-test_knn_recall(const vsag::IndexPtr& index,
-                const std::string& search_parameters,
-                int64_t num_vectors,
-                int64_t dim,
-                std::vector<int64_t>& ids,
-                std::vector<float>& vectors);
+
+
 
 std::string
 generate_hnsw_build_parameters_string(const std::string& metric_type, int64_t dim);
 
-vsag::DatasetPtr
-brute_force(const vsag::DatasetPtr& query,
-            const vsag::DatasetPtr& base,
-            int64_t k,
-            const std::string& metric_type);
 
-vsag::DatasetPtr
-brute_force(const vsag::DatasetPtr& query,
-            const vsag::DatasetPtr& base,
-            int64_t k,
-            const std::string& metric_type,
-            const std::string& data_type);
 
 template <typename T>
 typename std::enable_if<std::is_floating_point<T>::value, T>::type
@@ -275,8 +217,7 @@ struct IOItem {
 std::vector<IOItem>
 GenTestItems(uint64_t count, uint64_t max_length, uint64_t max_index = 10000);
 
-vsag::DatasetPtr
-generate_one_dataset(int64_t dim, uint64_t count);
+
 
 uint64_t
 GetFileSize(const std::string& filename);
@@ -284,8 +225,7 @@ GetFileSize(const std::string& filename);
 std::vector<std::string>
 SplitString(const std::string& s, char delimiter);
 
-float
-GetSparseDistance(const vsag::SparseVector& vec1, const vsag::SparseVector& vec2);
+
 
 template <typename T>
 std::vector<T>

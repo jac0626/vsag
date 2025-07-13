@@ -77,5 +77,5 @@ simd_add_definitions (DIST_CONTAINS_AVX512 -DENABLE_AVX512=1)
 simd_add_definitions (DIST_CONTAINS_AVX512VPOPCNTDQ -DENABLE_AVX512VPOPCNTDQ=1)
 simd_add_definitions (DIST_CONTAINS_NEON -DENABLE_NEON=1)
 
-target_link_libraries (simd INTERFACE cpuinfo coverage_config)
+target_link_libraries (simd INTERFACE cpuinfo )
 install (TARGETS simd ARCHIVE DESTINATION lib)
