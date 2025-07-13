@@ -12,7 +12,7 @@ jobs:
       - name: Checkout test-simd branch
         uses: actions/checkout@v4
         with:
-          ref: test-simd
+          ref: test_simd
 
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y build-essential
