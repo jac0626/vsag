@@ -27,7 +27,7 @@ jobs:
         run: mkdir log
 
       - name: Run SIMD unit tests
-        run: ./build/tests/unittests -d yes "[ut][simd]" -a --order rand --allow-running-no-tests -o "./log/unittest.log"
+        run: ./build/tests/unittests -d yes "[simd]" -a --order rand --allow-running-no-tests -o "./log/unittest.log"
 
       - name: Upload test logs
         if: always()

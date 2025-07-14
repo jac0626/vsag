@@ -291,7 +291,7 @@ TEST_CASE("FP32 Benchmark", "[ut][simd][!benchmark]") {
         BENCHMARK_SIMD_COMPUTE(neon, FP32ComputeL2Sqr);
     }
     if (SimdStatus::SupportSVE()) {
-        BENCHMARK_SIMD_COMPUTE(sve, FP32ComputeIP);
+        BENCHMARK_SIMD_COMPUTE(sve, FP32ComputeL2Sqr);
     }
 }
 
