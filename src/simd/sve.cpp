@@ -386,9 +386,30 @@ BF16ComputeL2Sqr(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, u
 
 float
 FP16ComputeIP(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, uint64_t dim) {
-#if defined(ENABLE_SVE)
-    // TODO: SVE implementation here
-    return neon::FP16ComputeIP(query, codes, dim);
+#if defined(__ARM_FEATURE_SVE_FP16)
+    const _Float16* query_f16 = (const _Float16*)query;
+    const _Float16* codes_f16 = (const _Float16*)codes;
+
+    svfloat32_t sum_vec = svdup_f32(0.0f);
+    uint64_t i = 0;
+
+    const uint64_t step = svcnth();
+
+    svbool_t pg = svwhilelt_b16(i, dim);
+    do {
+        svprfw(svptrue_b16(), query_f16 + i + step, SV_PLDL1KEEP);
+        svprfw(svptrue_b16(), codes_f16 + i + step, SV_PLDL1KEEP);
+
+        svfloat16_t q_vec = svld1_f16(pg, query_f16 + i);
+        svfloat16_t c_vec = svld1_f16(pg, codes_f16 + i);
+
+        sum_vec = svmla_f32_m(pg, sum_vec, svcvt_f32_f16_z(pg, q_vec), svcvt_f32_f16_z(pg, c_vec));
+
+        i += step;
+        pg = svwhilelt_b16(i, dim);
+    } while (svptest_any(svptrue_b16(), pg));
+
+    return svaddv_f32(svptrue_b32(), sum_vec);
 #else
     return neon::FP16ComputeIP(query, codes, dim);
 #endif
@@ -396,9 +417,31 @@ FP16ComputeIP(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, uint
 
 float
 FP16ComputeL2Sqr(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, uint64_t dim) {
-#if defined(ENABLE_SVE)
-    // TODO: SVE implementation here
-    return neon::FP16ComputeL2Sqr(query, codes, dim);
+#if defined(__ARM_FEATURE_SVE_FP16)
+    const _Float16* query_f16 = (const _Float16*)query;
+    const _Float16* codes_f16 = (const _Float16*)codes;
+    svfloat32_t sum_vec = svdup_f32(0.0f);
+    uint64_t i = 0;
+    const uint64_t step = svcnth();
+
+    svbool_t pg = svwhilelt_b16(i, dim);
+    do {
+        svprfw(svptrue_b16(), query_f16 + i + step, SV_PLDL1KEEP);
+        svprfw(svptrue_b16(), codes_f16 + i + step, SV_PLDL1KEEP);
+
+        svfloat16_t q_vec = svld1_f16(pg, query_f16 + i);
+        svfloat16_t c_vec = svld1_f16(pg, codes_f16 + i);
+
+        svfloat16_t diff = svsub_f16_z(pg, q_vec, c_vec);
+        svfloat32_t diff_f32 = svcvt_f32_f16_z(pg, diff);
+
+        sum_vec = svmla_f32_m(pg, sum_vec, diff_f32, diff_f32);
+
+        i += step;
+        pg = svwhilelt_b16(i, dim);
+    } while (svptest_any(svptrue_b16(), pg));
+
+    return svaddv_f32(svptrue_b32(), sum_vec);
 #else
     return neon::FP16ComputeL2Sqr(query, codes, dim);
 #endif
@@ -563,8 +606,18 @@ RaBitQSQ4UBinaryIP(const uint8_t* codes, const uint8_t* bits, uint64_t dim) {
 void
 BitAnd(const uint8_t* x, const uint8_t* y, const uint64_t num_byte, uint8_t* result) {
 #if defined(ENABLE_SVE)
-    // TODO: SVE implementation here
-    neon::BitAnd(x, y, num_byte, result);
+    uint64_t i = 0;
+    const uint64_t step = svcntb();
+    svbool_t pg = svwhilelt_b8(i, num_byte);
+    do {
+        svuint8_t x_vec = svld1_u8(pg, x + i);
+        svuint8_t y_vec = svld1_u8(pg, y + i);
+        svuint8_t res_vec = svand_u8_z(pg, x_vec, y_vec);
+        svst1_u8(pg, result + i, res_vec);
+
+        i += step;
+        pg = svwhilelt_b8(i, num_byte);
+    } while (svptest_any(svptrue_b8(), pg));
 #else
     neon::BitAnd(x, y, num_byte, result);
 #endif
@@ -573,8 +626,18 @@ BitAnd(const uint8_t* x, const uint8_t* y, const uint64_t num_byte, uint8_t* res
 void
 BitOr(const uint8_t* x, const uint8_t* y, const uint64_t num_byte, uint8_t* result) {
 #if defined(ENABLE_SVE)
-    // TODO: SVE implementation here
-    neon::BitOr(x, y, num_byte, result);
+    uint64_t i = 0;
+    const uint64_t step = svcntb();
+    svbool_t pg = svwhilelt_b8(i, num_byte);
+    do {
+        svuint8_t x_vec = svld1_u8(pg, x + i);
+        svuint8_t y_vec = svld1_u8(pg, y + i);
+        svuint8_t res_vec = svorr_u8_z(pg, x_vec, y_vec);
+        svst1_u8(pg, result + i, res_vec);
+
+        i += step;
+        pg = svwhilelt_b8(i, num_byte);
+    } while (svptest_any(svptrue_b8(), pg));
 #else
     neon::BitOr(x, y, num_byte, result);
 #endif
@@ -583,8 +646,18 @@ BitOr(const uint8_t* x, const uint8_t* y, const uint64_t num_byte, uint8_t* resu
 void
 BitXor(const uint8_t* x, const uint8_t* y, const uint64_t num_byte, uint8_t* result) {
 #if defined(ENABLE_SVE)
-    // TODO: SVE implementation here
-    neon::BitXor(x, y, num_byte, result);
+    uint64_t i = 0;
+    const uint64_t step = svcntb();
+    svbool_t pg = svwhilelt_b8(i, num_byte);
+    do {
+        svuint8_t x_vec = svld1_u8(pg, x + i);
+        svuint8_t y_vec = svld1_u8(pg, y + i);
+        svuint8_t res_vec = sveor_u8_z(pg, x_vec, y_vec);
+        svst1_u8(pg, result + i, res_vec);
+
+        i += step;
+        pg = svwhilelt_b8(i, num_byte);
+    } while (svptest_any(svptrue_b8(), pg));
 #else
     neon::BitXor(x, y, num_byte, result);
 #endif
@@ -593,8 +666,17 @@ BitXor(const uint8_t* x, const uint8_t* y, const uint64_t num_byte, uint8_t* res
 void
 BitNot(const uint8_t* x, const uint64_t num_byte, uint8_t* result) {
 #if defined(ENABLE_SVE)
-    // TODO: SVE implementation here
-    neon::BitNot(x, num_byte, result);
+    uint64_t i = 0;
+    const uint64_t step = svcntb();
+    svbool_t pg = svwhilelt_b8(i, num_byte);
+    do {
+        svuint8_t x_vec = svld1_u8(pg, x + i);
+        svuint8_t res_vec = svnot_u8_z(pg, x_vec);
+        svst1_u8(pg, result + i, res_vec);
+
+        i += step;
+        pg = svwhilelt_b8(i, num_byte);
+    } while (svptest_any(svptrue_b8(), pg));
 #else
     neon::BitNot(x, num_byte, result);
 #endif
