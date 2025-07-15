@@ -1,4 +1,3 @@
-
 // Copyright 2024-present the vsag project
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -50,7 +49,12 @@ InnerProductDistance(const void* pVect1, const void* pVect2, const void* qty_ptr
 
 float
 INT8InnerProduct(const void* pVect1v, const void* pVect2v, const void* qty_ptr) {
+#if defined(ENABLE_NEON)
+    // TODO: NEON implementation here
     return generic::INT8InnerProduct(pVect1v, pVect2v, qty_ptr);
+#else
+    return generic::INT8InnerProduct(pVect1v, pVect2v, qty_ptr);
+#endif
 }
 
 float
@@ -955,7 +959,12 @@ SQ4ComputeIP(const float* RESTRICT query,
              const float* RESTRICT lower_bound,
              const float* RESTRICT diff,
              uint64_t dim) {
+#if defined(ENABLE_NEON)
+    // TODO: NEON implementation here
     return generic::SQ4ComputeIP(query, codes, lower_bound, diff, dim);
+#else
+    return generic::SQ4ComputeIP(query, codes, lower_bound, diff, dim);
+#endif
 }
 
 float
@@ -964,7 +973,12 @@ SQ4ComputeL2Sqr(const float* RESTRICT query,
                 const float* RESTRICT lower_bound,
                 const float* RESTRICT diff,
                 uint64_t dim) {
+#if defined(ENABLE_NEON)
+    // TODO: NEON implementation here
     return generic::SQ4ComputeL2Sqr(query, codes, lower_bound, diff, dim);
+#else
+    return generic::SQ4ComputeL2Sqr(query, codes, lower_bound, diff, dim);
+#endif
 }
 
 float
@@ -973,7 +987,12 @@ SQ4ComputeCodesIP(const uint8_t* RESTRICT codes1,
                   const float* RESTRICT lower_bound,
                   const float* RESTRICT diff,
                   uint64_t dim) {
+#if defined(ENABLE_NEON)
+    // TODO: NEON implementation here
     return generic::SQ4ComputeCodesIP(codes1, codes2, lower_bound, diff, dim);
+#else
+    return generic::SQ4ComputeCodesIP(codes1, codes2, lower_bound, diff, dim);
+#endif
 }
 
 float
@@ -982,7 +1001,12 @@ SQ4ComputeCodesL2Sqr(const uint8_t* RESTRICT codes1,
                      const float* RESTRICT lower_bound,
                      const float* RESTRICT diff,
                      uint64_t dim) {
+#if defined(ENABLE_NEON)
+    // TODO: NEON implementation here
     return generic::SQ4ComputeCodesL2Sqr(codes1, codes2, lower_bound, diff, dim);
+#else
+    return generic::SQ4ComputeCodesL2Sqr(codes1, codes2, lower_bound, diff, dim);
+#endif
 }
 
 #if defined(ENABLE_NEON)
@@ -1123,7 +1147,8 @@ SQ8UniformComputeCodesIP(const uint8_t* codes1, const uint8_t* codes2, uint64_t 
 float
 RaBitQFloatBinaryIP(const float* vector, const uint8_t* bits, uint64_t dim, float inv_sqrt_d) {
 #if defined(ENABLE_NEON)
-    return generic::RaBitQFloatBinaryIP(vector, bits, dim, inv_sqrt_d);  // TODO(zxy): implement
+    // TODO: NEON implementation here
+    return generic::RaBitQFloatBinaryIP(vector, bits, dim, inv_sqrt_d);
 #else
     return generic::RaBitQFloatBinaryIP(vector, bits, dim, inv_sqrt_d);
 #endif
@@ -1304,6 +1329,66 @@ BitNot(const uint8_t* x, const uint64_t num_byte, uint8_t* result) {
     }
 #else
     return generic::BitNot(x, num_byte, result);
+#endif
+}
+
+uint32_t
+RaBitQSQ4UBinaryIP(const uint8_t* codes, const uint8_t* bits, uint64_t dim) {
+#if defined(ENABLE_SVE)
+    // TODO: SVE implementation here
+    return generic::RaBitQSQ4UBinaryIP(codes, bits, dim);
+#else
+    return generic::RaBitQSQ4UBinaryIP(codes, bits, dim);
+#endif
+}
+
+void
+KacsWalk(float* data, size_t len) {
+#if defined(ENABLE_NEON)
+    // TODO: NEON implementation here
+    generic::KacsWalk(data, len);
+#else
+    generic::KacsWalk(data, len);
+#endif
+}
+
+void
+FlipSign(const uint8_t* flip, float* data, size_t dim) {
+#if defined(ENABLE_NEON)
+    // TODO: NEON implementation here
+    generic::FlipSign(flip, data, dim);
+#else
+    generic::FlipSign(flip, data, dim);
+#endif
+}
+
+void
+VecRescale(float* data, size_t dim, float val) {
+#if defined(ENABLE_NEON)
+    // TODO: NEON implementation here
+    generic::VecRescale(data, dim, val);
+#else
+    generic::VecRescale(data, dim, val);
+#endif
+}
+
+void
+RotateOp(float* data, int idx, int dim_, int step) {
+#if defined(ENABLE_NEON)
+    // TODO: NEON implementation here
+    generic::RotateOp(data, idx, dim_, step);
+#else
+    generic::RotateOp(data, idx, dim_, step);
+#endif
+}
+
+void
+FHTRotate(float* data, size_t dim_) {
+#if defined(ENABLE_NEON)
+    // TODO: NEON implementation here
+    generic::FHTRotate(data, dim_);
+#else
+    generic::FHTRotate(data, dim_);
 #endif
 }
 

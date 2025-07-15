@@ -15,17 +15,12 @@
 
 #include <catch2/catch_session.hpp>
 
-#include "./fixtures/test_logger.h"
 #include "vsag/vsag.h"
 
 int
 main(int argc, char** argv) {
     // your setup ...
 
-    fixtures::logger::test_logger.SetLevel(vsag::Logger::Level::kWARN);
-    fixtures::logger::test_logger.OutputDirectly(false);
-
-    vsag::Options::Instance().set_logger(&fixtures::logger::test_logger);
 
     int result = Catch::Session().run(argc, argv);
 
