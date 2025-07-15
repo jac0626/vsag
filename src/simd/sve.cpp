@@ -366,9 +366,30 @@ FP32ReduceAdd(const float* x, uint64_t dim) {
 
 float
 BF16ComputeIP(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, uint64_t dim) {
-#if defined(ENABLE_SVE)
-    // TODO: SVE implementation here
-    return neon::BF16ComputeIP(query, codes, dim);
+#if defined(__ARM_FEATURE_SVE_BF16)
+    const bfloat16_t* query_bf16 = (const bfloat16_t*)query;
+    const bfloat16_t* codes_bf16 = (const bfloat16_t*)codes;
+
+    svfloat32_t sum_vec = svdup_f32(0.0f);
+    uint64_t i = 0;
+
+    const uint64_t step = svcnth();
+
+    svbool_t pg = svwhilelt_b16(i, dim);
+    do {
+        svprfw(svptrue_b16(), query_bf16 + i + step, SV_PLDL1KEEP);
+        svprfw(svptrue_b16(), codes_bf16 + i + step, SV_PLDL1KEEP);
+
+        svbfloat16_t q_vec = svld1_bf16(pg, query_bf16 + i);
+        svbfloat16_t c_vec = svld1_bf16(pg, codes_bf16 + i);
+
+        sum_vec = svmla_f32_m(pg, sum_vec, svcvt_f32_bf16_z(pg, q_vec), svcvt_f32_bf16_z(pg, c_vec));
+
+        i += step;
+        pg = svwhilelt_b16(i, dim);
+    } while (svptest_any(svptrue_b16(), pg));
+
+    return svaddv_f32(svptrue_b32(), sum_vec);
 #else
     return neon::BF16ComputeIP(query, codes, dim);
 #endif
@@ -376,9 +397,31 @@ BF16ComputeIP(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, uint
 
 float
 BF16ComputeL2Sqr(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, uint64_t dim) {
-#if defined(ENABLE_SVE)
-    // TODO: SVE implementation here
-    return neon::BF16ComputeL2Sqr(query, codes, dim);
+#if defined(__ARM_FEATURE_SVE_BF16)
+    const bfloat16_t* query_bf16 = (const bfloat16_t*)query;
+    const bfloat16_t* codes_bf16 = (const bfloat16_t*)codes;
+    svfloat32_t sum_vec = svdup_f32(0.0f);
+    uint64_t i = 0;
+    const uint64_t step = svcnth();
+
+    svbool_t pg = svwhilelt_b16(i, dim);
+    do {
+        svprfw(svptrue_b16(), query_bf16 + i + step, SV_PLDL1KEEP);
+        svprfw(svptrue_b16(), codes_bf16 + i + step, SV_PLDL1KEEP);
+
+        svbfloat16_t q_vec = svld1_bf16(pg, query_bf16 + i);
+        svbfloat16_t c_vec = svld1_bf16(pg, codes_bf16 + i);
+
+        svbfloat16_t diff = svsub_bf16_z(pg, q_vec, c_vec);
+        svfloat32_t diff_f32 = svcvt_f32_bf16_z(pg, diff);
+
+        sum_vec = svmla_f32_m(pg, sum_vec, diff_f32, diff_f32);
+
+        i += step;
+        pg = svwhilelt_b16(i, dim);
+    } while (svptest_any(svptrue_b16(), pg));
+
+    return svaddv_f32(svptrue_b32(), sum_vec);
 #else
     return neon::BF16ComputeL2Sqr(query, codes, dim);
 #endif
