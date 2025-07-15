@@ -127,7 +127,7 @@ file(WRITE ${CMAKE_BINARY_DIR}/instructions_test_sve2.cpp
     "    svbool_t pg = svptrue_b16();\n"
     "    svuint16_t u16_a, u16_b;\n"
     "    svuint32_t u32_c = svdup_u32(0);\n"
-    "    u32_c = svmlalt_u32_m(pg, u32_c, u16_a, u16_b);\n"
+    "    u32_c = svmlalt_u32(u32_c, u16_a, u16_b);\n"
     "    return 0;\n"
     "}"
 )
