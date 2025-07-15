@@ -497,8 +497,34 @@ SQ8ComputeIP(const float* RESTRICT query,
              const float* RESTRICT diff,
              uint64_t dim) {
 #if defined(ENABLE_SVE)
-    // TODO: SVE implementation here
-    return neon::SQ8ComputeIP(query, codes, lower_bound, diff, dim);
+    svfloat32_t sum_vec = svdup_f32(0.0f);
+    svfloat32_t inv_255_vec = svdup_f32(1.0f / 255.0f);
+    uint64_t i = 0;
+    const uint64_t step = svcntw();
+
+    svbool_t pg = svwhilelt_b32(i, dim);
+    do {
+        svprfw(svptrue_b32(), query + i + step, SV_PLDL1KEEP);
+        svprfb(svptrue_b8(), codes + i + step, SV_PLDL1KEEP);
+        svprfw(svptrue_b32(), lower_bound + i + step, SV_PLDL1KEEP);
+        svprfw(svptrue_b32(), diff + i + step, SV_PLDL1KEEP);
+
+        svuint32_t c_u32_vec = svld1ub_u32(pg, codes + i);
+        svfloat32_t c_f32_vec = svcvt_f32_u32_z(pg, c_u32_vec);
+
+        svfloat32_t q_vec = svld1_f32(pg, query + i);
+        svfloat32_t lb_vec = svld1_f32(pg, lower_bound + i);
+        svfloat32_t d_vec = svld1_f32(pg, diff + i);
+
+        svfloat32_t dequant_vec = svmla_f32_m(pg, lb_vec, svmul_f32_m(pg, c_f32_vec, inv_255_vec), d_vec);
+
+        sum_vec = svmla_f32_m(pg, sum_vec, q_vec, dequant_vec);
+
+        i += step;
+        pg = svwhilelt_b32(i, dim);
+    } while (svptest_any(svptrue_b32(), pg));
+
+    return svaddv_f32(svptrue_b32(), sum_vec);
 #else
     return neon::SQ8ComputeIP(query, codes, lower_bound, diff, dim);
 #endif
@@ -511,8 +537,34 @@ SQ8ComputeL2Sqr(const float* RESTRICT query,
                 const float* RESTRICT diff,
                 uint64_t dim) {
 #if defined(ENABLE_SVE)
-    // TODO: SVE implementation here
-    return neon::SQ8ComputeL2Sqr(query, codes, lower_bound, diff, dim);
+    svfloat32_t sum_vec = svdup_f32(0.0f);
+    svfloat32_t inv_255_vec = svdup_f32(1.0f / 255.0f);
+    uint64_t i = 0;
+    const uint64_t step = svcntw();
+
+    svbool_t pg = svwhilelt_b32(i, dim);
+    do {
+        svprfw(svptrue_b32(), query + i + step, SV_PLDL1KEEP);
+        svprfb(svptrue_b8(), codes + i + step, SV_PLDL1KEEP);
+        svprfw(svptrue_b32(), lower_bound + i + step, SV_PLDL1KEEP);
+        svprfw(svptrue_b32(), diff + i + step, SV_PLDL1KEEP);
+
+        svuint32_t c_u32_vec = svld1ub_u32(pg, codes + i);
+        svfloat32_t c_f32_vec = svcvt_f32_u32_z(pg, c_u32_vec);
+
+        svfloat32_t q_vec = svld1_f32(pg, query + i);
+        svfloat32_t lb_vec = svld1_f32(pg, lower_bound + i);
+        svfloat32_t d_vec = svld1_f32(pg, diff + i);
+
+        svfloat32_t dequant_vec = svmla_f32_m(pg, lb_vec, svmul_f32_m(pg, c_f32_vec, inv_255_vec), d_vec);
+        svfloat32_t diff_vec = svsub_f32_z(pg, q_vec, dequant_vec);
+        sum_vec = svmla_f32_m(pg, sum_vec, diff_vec, diff_vec);
+
+        i += step;
+        pg = svwhilelt_b32(i, dim);
+    } while (svptest_any(svptrue_b32(), pg));
+
+    return svaddv_f32(svptrue_b32(), sum_vec);
 #else
     return neon::SQ8ComputeL2Sqr(query, codes, lower_bound, diff, dim);
 #endif
@@ -525,8 +577,36 @@ SQ8ComputeCodesIP(const uint8_t* RESTRICT codes1,
                   const float* RESTRICT diff,
                   uint64_t dim) {
 #if defined(ENABLE_SVE)
-    // TODO: SVE implementation here
-    return neon::SQ8ComputeCodesIP(codes1, codes2, lower_bound, diff, dim);
+    svfloat32_t sum_vec = svdup_f32(0.0f);
+    svfloat32_t inv_255_vec = svdup_f32(1.0f / 255.0f);
+    uint64_t i = 0;
+    const uint64_t step = svcntw();
+
+    svbool_t pg = svwhilelt_b32(i, dim);
+    do {
+        svprfb(svptrue_b8(), codes1 + i + step, SV_PLDL1KEEP);
+        svprfb(svptrue_b8(), codes2 + i + step, SV_PLDL1KEEP);
+        svprfw(svptrue_b32(), lower_bound + i + step, SV_PLDL1KEEP);
+        svprfw(svptrue_b32(), diff + i + step, SV_PLDL1KEEP);
+
+        svuint32_t c1_u32_vec = svld1ub_u32(pg, codes1 + i);
+        svfloat32_t c1_f32_vec = svcvt_f32_u32_z(pg, c1_u32_vec);
+        svuint32_t c2_u32_vec = svld1ub_u32(pg, codes2 + i);
+        svfloat32_t c2_f32_vec = svcvt_f32_u32_z(pg, c2_u32_vec);
+
+        svfloat32_t lb_vec = svld1_f32(pg, lower_bound + i);
+        svfloat32_t d_vec = svld1_f32(pg, diff + i);
+
+        svfloat32_t dequant1_vec = svmla_f32_m(pg, lb_vec, svmul_f32_m(pg, c1_f32_vec, inv_255_vec), d_vec);
+        svfloat32_t dequant2_vec = svmla_f32_m(pg, lb_vec, svmul_f32_m(pg, c2_f32_vec, inv_255_vec), d_vec);
+
+        sum_vec = svmla_f32_m(pg, sum_vec, dequant1_vec, dequant2_vec);
+
+        i += step;
+        pg = svwhilelt_b32(i, dim);
+    } while (svptest_any(svptrue_b32(), pg));
+
+    return svaddv_f32(svptrue_b32(), sum_vec);
 #else
     return neon::SQ8ComputeCodesIP(codes1, codes2, lower_bound, diff, dim);
 #endif
@@ -539,8 +619,37 @@ SQ8ComputeCodesL2Sqr(const uint8_t* RESTRICT codes1,
                      const float* RESTRICT diff,
                      uint64_t dim) {
 #if defined(ENABLE_SVE)
-    // TODO: SVE implementation here
-    return neon::SQ8ComputeCodesL2Sqr(codes1, codes2, lower_bound, diff, dim);
+    svfloat32_t sum_vec = svdup_f32(0.0f);
+    svfloat32_t inv_255_vec = svdup_f32(1.0f / 255.0f);
+    uint64_t i = 0;
+    const uint64_t step = svcntw();
+
+    svbool_t pg = svwhilelt_b32(i, dim);
+    do {
+        svprfb(svptrue_b8(), codes1 + i + step, SV_PLDL1KEEP);
+        svprfb(svptrue_b8(), codes2 + i + step, SV_PLDL1KEEP);
+        svprfw(svptrue_b32(), lower_bound + i + step, SV_PLDL1KEEP);
+        svprfw(svptrue_b32(), diff + i + step, SV_PLDL1KEEP);
+
+        svuint32_t c1_u32_vec = svld1ub_u32(pg, codes1 + i);
+        svfloat32_t c1_f32_vec = svcvt_f32_u32_z(pg, c1_u32_vec);
+        svuint32_t c2_u32_vec = svld1ub_u32(pg, codes2 + i);
+        svfloat32_t c2_f32_vec = svcvt_f32_u32_z(pg, c2_u32_vec);
+
+        svfloat32_t lb_vec = svld1_f32(pg, lower_bound + i);
+        svfloat32_t d_vec = svld1_f32(pg, diff + i);
+
+        svfloat32_t dequant1_vec = svmla_f32_m(pg, lb_vec, svmul_f32_m(pg, c1_f32_vec, inv_255_vec), d_vec);
+        svfloat32_t dequant2_vec = svmla_f32_m(pg, lb_vec, svmul_f32_m(pg, c2_f32_vec, inv_255_vec), d_vec);
+
+        svfloat32_t diff_vec = svsub_f32_z(pg, dequant1_vec, dequant2_vec);
+        sum_vec = svmla_f32_m(pg, sum_vec, diff_vec, diff_vec);
+
+        i += step;
+        pg = svwhilelt_b32(i, dim);
+    } while (svptest_any(svptrue_b32(), pg));
+
+    return svaddv_f32(svptrue_b32(), sum_vec);
 #else
     return neon::SQ8ComputeCodesL2Sqr(codes1, codes2, lower_bound, diff, dim);
 #endif
