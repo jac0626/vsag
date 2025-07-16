@@ -14,10 +14,11 @@
 // limitations under the License.
 
 #include "fixtures.h"
+
 #include <assert.h>
-#include <algorithm>
 #include <unistd.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <random>
 #include <string>
@@ -52,9 +53,6 @@ get_common_used_dims(uint64_t count, int seed) {
     result.resize(count);
     return result;
 }
-
-
-
 
 std::pair<std::vector<float>, std::vector<uint8_t>>
 GenerateBinaryVectorsAndCodes(uint32_t count, uint32_t dim, int seed) {
@@ -108,7 +106,6 @@ generate_ids_and_vectors(int64_t num_vectors, int64_t dim, bool need_normalize, 
     return {ids, generate_vectors(num_vectors, dim, need_normalize, seed)};
 }
 
-
 std::vector<char>
 generate_extra_infos(uint64_t count, uint32_t size, int seed) {
     std::mt19937 rng(seed);
@@ -120,12 +117,6 @@ generate_extra_infos(uint64_t count, uint32_t size, int seed) {
     }
     return vectors;
 }
-
-
-
-
-
-
 
 std::string
 generate_hnsw_build_parameters_string(const std::string& metric_type, int64_t dim) {
@@ -143,10 +134,6 @@ generate_hnsw_build_parameters_string(const std::string& metric_type, int64_t di
     auto build_parameters_str = fmt::format(parameter_temp, metric_type, dim);
     return build_parameters_str;
 }
-
-
-
-
 
 std::vector<IOItem>
 GenTestItems(uint64_t count, uint64_t max_length, uint64_t max_index) {
@@ -168,7 +155,6 @@ GenTestItems(uint64_t count, uint64_t max_length, uint64_t max_index) {
     return result;
 }
 
-
 uint64_t
 GetFileSize(const std::string& filename) {
     std::ifstream file(filename, std::ios::binary | std::ios::ate);
@@ -187,6 +173,5 @@ SplitString(const std::string& s, char delimiter) {
 
     return tokens;
 }
-
 
 }  // namespace fixtures

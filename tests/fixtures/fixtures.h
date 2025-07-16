@@ -13,7 +13,7 @@
 // limitations under the License.
 
 #pragma once
-#include<algorithm>
+#include <algorithm>
 #include <cstdint>
 #include <cstring>
 #include <filesystem>
@@ -39,7 +39,6 @@ CopyVector(const std::vector<T>& vec) {
     memcpy(result, vec.data(), vec.size() * sizeof(T));
     return result;
 }
-
 
 template <typename T, typename RT = typename std::enable_if<std::is_integral_v<T>, T>::type>
 std::vector<RT>
@@ -74,8 +73,6 @@ GenerateVectors(uint64_t count, uint32_t dim, int seed = 47, bool need_normalize
     return vectors;
 }
 
-
-
 std::pair<std::vector<float>, std::vector<uint8_t>>
 GenerateBinaryVectorsAndCodes(uint32_t count, uint32_t dim, int seed = 47);
 
@@ -97,18 +94,11 @@ generate_ids_and_vectors(int64_t num_elements,
                          bool need_normalize = true,
                          int seed = 47);
 
-
 std::vector<char>
 generate_extra_infos(uint64_t count, uint32_t size, int seed = 47);
 
-
-
-
-
 std::string
 generate_hnsw_build_parameters_string(const std::string& metric_type, int64_t dim);
-
-
 
 template <typename T>
 typename std::enable_if<std::is_floating_point<T>::value, T>::type
@@ -217,15 +207,11 @@ struct IOItem {
 std::vector<IOItem>
 GenTestItems(uint64_t count, uint64_t max_length, uint64_t max_index = 10000);
 
-
-
 uint64_t
 GetFileSize(const std::string& filename);
 
 std::vector<std::string>
 SplitString(const std::string& s, char delimiter);
-
-
 
 template <typename T>
 std::vector<T>
