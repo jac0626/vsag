@@ -686,7 +686,7 @@ SQ4ComputeCodesIP(const uint8_t* RESTRICT codes1,
                   const float* RESTRICT diff,
                   uint64_t dim) {
 #if defined(ENABLE_SVE)
-    return neon::SQ4ComputeCodesIP(query, codes, lower_bound, diff, dim);
+    return neon::SQ4ComputeCodesIP(codes1, codes2, lower_bound, diff, dim);
 #else
     return neon::SQ4ComputeCodesIP(codes1, codes2, lower_bound, diff, dim);
 #endif
