@@ -985,9 +985,10 @@ PQFastScanLookUp32(const uint8_t* RESTRICT lookup_table,
 
         svst1_u16(svptrue_b16(), temp, svget4_u16(accumulators, 3));
         for (int j = 0; j < 8; ++j)
-            result[3 * 8 + j] += temp[j] + temp[j + 8] + temp[j + 16] + temp[j + 24];
+            for (int k = 0; k < svcntb() / 16; k++) result[3 * 8 + j] += temp[j + 8 * k];
+        ;
     }
-}
+
 #else
     neon::PQFastScanLookUp32(lookup_table, codes, pq_dim, result);
 #endif
