@@ -73,7 +73,20 @@ void
 PQDistanceFloat256(const void* single_dim_centers, float single_dim_val, void* result) {
 #if defined(ENABLE_SVE)
     // TODO: SVE implementation here
-    neon::PQDistanceFloat256(single_dim_centers, single_dim_val, result);
+    const auto* float_centers = (const float*)single_dim_centers;
+    auto* float_result = (float*)result;
+    uint64_t num_floats_per_vector = svcntw();
+    svfloat32_t val_vec = svdup_f32(single_dim_val);
+    int i = 0;
+    do {
+        svbool_t pg = svwhilelt_b32(i, 256);
+        svfloat32_t centers_vec = svld1_f32(pg, float_centers + i);
+        svfloat32_t result_vec = svld1_f32(pg, float_result + i);
+        svfloat32_t diff_vec = svsub_f32_m(pg, centers_vec, val_vec);
+        result_vec = svmad_f32_m(pg, diff_vec, diff_vec, result_vec);
+        svst1_f32(pg, float_result + i, result_vec);
+        i += num_floats_per_vector;
+    } while (i < 256);
 #else
     neon::PQDistanceFloat256(single_dim_centers, single_dim_val, result);
 #endif
@@ -898,8 +911,83 @@ PQFastScanLookUp32(const uint8_t* RESTRICT lookup_table,
                    uint64_t pq_dim,
                    int32_t* RESTRICT result) {
 #if defined(ENABLE_SVE)
-    // TODO: SVE implementation here
-    neon::PQFastScanLookUp32(lookup_table, codes, pq_dim, result);
+    uint64_t i = 0;
+    const uint64_t total_bytes = pq_dim * 16;
+    auto step = svcntb();
+
+    const svuint8_t mask4 = svdup_u8(0x0F);
+    const svuint16_t mask8 = svdup_u16(0x00FF);
+    svuint16x4_t accumulators =
+        svcreate4_u16(svdup_u16(0), svdup_u16(0), svdup_u16(0), svdup_u16(0));
+
+    uint8_t offsets_data[svcntb()];
+    for (uint64_t c = 0; c < svcntb() / 16; ++c) std::memset(offsets_data + c * 16, c * 16, 16);
+    const svuint8_t index_offsets = svld1_u8(svptrue_b8(), offsets_data);
+
+    while (i < total_bytes) {
+        svbool_t pg_bytes = svwhilelt_b8(i, total_bytes);
+
+        svuint8_t super_table = svld1_u8(pg_bytes, lookup_table + i);
+        svuint8_t super_codes = svld1_u8(pg_bytes, codes + i);
+
+        svuint8_t low_nibbles = svand_u8_z(pg_bytes, super_codes, mask4);
+        svuint8_t high_nibbles = svlsr_n_u8_z(pg_bytes, super_codes, 4);
+
+        svuint8_t adjusted_low_indices = svadd_u8_z(pg_bytes, low_nibbles, index_offsets);
+        svuint8_t adjusted_high_indices = svadd_u8_z(pg_bytes, high_nibbles, index_offsets);
+
+        svuint8_t low_vals = svtbl_u8(super_table, adjusted_low_indices);
+        svuint8_t high_vals = svtbl_u8(super_table, adjusted_high_indices);
+
+        svbool_t pg_u16 = svwhilelt_b16(i / 2, total_bytes / 2);
+
+        svuint16_t acc0 = svget4_u16(accumulators, 0);
+        svuint16_t acc1 = svget4_u16(accumulators, 1);
+        svuint16_t acc2 = svget4_u16(accumulators, 2);
+        svuint16_t acc3 = svget4_u16(accumulators, 3);
+
+        acc0 =
+            svadd_u16_m(pg_u16, acc0, svand_u16_z(pg_u16, svreinterpret_u16_u8(low_vals), mask8));
+        acc1 = svadd_u16_m(pg_u16, acc1, svlsr_n_u16_z(pg_u16, svreinterpret_u16_u8(low_vals), 8));
+        acc2 =
+            svadd_u16_m(pg_u16, acc2, svand_u16_z(pg_u16, svreinterpret_u16_u8(high_vals), mask8));
+        acc3 = svadd_u16_m(pg_u16, acc3, svlsr_n_u16_z(pg_u16, svreinterpret_u16_u8(high_vals), 8));
+
+        accumulators = svset4_u16(accumulators, 0, acc0);
+        accumulators = svset4_u16(accumulators, 1, acc1);
+        accumulators = svset4_u16(accumulators, 2, acc2);
+        accumulators = svset4_u16(accumulators, 3, acc3);
+
+        i += step;
+    }
+
+    alignas(512) uint16_t temp[svcntb() / 2];  // 每个 uint16 是 2 字节
+    {
+        // Segment 0
+
+        svst1_u16(svptrue_b16(), temp, svget4_u16(accumulators, 0));
+        for (int j = 0; j < 8; ++j)
+            for (int k = 0; k < svcntb() / 16; k++) result[0 * 8 + j] += temp[j + 8 * (k)];
+
+        // Segment 1
+
+        svst1_u16(svptrue_b16(), temp, svget4_u16(accumulators, 1));
+        for (int j = 0; j < 8; ++j)
+            for (int k = 0; k < svcntb() / 16; k++) result[1 * 8 + j] += temp[j + 8 * k];
+
+        // Segment 2
+
+        svst1_u16(svptrue_b16(), temp, svget4_u16(accumulators, 2));
+        for (int j = 0; j < 8; ++j)
+            for (int k = 0; k < svcntb() / 16; k++) result[2 * 8 + j] += temp[j + 8 * k];
+
+        // Segment 3
+
+        svst1_u16(svptrue_b16(), temp, svget4_u16(accumulators, 3));
+        for (int j = 0; j < 8; ++j)
+            result[3 * 8 + j] += temp[j] + temp[j + 8] + temp[j + 16] + temp[j + 24];
+    }
+}
 #else
     neon::PQFastScanLookUp32(lookup_table, codes, pq_dim, result);
 #endif
