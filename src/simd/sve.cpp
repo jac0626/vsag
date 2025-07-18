@@ -673,7 +673,51 @@ SQ4ComputeIP(const float* RESTRICT query,
              const float* RESTRICT diff,
              uint64_t dim) {
 #if defined(ENABLE_SVE)
-    return neon::SQ4ComputeIP(query, codes, lower_bound, diff, dim);
+    svfloat32_t z_result_vec = svdup_f32(0.0f);
+    const svfloat32_t z_inv_15 = svdup_f32(1.0f / 15.0f);
+    const uint64_t vl = svcntw();
+    const svbool_t pg_all = svptrue_b32();
+
+   
+    const svuint32_t z_base_indices = svindex_u32(0, 1);
+    const svuint32_t z_even_elem_indices = svmul_n_u32_x(pg_all, z_base_indices, 2);
+    const svuint32_t z_even_byte_offsets = svmul_n_u32_x(pg_all, z_even_elem_indices, sizeof(float));
+    const svuint32_t z_odd_elem_indices = svadd_n_u32_x(pg_all, z_even_elem_indices, 1);
+    const svuint32_t z_odd_byte_offsets = svmul_n_u32_x(pg_all, z_odd_elem_indices, sizeof(float));
+
+    uint64_t d = 0;
+    for (; d + 2 * vl <= dim; d += 2 * vl) {
+        const svfloat32_t z_query_even = svld1_gather_u32offset_f32(pg_all, &query[d], z_even_byte_offsets);
+        const svfloat32_t z_query_odd  = svld1_gather_u32offset_f32(pg_all, &query[d], z_odd_byte_offsets);
+        const svfloat32_t z_lower_even = svld1_gather_u32offset_f32(pg_all, &lower_bound[d], z_even_byte_offsets);
+        const svfloat32_t z_lower_odd  = svld1_gather_u32offset_f32(pg_all, &lower_bound[d], z_odd_byte_offsets);
+        const svfloat32_t z_diff_even  = svld1_gather_u32offset_f32(pg_all, &diff[d], z_even_byte_offsets);
+        
+        
+        const svfloat32_t z_diff_odd   = svld1_gather_u32offset_f32(pg_all, &diff[d], z_odd_byte_offsets);
+        
+
+        const svuint32_t z_packed_u32 = svld1ub_u32(pg_all, &codes[d / 2]);
+
+        const svuint32_t z_codes_even_u32 = svand_n_u32_x(pg_all, z_packed_u32, 0x0F);
+        const svuint32_t z_codes_odd_u32 = svlsr_n_u32_x(pg_all, z_packed_u32, 4);
+
+        const svfloat32_t z_codes_even_f32 = svcvt_f32_u32_x(pg_all, z_codes_even_u32);
+        const svfloat32_t z_codes_odd_f32  = svcvt_f32_u32_x(pg_all, z_codes_odd_u32);
+
+        svfloat32_t z_y_even = svmla_f32_x(pg_all, z_lower_even, svmul_f32_x(pg_all, z_codes_even_f32, z_inv_15), z_diff_even);
+        svfloat32_t z_y_odd  = svmla_f32_x(pg_all, z_lower_odd,  svmul_f32_x(pg_all, z_codes_odd_f32, z_inv_15), z_diff_odd);
+
+        z_result_vec = svmla_f32_x(pg_all, z_result_vec, z_query_even, z_y_even);
+        z_result_vec = svmla_f32_x(pg_all, z_result_vec, z_query_odd, z_y_odd);
+    }
+    
+   
+    if (d < dim) {
+        return svaddv_f32(pg_all, z_result_vec)+neon::SQ4ComputeIP(&query[d],&codes[d/2],&lower_bound[d],&diff[d],dim-d);
+    }
+
+    return svaddv_f32(pg_all, z_result_vec);
 #else
     return neon::SQ4ComputeIP(query, codes, lower_bound, diff, dim);
 #endif
@@ -686,7 +730,49 @@ SQ4ComputeL2Sqr(const float* RESTRICT query,
                 const float* RESTRICT diff,
                 uint64_t dim) {
 #if defined(ENABLE_SVE)
-    return neon::SQ4ComputeL2Sqr(query, codes, lower_bound, diff, dim);
+    svfloat32_t z_result_vec = svdup_f32(0.0f);
+    const svfloat32_t z_inv_15 = svdup_f32(1.0f / 15.0f);
+    const uint64_t vl = svcntw();
+    const svbool_t pg_all = svptrue_b32();
+
+    const svuint32_t z_base_indices = svindex_u32(0, 1);
+    const svuint32_t z_even_elem_indices = svmul_n_u32_x(pg_all, z_base_indices, 2);
+    const svuint32_t z_even_byte_offsets = svmul_n_u32_x(pg_all, z_even_elem_indices, sizeof(float));
+    const svuint32_t z_odd_elem_indices = svadd_n_u32_x(pg_all, z_even_elem_indices, 1);
+    const svuint32_t z_odd_byte_offsets = svmul_n_u32_x(pg_all, z_odd_elem_indices, sizeof(float));
+
+    uint64_t d = 0;
+    for (; d + 2 * vl <= dim; d += 2 * vl) {
+        const svfloat32_t z_query_even = svld1_gather_u32offset_f32(pg_all, &query[d], z_even_byte_offsets);
+        const svfloat32_t z_query_odd  = svld1_gather_u32offset_f32(pg_all, &query[d], z_odd_byte_offsets);
+        const svfloat32_t z_lower_even = svld1_gather_u32offset_f32(pg_all, &lower_bound[d], z_even_byte_offsets);
+        const svfloat32_t z_lower_odd  = svld1_gather_u32offset_f32(pg_all, &lower_bound[d], z_odd_byte_offsets);
+        const svfloat32_t z_diff_even_param  = svld1_gather_u32offset_f32(pg_all, &diff[d], z_even_byte_offsets);
+        const svfloat32_t z_diff_odd_param   = svld1_gather_u32offset_f32(pg_all, &diff[d], z_odd_byte_offsets);
+
+        const svuint32_t z_packed_u32 = svld1ub_u32(pg_all, &codes[d / 2]);
+
+        const svuint32_t z_codes_even_u32 = svand_n_u32_x(pg_all, z_packed_u32, 0x0F);
+        const svuint32_t z_codes_odd_u32 = svlsr_n_u32_x(pg_all, z_packed_u32, 4);
+
+        const svfloat32_t z_codes_even_f32 = svcvt_f32_u32_x(pg_all, z_codes_even_u32);
+        const svfloat32_t z_codes_odd_f32  = svcvt_f32_u32_x(pg_all, z_codes_odd_u32);
+
+        svfloat32_t z_y_even = svmla_f32_x(pg_all, z_lower_even, svmul_f32_x(pg_all, z_codes_even_f32, z_inv_15), z_diff_even_param);
+        svfloat32_t z_y_odd  = svmla_f32_x(pg_all, z_lower_odd,  svmul_f32_x(pg_all, z_codes_odd_f32, z_inv_15), z_diff_odd_param);
+
+        svfloat32_t z_diff_even = svsub_f32_x(pg_all, z_query_even, z_y_even);
+        svfloat32_t z_diff_odd  = svsub_f32_x(pg_all, z_query_odd, z_y_odd);
+
+        z_result_vec = svmla_f32_x(pg_all, z_result_vec, z_diff_even, z_diff_even);
+        z_result_vec = svmla_f32_x(pg_all, z_result_vec, z_diff_odd, z_diff_odd);
+    }
+
+    if (d < dim) {
+        return svaddv_f32(pg_all, z_result_vec) + neon::SQ4ComputeL2Sqr(&query[d], &codes[d/2], &lower_bound[d], &diff[d], dim - d);
+    }
+
+    return svaddv_f32(pg_all, z_result_vec);
 #else
     return neon::SQ4ComputeL2Sqr(query, codes, lower_bound, diff, dim);
 #endif
@@ -699,7 +785,51 @@ SQ4ComputeCodesIP(const uint8_t* RESTRICT codes1,
                   const float* RESTRICT diff,
                   uint64_t dim) {
 #if defined(ENABLE_SVE)
-    return neon::SQ4ComputeCodesIP(codes1, codes2, lower_bound, diff, dim);
+    svfloat32_t z_result_vec = svdup_f32(0.0f);
+    const svfloat32_t z_inv_15 = svdup_f32(1.0f / 15.0f);
+    const uint64_t vl = svcntw();
+    const svbool_t pg_all = svptrue_b32();
+
+    const svuint32_t z_base_indices = svindex_u32(0, 1);
+    const svuint32_t z_even_elem_indices = svmul_n_u32_x(pg_all, z_base_indices, 2);
+    const svuint32_t z_even_byte_offsets = svmul_n_u32_x(pg_all, z_even_elem_indices, sizeof(float));
+    const svuint32_t z_odd_elem_indices = svadd_n_u32_x(pg_all, z_even_elem_indices, 1);
+    const svuint32_t z_odd_byte_offsets = svmul_n_u32_x(pg_all, z_odd_elem_indices, sizeof(float));
+
+    uint64_t d = 0;
+    for (; d + 2 * vl <= dim; d += 2 * vl) {
+        const svfloat32_t z_lower_even = svld1_gather_u32offset_f32(pg_all, &lower_bound[d], z_even_byte_offsets);
+        const svfloat32_t z_lower_odd  = svld1_gather_u32offset_f32(pg_all, &lower_bound[d], z_odd_byte_offsets);
+        const svfloat32_t z_diff_even  = svld1_gather_u32offset_f32(pg_all, &diff[d], z_even_byte_offsets);
+        const svfloat32_t z_diff_odd   = svld1_gather_u32offset_f32(pg_all, &diff[d], z_odd_byte_offsets);
+
+        const svuint32_t z_packed1_u32 = svld1ub_u32(pg_all, &codes1[d / 2]);
+        const svuint32_t z_packed2_u32 = svld1ub_u32(pg_all, &codes2[d / 2]);
+
+        const svuint32_t z_codes1_even_u32 = svand_n_u32_x(pg_all, z_packed1_u32, 0x0F);
+        const svuint32_t z_codes1_odd_u32 = svlsr_n_u32_x(pg_all, z_packed1_u32, 4);
+        const svuint32_t z_codes2_even_u32 = svand_n_u32_x(pg_all, z_packed2_u32, 0x0F);
+        const svuint32_t z_codes2_odd_u32 = svlsr_n_u32_x(pg_all, z_packed2_u32, 4);
+
+        const svfloat32_t z_codes1_even_f32 = svcvt_f32_u32_x(pg_all, z_codes1_even_u32);
+        const svfloat32_t z_codes1_odd_f32  = svcvt_f32_u32_x(pg_all, z_codes1_odd_u32);
+        const svfloat32_t z_codes2_even_f32 = svcvt_f32_u32_x(pg_all, z_codes2_even_u32);
+        const svfloat32_t z_codes2_odd_f32  = svcvt_f32_u32_x(pg_all, z_codes2_odd_u32);
+
+        svfloat32_t z_y1_even = svmla_f32_x(pg_all, z_lower_even, svmul_f32_x(pg_all, z_codes1_even_f32, z_inv_15), z_diff_even);
+        svfloat32_t z_y1_odd  = svmla_f32_x(pg_all, z_lower_odd,  svmul_f32_x(pg_all, z_codes1_odd_f32, z_inv_15), z_diff_odd);
+        svfloat32_t z_y2_even = svmla_f32_x(pg_all, z_lower_even, svmul_f32_x(pg_all, z_codes2_even_f32, z_inv_15), z_diff_even);
+        svfloat32_t z_y2_odd  = svmla_f32_x(pg_all, z_lower_odd,  svmul_f32_x(pg_all, z_codes2_odd_f32, z_inv_15), z_diff_odd);
+
+        z_result_vec = svmla_f32_x(pg_all, z_result_vec, z_y1_even, z_y2_even);
+        z_result_vec = svmla_f32_x(pg_all, z_result_vec, z_y1_odd, z_y2_odd);
+    }
+
+    if (d < dim) {
+        return svaddv_f32(pg_all, z_result_vec) + neon::SQ4ComputeCodesIP(&codes1[d/2], &codes2[d/2], &lower_bound[d], &diff[d], dim - d);
+    }
+
+    return svaddv_f32(pg_all, z_result_vec);
 #else
     return neon::SQ4ComputeCodesIP(codes1, codes2, lower_bound, diff, dim);
 #endif
@@ -712,7 +842,54 @@ SQ4ComputeCodesL2Sqr(const uint8_t* RESTRICT codes1,
                      const float* RESTRICT diff,
                      uint64_t dim) {
 #if defined(ENABLE_SVE)
-    return neon::SQ4ComputeCodesL2Sqr(codes1, codes2, lower_bound, diff, dim);
+    svfloat32_t z_result_vec = svdup_f32(0.0f);
+    const svfloat32_t z_inv_15 = svdup_f32(1.0f / 15.0f);
+    const uint64_t vl = svcntw();
+    const svbool_t pg_all = svptrue_b32();
+
+    const svuint32_t z_base_indices = svindex_u32(0, 1);
+    const svuint32_t z_even_elem_indices = svmul_n_u32_x(pg_all, z_base_indices, 2);
+    const svuint32_t z_even_byte_offsets = svmul_n_u32_x(pg_all, z_even_elem_indices, sizeof(float));
+    const svuint32_t z_odd_elem_indices = svadd_n_u32_x(pg_all, z_even_elem_indices, 1);
+    const svuint32_t z_odd_byte_offsets = svmul_n_u32_x(pg_all, z_odd_elem_indices, sizeof(float));
+
+    uint64_t d = 0;
+    for (; d + 2 * vl <= dim; d += 2 * vl) {
+        const svfloat32_t z_lower_even = svld1_gather_u32offset_f32(pg_all, &lower_bound[d], z_even_byte_offsets);
+        const svfloat32_t z_lower_odd  = svld1_gather_u32offset_f32(pg_all, &lower_bound[d], z_odd_byte_offsets);
+        const svfloat32_t z_diff_even  = svld1_gather_u32offset_f32(pg_all, &diff[d], z_even_byte_offsets);
+        const svfloat32_t z_diff_odd   = svld1_gather_u32offset_f32(pg_all, &diff[d], z_odd_byte_offsets);
+
+        const svuint32_t z_packed1_u32 = svld1ub_u32(pg_all, &codes1[d / 2]);
+        const svuint32_t z_packed2_u32 = svld1ub_u32(pg_all, &codes2[d / 2]);
+
+        const svuint32_t z_codes1_even_u32 = svand_n_u32_x(pg_all, z_packed1_u32, 0x0F);
+        const svuint32_t z_codes1_odd_u32 = svlsr_n_u32_x(pg_all, z_packed1_u32, 4);
+        const svuint32_t z_codes2_even_u32 = svand_n_u32_x(pg_all, z_packed2_u32, 0x0F);
+        const svuint32_t z_codes2_odd_u32 = svlsr_n_u32_x(pg_all, z_packed2_u32, 4);
+
+        const svfloat32_t z_codes1_even_f32 = svcvt_f32_u32_x(pg_all, z_codes1_even_u32);
+        const svfloat32_t z_codes1_odd_f32  = svcvt_f32_u32_x(pg_all, z_codes1_odd_u32);
+        const svfloat32_t z_codes2_even_f32 = svcvt_f32_u32_x(pg_all, z_codes2_even_u32);
+        const svfloat32_t z_codes2_odd_f32  = svcvt_f32_u32_x(pg_all, z_codes2_odd_u32);
+
+        svfloat32_t z_y1_even = svmla_f32_x(pg_all, z_lower_even, svmul_f32_x(pg_all, z_codes1_even_f32, z_inv_15), z_diff_even);
+        svfloat32_t z_y1_odd  = svmla_f32_x(pg_all, z_lower_odd,  svmul_f32_x(pg_all, z_codes1_odd_f32, z_inv_15), z_diff_odd);
+        svfloat32_t z_y2_even = svmla_f32_x(pg_all, z_lower_even, svmul_f32_x(pg_all, z_codes2_even_f32, z_inv_15), z_diff_even);
+        svfloat32_t z_y2_odd  = svmla_f32_x(pg_all, z_lower_odd,  svmul_f32_x(pg_all, z_codes2_odd_f32, z_inv_15), z_diff_odd);
+
+        svfloat32_t z_diff_res_even = svsub_f32_x(pg_all, z_y1_even, z_y2_even);
+        svfloat32_t z_diff_res_odd  = svsub_f32_x(pg_all, z_y1_odd, z_y2_odd);
+
+        z_result_vec = svmla_f32_x(pg_all, z_result_vec, z_diff_res_even, z_diff_res_even);
+        z_result_vec = svmla_f32_x(pg_all, z_result_vec, z_diff_res_odd, z_diff_res_odd);
+    }
+
+    if (d < dim) {
+        return svaddv_f32(pg_all, z_result_vec) + neon::SQ4ComputeCodesL2Sqr(&codes1[d/2], &codes2[d/2], &lower_bound[d], &diff[d], dim - d);
+    }
+
+    return svaddv_f32(pg_all, z_result_vec);
 #else
     return neon::SQ4ComputeCodesL2Sqr(codes1, codes2, lower_bound, diff, dim);
 #endif
