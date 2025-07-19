@@ -1014,7 +1014,7 @@ RaBitQFloatBinaryIP(const float* vector, const uint8_t* bits, uint64_t dim, floa
         svbool_t pg = svwhilelt_b32(d, dim);
 
         alignas(16) uint32_t mask_lanes[vl];
-        0 for (uint64_t i = 0; i < vl; ++i) {
+        for (uint64_t i = 0; i < vl; ++i) {
             if (d + i < dim) {
                 bool bit = ((bits[(d + i) / 8] >> ((d + i) % 8)) & 1) != 0;
                 mask_lanes[i] = bit ? 0xFFFFFFFF : 0;
