@@ -112,7 +112,7 @@ FP32ComputeIP(const float* RESTRICT query, const float* RESTRICT codes, uint64_t
 
         i += step;
         pg = svwhilelt_b32(i, dim);
-    } while (svptest_any(svptrue_b32(), pg));
+    } while (svptest_first(svptrue_b32(), pg));
 
     return svaddv_f32(svptrue_b32(), sum_vec);
 #else
@@ -141,7 +141,7 @@ FP32ComputeL2Sqr(const float* RESTRICT query, const float* RESTRICT codes, uint6
 
         i += step;
         pg = svwhilelt_b32(i, dim);
-    } while (svptest_any(svptrue_b32(), pg));
+    } while (svptest_first(svptrue_b32(), pg));
 
     return svaddv_f32(svptrue_b32(), sum_vec);
 #else
@@ -194,7 +194,7 @@ FP32ComputeIPBatch4(const float* RESTRICT query,
 
         i += step;
         pg = svwhilelt_b32(i, dim);
-    } while (svptest_any(svptrue_b32(), pg));
+    } while (svptest_first(svptrue_b32(), pg));
 
     result1 = svaddv_f32(svptrue_b32(), res1_vec);
     result2 = svaddv_f32(svptrue_b32(), res2_vec);
@@ -254,7 +254,7 @@ FP32ComputeL2SqrBatch4(const float* RESTRICT query,
 
         i += step;
         pg = svwhilelt_b32(i, dim);
-    } while (svptest_any(svptrue_b32(), pg));
+    } while (svptest_first(svptrue_b32(), pg));
 
     result1 = svaddv_f32(svptrue_b32(), res1_vec);
     result2 = svaddv_f32(svptrue_b32(), res2_vec);
@@ -280,7 +280,7 @@ FP32Sub(const float* x, const float* y, float* z, uint64_t dim) {
 
         i += step;
         pg = svwhilelt_b32(i, dim);
-    } while (svptest_any(svptrue_b32(), pg));
+    } while (svptest_first(svptrue_b32(), pg));
 #else
     neon::FP32Sub(x, y, z, dim);
 #endif
@@ -300,7 +300,7 @@ FP32Add(const float* x, const float* y, float* z, uint64_t dim) {
 
         i += step;
         pg = svwhilelt_b32(i, dim);
-    } while (svptest_any(svptrue_b32(), pg));
+    } while (svptest_first(svptrue_b32(), pg));
 #else
     neon::FP32Add(x, y, z, dim);
 #endif
@@ -320,7 +320,7 @@ FP32Mul(const float* x, const float* y, float* z, uint64_t dim) {
 
         i += step;
         pg = svwhilelt_b32(i, dim);
-    } while (svptest_any(svptrue_b32(), pg));
+    } while (svptest_first(svptrue_b32(), pg));
 #else
     neon::FP32Mul(x, y, z, dim);
 #endif
@@ -340,7 +340,7 @@ FP32Div(const float* x, const float* y, float* z, uint64_t dim) {
 
         i += step;
         pg = svwhilelt_b32(i, dim);
-    } while (svptest_any(svptrue_b32(), pg));
+    } while (svptest_first(svptrue_b32(), pg));
 #else
     neon::FP32Div(x, y, z, dim);
 #endif
@@ -360,7 +360,7 @@ FP32ReduceAdd(const float* x, uint64_t dim) {
 
         i += step;
         pg = svwhilelt_b32(i, dim);
-    } while (svptest_any(svptrue_b32(), pg));
+    } while (svptest_first(svptrue_b32(), pg));
 
     return svaddv_f32(svptrue_b32(), sum_vec);
 #else
@@ -392,7 +392,7 @@ BF16ComputeIP(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, uint
 
         i += step;
         pg = svwhilelt_b16(i, dim);
-    } while (svptest_any(svptrue_b16(), pg));
+    } while (svptest_first(svptrue_b16(), pg));
 
     return svaddv_f32(svptrue_b32(), sum_vec);
 #else
@@ -424,7 +424,7 @@ BF16ComputeL2Sqr(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, u
 
         i += step;
         pg = svwhilelt_b16(i, dim);
-    } while (svptest_any(svptrue_b16(), pg));
+    } while (svptest_first(svptrue_b16(), pg));
 
     return svaddv_f32(svptrue_b32(), sum_vec);
 #else
@@ -455,7 +455,7 @@ FP16ComputeIP(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, uint
 
         i += step;
         pg = svwhilelt_b16(i, dim);
-    } while (svptest_any(svptrue_b16(), pg));
+    } while (svptest_first(svptrue_b16(), pg));
 
     return svaddv_f32(svptrue_b32(), sum_vec);
 #else
@@ -487,7 +487,7 @@ FP16ComputeL2Sqr(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, u
 
         i += step;
         pg = svwhilelt_b16(i, dim);
-    } while (svptest_any(svptrue_b16(), pg));
+    } while (svptest_first(svptrue_b16(), pg));
 
     return svaddv_f32(svptrue_b32(), sum_vec);
 #else
@@ -528,7 +528,7 @@ SQ8ComputeIP(const float* RESTRICT query,
 
         i += step;
         pg = svwhilelt_b32(i, dim);
-    } while (svptest_any(svptrue_b32(), pg));
+    } while (svptest_first(svptrue_b32(), pg));
 
     return svaddv_f32(svptrue_b32(), sum_vec);
 #else
@@ -569,7 +569,7 @@ SQ8ComputeL2Sqr(const float* RESTRICT query,
 
         i += step;
         pg = svwhilelt_b32(i, dim);
-    } while (svptest_any(svptrue_b32(), pg));
+    } while (svptest_first(svptrue_b32(), pg));
 
     return svaddv_f32(svptrue_b32(), sum_vec);
 #else
@@ -613,7 +613,7 @@ SQ8ComputeCodesIP(const uint8_t* RESTRICT codes1,
 
         i += step;
         pg = svwhilelt_b32(i, dim);
-    } while (svptest_any(svptrue_b32(), pg));
+    } while (svptest_first(svptrue_b32(), pg));
 
     return svaddv_f32(svptrue_b32(), sum_vec);
 #else
@@ -658,7 +658,7 @@ SQ8ComputeCodesL2Sqr(const uint8_t* RESTRICT codes1,
 
         i += step;
         pg = svwhilelt_b32(i, dim);
-    } while (svptest_any(svptrue_b32(), pg));
+    } while (svptest_first(svptrue_b32(), pg));
 
     return svaddv_f32(svptrue_b32(), sum_vec);
 #else
@@ -985,7 +985,7 @@ SQ8UniformComputeCodesIP(const uint8_t* RESTRICT codes1,
 
         i += step;
         pg = svwhilelt_b8(i, dim);
-    } while (svptest_any(svptrue_b8(), pg));
+    } while (svptest_first(svptrue_b8(), pg));
 
     return static_cast<float>(svaddv_u32(svptrue_b32(), sum_vec));
 #else
@@ -996,8 +996,46 @@ SQ8UniformComputeCodesIP(const uint8_t* RESTRICT codes1,
 float
 RaBitQFloatBinaryIP(const float* vector, const uint8_t* bits, uint64_t dim, float inv_sqrt_d) {
 #if defined(ENABLE_SVE)
-    // TODO: SVE implementation here
-    return neon::RaBitQFloatBinaryIP(vector, bits, dim, inv_sqrt_d);
+
+    if (dim == 0) {
+        return 0.0f;
+    }
+
+    uint64_t d = 0;
+
+    uint64_t vl = svcntw();
+
+    svfloat32_t vec_sum = svdup_f32(0.0f);
+
+    svfloat32_t v_inv = svdup_f32(inv_sqrt_d);
+    svfloat32_t v_neg_inv = svdup_f32(-inv_sqrt_d);
+
+    while (d < dim) {
+        svbool_t pg = svwhilelt_b32(d, dim);
+
+        alignas(16) uint32_t mask_lanes[vl];
+        0 for (uint64_t i = 0; i < vl; ++i) {
+            if (d + i < dim) {
+                bool bit = ((bits[(d + i) / 8] >> ((d + i) % 8)) & 1) != 0;
+                mask_lanes[i] = bit ? 0xFFFFFFFF : 0;
+            } else {
+                mask_lanes[i] = 0;
+            }
+        }
+
+        svuint32_t uvec_mask_data = svld1_u32(pg, mask_lanes);
+        svbool_t bit_mask = svcmpgt_n_u32(pg, uvec_mask_data, 0);
+
+        svfloat32_t vec_b = svsel_f32(bit_mask, v_inv, v_neg_inv);
+
+        svfloat32_t vec_v = svld1_f32(pg, &vector[d]);
+
+        vec_sum = svmla_f32_m(pg, vec_sum, vec_v, vec_b);
+
+        d += vl;
+    }
+
+    return svaddv_f32(svptrue_b32(), vec_sum);
 #else
     return neon::RaBitQFloatBinaryIP(vector, bits, dim, inv_sqrt_d);
 #endif
@@ -1006,8 +1044,50 @@ RaBitQFloatBinaryIP(const float* vector, const uint8_t* bits, uint64_t dim, floa
 uint32_t
 RaBitQSQ4UBinaryIP(const uint8_t* codes, const uint8_t* bits, uint64_t dim) {
 #if defined(ENABLE_SVE)
-    // TODO: SVE implementation here
-    return neon::RaBitQSQ4UBinaryIP(codes, bits, dim);
+    if (dim == 0) {
+        return 0;
+    }
+
+    uint32_t result = 0;
+    size_t num_bytes = (dim + 7) / 8;
+
+    for (uint64_t bit_pos = 0; bit_pos < 4; ++bit_pos) {
+        const uint8_t* cur_codes = codes + bit_pos * num_bytes;
+        uint64_t plane_sum = 0;
+        size_t i = 0;
+
+        uint64_t num_u64_lanes = svcntd();
+
+        uint64_t chunk_size_bytes = num_u64_lanes * 8;
+
+        if (chunk_size_bytes > 0) {
+            svuint64_t acc = svdup_u64(0);
+
+            for (; i + chunk_size_bytes <= num_bytes; i += chunk_size_bytes) {
+                svuint64_t vec_codes =
+                    svld1_u64(svptrue_b64(), reinterpret_cast<const uint64_t*>(cur_codes + i));
+                svuint64_t vec_bits =
+                    svld1_u64(svptrue_b64(), reinterpret_cast<const uint64_t*>(bits + i));
+
+                svuint64_t and_result = svand_u64_z(svptrue_b64(), vec_codes, vec_bits);
+
+                svuint64_t popcnt_result = svcnt_u64_z(svptrue_b64(), and_result);
+
+                acc = svadd_u64_m(svptrue_b64(), acc, popcnt_result);
+            }
+
+            plane_sum += svaddv_u64(svptrue_b64(), acc);
+        }
+
+        for (; i < num_bytes; ++i) {
+            uint8_t bitwise_and = cur_codes[i] & bits[i];
+            plane_sum += __builtin_popcount(bitwise_and);
+        }
+
+        result += plane_sum << bit_pos;
+    }
+
+    return result;
 #else
     return neon::RaBitQSQ4UBinaryIP(codes, bits, dim);
 #endif
@@ -1027,7 +1107,7 @@ BitAnd(const uint8_t* x, const uint8_t* y, const uint64_t num_byte, uint8_t* res
 
         i += step;
         pg = svwhilelt_b8(i, num_byte);
-    } while (svptest_any(svptrue_b8(), pg));
+    } while (svptest_first(svptrue_b8(), pg));
 #else
     neon::BitAnd(x, y, num_byte, result);
 #endif
@@ -1047,7 +1127,7 @@ BitOr(const uint8_t* x, const uint8_t* y, const uint64_t num_byte, uint8_t* resu
 
         i += step;
         pg = svwhilelt_b8(i, num_byte);
-    } while (svptest_any(svptrue_b8(), pg));
+    } while (svptest_first(svptrue_b8(), pg));
 #else
     neon::BitOr(x, y, num_byte, result);
 #endif
@@ -1067,7 +1147,7 @@ BitXor(const uint8_t* x, const uint8_t* y, const uint64_t num_byte, uint8_t* res
 
         i += step;
         pg = svwhilelt_b8(i, num_byte);
-    } while (svptest_any(svptrue_b8(), pg));
+    } while (svptest_first(svptrue_b8(), pg));
 #else
     neon::BitXor(x, y, num_byte, result);
 #endif
@@ -1086,7 +1166,7 @@ BitNot(const uint8_t* x, const uint64_t num_byte, uint8_t* result) {
 
         i += step;
         pg = svwhilelt_b8(i, num_byte);
-    } while (svptest_any(svptrue_b8(), pg));
+    } while (svptest_first(svptrue_b8(), pg));
 #else
     neon::BitNot(x, num_byte, result);
 #endif
@@ -1178,7 +1258,7 @@ PQFastScanLookUp32(const uint8_t* RESTRICT lookup_table,
         i += step;
     }
 
-    alignas(512) uint16_t temp[svcntb() / 2];  // 每个 uint16 是 2 字节
+    uint16_t temp[svcntb() / 2];
     {
         // Segment 0
 
