@@ -99,6 +99,12 @@ TEST_CASE("RaBitQ SQ4U-BQ Compute Benchmark", "[ut][simd][!benchmark]") {
     if (SimdStatus::SupportAVX512()) {
         BENCHMARK_SIMD_COMPUTE_SQ4(avx512, RaBitQSQ4UBinaryIP);
     }
+    if (SimdStatus::SupportSVE()) {
+        BENCHMARK_SIMD_COMPUTE_SQ4(sve, RaBitQSQ4UBinaryIP);
+    }
+     if (SimdStatus::SupportNEON) {
+        BENCHMARK_SIMD_COMPUTE_SQ4(neon,RaBitQSQ4UBinaryIP);
+    }
     if (SimdStatus::SupportAVX512VPOPCNTDQ()) {
         BENCHMARK_SIMD_COMPUTE_SQ4(avx512vpopcntdq, RaBitQSQ4UBinaryIP);
     }
@@ -184,6 +190,9 @@ TEST_CASE("RaBitQ FP32-BQ SIMD Compute Benchmark", "[ut][simd][!benchmark]") {
     }
     if (SimdStatus::SupportNEON()) {
         BENCHMARK_SIMD_COMPUTE(neon, RaBitQFloatBinaryIP);
+    }
+     if (SimdStatus::SupportSVE()) {
+        BENCHMARK_SIMD_COMPUTE(sve, RaBitQFloatBinaryIP);
     }
 }
 TEST_CASE("SIMD test for rescale", "[ut][simd]") {
