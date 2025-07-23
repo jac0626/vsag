@@ -1387,7 +1387,7 @@ FlipSign(const uint8_t* flip, float* data, size_t dim) {
         const svbool_t bit_mask = svcmpne_n_u32(pg, v_preds_extended, 0);
 
         svfloat32_t data_vec = svld1_f32(pg, data + d);
-        svfloat32_t result_vec = svneg_f32_m(bit_mask, data_vec, data_vec);
+        svfloat32_t result_vec = svneg_f32_m(data_vec, bit_mask, data_vec);
         svst1_f32(pg, data + d, result_vec);
 
         d += vl;
@@ -1422,14 +1422,14 @@ RotateOp(float* data, int idx, int dim_, int step) {
     for (int i = idx; i < dim_; i += 2 * step) {
         uint64_t j = 0;
         const uint64_t sve_step = svcntw();
-        svbool_t pg = svwhilelt_b32(j, step);
+        svbool_t pg = svwhilelt_b32(j, (uint64_t)step);
         do {
             svfloat32_t x = svld1_f32(pg, data + i + j);
             svfloat32_t y = svld1_f32(pg, data + i + j + step);
             svst1_f32(pg, data + i + j, svadd_f32_z(pg, x, y));
             svst1_f32(pg, data + i + j + step, svsub_f32_z(pg, x, y));
             j += sve_step;
-            pg = svwhilelt_b32(j, step);
+            pg = svwhilelt_b32(j, (uint64_t)step);
         } while (svptest_first(svptrue_b32(), pg));
     }
 #else
