@@ -18,7 +18,23 @@
 
 #include <cmath>
 #include <cstdint>
+#include <array>       
+#include <memory>     
+#include <cstring>      
 
+
+constexpr auto generate_bit_lookup_table() {
+    std::array<std::array<uint8_t, 8>, 256> table{};
+    for (int byte_value = 0; byte_value < 256; ++byte_value) {
+        for (int bit_pos = 0; bit_pos < 8; ++bit_pos) {
+            table[byte_value][bit_pos] = ((byte_value >> bit_pos) & 1) ? 1 : 0;
+        }
+    }
+    return table;
+}
+
+// 在编译时生成并初始化全局查找表，无任何运行时开销
+static constexpr auto g_bit_lookup_table = generate_bit_lookup_table();
 #include "simd.h"
 
 #if defined(__ARM_FEATURE_SVE_BF16)
@@ -996,40 +1012,43 @@ SQ8UniformComputeCodesIP(const uint8_t* RESTRICT codes1,
 float
 RaBitQFloatBinaryIP(const float* vector, const uint8_t* bits, uint64_t dim, float inv_sqrt_d) {
 #if defined(ENABLE_SVE)
-
     if (dim == 0) {
         return 0.0f;
     }
 
+   
+    auto predicate_array = std::make_unique<uint8_t[]>(dim);
+
+ 
+    const uint64_t num_bytes = dim / 8;
+    for (uint64_t i = 0; i < num_bytes; ++i) {
+        memcpy(&predicate_array[i * 8], g_bit_lookup_table[bits[i]].data(), 8);
+    }
+
+    if (dim % 8 != 0) {
+        const uint64_t remaining_bits = dim % 8;
+        memcpy(&predicate_array[num_bytes * 8], g_bit_lookup_table[bits[num_bytes]].data(), remaining_bits);
+    }
+
+
     uint64_t d = 0;
-
-    uint64_t vl = svcntw();
-
+    const uint64_t vl = svcntw();
     svfloat32_t vec_sum = svdup_f32(0.0f);
 
-    svfloat32_t v_inv = svdup_f32(inv_sqrt_d);
-    svfloat32_t v_neg_inv = svdup_f32(-inv_sqrt_d);
+    const svfloat32_t v_inv = svdup_f32(inv_sqrt_d);
+    const svfloat32_t v_neg_inv = svdup_f32(-inv_sqrt_d);
 
     while (d < dim) {
-        svbool_t pg = svwhilelt_b32(d, dim);
+        const svbool_t pg = svwhilelt_b32(d, dim);
 
-        alignas(16) uint32_t mask_lanes[vl];
-        for (uint64_t i = 0; i < vl; ++i) {
-            if (d + i < dim) {
-                bool bit = ((bits[(d + i) / 8] >> ((d + i) % 8)) & 1) != 0;
-                mask_lanes[i] = bit ? 0xFFFFFFFF : 0;
-            } else {
-                mask_lanes[i] = 0;
-            }
-        }
+        const svuint32_t v_preds_extended = svld1ub_u32(pg, &predicate_array[d]);
+        
+    
+        const svbool_t bit_mask = svcmpne_n_u32(pg, v_preds_extended, 0);
 
-        svuint32_t uvec_mask_data = svld1_u32(pg, mask_lanes);
-        svbool_t bit_mask = svcmpgt_n_u32(pg, uvec_mask_data, 0);
-
-        svfloat32_t vec_b = svsel_f32(bit_mask, v_inv, v_neg_inv);
-
-        svfloat32_t vec_v = svld1_f32(pg, &vector[d]);
-
+    
+        const svfloat32_t vec_b = svsel_f32(bit_mask, v_inv, v_neg_inv);
+        const svfloat32_t vec_v = svld1_f32(pg, &vector[d]);
         vec_sum = svmla_f32_m(pg, vec_sum, vec_v, vec_b);
 
         d += vl;
