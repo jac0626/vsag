@@ -16,14 +16,14 @@
 #include <arm_sve.h>
 #endif
 
+#include <array>
 #include <cmath>
 #include <cstdint>
-#include <array>       
-#include <memory>     
-#include <cstring>      
+#include <cstring>
+#include <memory>
 
-
-constexpr auto generate_bit_lookup_table() {
+constexpr auto
+generate_bit_lookup_table() {
     std::array<std::array<uint8_t, 8>, 256> table{};
     for (int byte_value = 0; byte_value < 256; ++byte_value) {
         for (int bit_pos = 0; bit_pos < 8; ++bit_pos) {
@@ -73,8 +73,24 @@ InnerProductDistance(const void* pVect1, const void* pVect2, const void* qty_ptr
 float
 INT8InnerProduct(const void* pVect1v, const void* pVect2v, const void* qty_ptr) {
 #if defined(ENABLE_SVE)
-    // TODO: SVE implementation here
-    return neon::INT8InnerProduct(pVect1v, pVect2v, qty_ptr);
+    auto* pVect1 = (const int8_t*)pVect1v;
+    auto* pVect2 = (const int8_t*)pVect2v;
+    auto qty = *((size_t*)qty_ptr);
+
+    svint32_t sum_vec = svdup_s32(0);
+    uint64_t i = 0;
+    const uint64_t step = svcntb();
+
+    svbool_t pg = svwhilelt_b8(i, qty);
+    do {
+        svint8_t v1 = svld1_s8(pg, pVect1 + i);
+        svint8_t v2 = svld1_s8(pg, pVect2 + i);
+        sum_vec = svdot_s32(sum_vec, v1, v2);
+        i += step;
+        pg = svwhilelt_b8(i, qty);
+    } while (svptest_first(svptrue_b8(), pg));
+
+    return static_cast<float>(svaddv_s32(svptrue_b32(), sum_vec));
 #else
     return neon::INT8InnerProduct(pVect1v, pVect2v, qty_ptr);
 #endif
@@ -88,7 +104,6 @@ INT8InnerProductDistance(const void* pVect1, const void* pVect2, const void* qty
 void
 PQDistanceFloat256(const void* single_dim_centers, float single_dim_val, void* result) {
 #if defined(ENABLE_SVE)
-    // TODO: SVE implementation here
     const auto* float_centers = (const float*)single_dim_centers;
     auto* float_result = (float*)result;
     uint64_t num_floats_per_vector = svcntw();
@@ -1016,10 +1031,8 @@ RaBitQFloatBinaryIP(const float* vector, const uint8_t* bits, uint64_t dim, floa
         return 0.0f;
     }
 
-   
     auto predicate_array = std::make_unique<uint8_t[]>(dim);
 
- 
     const uint64_t num_bytes = dim / 8;
     for (uint64_t i = 0; i < num_bytes; ++i) {
         memcpy(&predicate_array[i * 8], g_bit_lookup_table[bits[i]].data(), 8);
@@ -1027,9 +1040,10 @@ RaBitQFloatBinaryIP(const float* vector, const uint8_t* bits, uint64_t dim, floa
 
     if (dim % 8 != 0) {
         const uint64_t remaining_bits = dim % 8;
-        memcpy(&predicate_array[num_bytes * 8], g_bit_lookup_table[bits[num_bytes]].data(), remaining_bits);
+        memcpy(&predicate_array[num_bytes * 8],
+               g_bit_lookup_table[bits[num_bytes]].data(),
+               remaining_bits);
     }
-
 
     uint64_t d = 0;
     const uint64_t vl = svcntw();
@@ -1042,11 +1056,9 @@ RaBitQFloatBinaryIP(const float* vector, const uint8_t* bits, uint64_t dim, floa
         const svbool_t pg = svwhilelt_b32(d, dim);
 
         const svuint32_t v_preds_extended = svld1ub_u32(pg, &predicate_array[d]);
-        
-    
+
         const svbool_t bit_mask = svcmpne_n_u32(pg, v_preds_extended, 0);
 
-    
         const svfloat32_t vec_b = svsel_f32(bit_mask, v_inv, v_neg_inv);
         const svfloat32_t vec_v = svld1_f32(pg, &vector[d]);
         vec_sum = svmla_f32_m(pg, vec_sum, vec_v, vec_b);
@@ -1069,34 +1081,31 @@ RaBitQSQ4UBinaryIP(const uint8_t* codes, const uint8_t* bits, uint64_t dim) {
 
     uint32_t result = 0;
     size_t num_bytes = (dim + 7) / 8;
+    uint64_t num_u64_lanes = svcntd();
+
+    uint64_t chunk_size_bytes = num_u64_lanes * 8;
 
     for (uint64_t bit_pos = 0; bit_pos < 4; ++bit_pos) {
         const uint8_t* cur_codes = codes + bit_pos * num_bytes;
         uint64_t plane_sum = 0;
         size_t i = 0;
 
-        uint64_t num_u64_lanes = svcntd();
+        svuint64_t acc = svdup_u64(0);
 
-        uint64_t chunk_size_bytes = num_u64_lanes * 8;
+        for (; i + chunk_size_bytes <= num_bytes; i += chunk_size_bytes) {
+            svuint64_t vec_codes =
+                svld1_u64(svptrue_b64(), reinterpret_cast<const uint64_t*>(cur_codes + i));
+            svuint64_t vec_bits =
+                svld1_u64(svptrue_b64(), reinterpret_cast<const uint64_t*>(bits + i));
 
-        if (chunk_size_bytes > 0) {
-            svuint64_t acc = svdup_u64(0);
+            svuint64_t and_result = svand_u64_z(svptrue_b64(), vec_codes, vec_bits);
 
-            for (; i + chunk_size_bytes <= num_bytes; i += chunk_size_bytes) {
-                svuint64_t vec_codes =
-                    svld1_u64(svptrue_b64(), reinterpret_cast<const uint64_t*>(cur_codes + i));
-                svuint64_t vec_bits =
-                    svld1_u64(svptrue_b64(), reinterpret_cast<const uint64_t*>(bits + i));
+            svuint64_t popcnt_result = svcnt_u64_z(svptrue_b64(), and_result);
 
-                svuint64_t and_result = svand_u64_z(svptrue_b64(), vec_codes, vec_bits);
-
-                svuint64_t popcnt_result = svcnt_u64_z(svptrue_b64(), and_result);
-
-                acc = svadd_u64_m(svptrue_b64(), acc, popcnt_result);
-            }
-
-            plane_sum += svaddv_u64(svptrue_b64(), acc);
+            acc = svadd_u64_m(svptrue_b64(), acc, popcnt_result);
         }
+
+        plane_sum += svaddv_u64(svptrue_b64(), acc);
 
         for (; i < num_bytes; ++i) {
             uint8_t bitwise_and = cur_codes[i] & bits[i];
@@ -1194,8 +1203,7 @@ BitNot(const uint8_t* x, const uint64_t num_byte, uint8_t* result) {
 void
 Prefetch(const void* data) {
 #if defined(ENABLE_SVE)
-    // TODO: SVE implementation here
-    neon::Prefetch(data);
+    svprfw(svptrue_b32(), data, SV_PLDL1KEEP);
 #else
     neon::Prefetch(data);
 #endif
@@ -1204,8 +1212,23 @@ Prefetch(const void* data) {
 void
 DivScalar(const float* from, float* to, uint64_t dim, float scalar) {
 #if defined(ENABLE_SVE)
-    // TODO: SVE implementation here
-    neon::DivScalar(from, to, dim, scalar);
+    if (dim == 0) {
+        return;
+    }
+    if (scalar == 0) {
+        scalar = 1.0f;
+    }
+    svfloat32_t scalar_vec = svdup_f32(scalar);
+    uint64_t i = 0;
+    const uint64_t step = svcntw();
+    svbool_t pg = svwhilelt_b32(i, dim);
+    do {
+        svfloat32_t from_vec = svld1_f32(pg, from + i);
+        svfloat32_t to_vec = svdiv_f32_z(pg, from_vec, scalar_vec);
+        svst1_f32(pg, to + i, to_vec);
+        i += step;
+        pg = svwhilelt_b32(i, dim);
+    } while (svptest_first(svptrue_b32(), pg));
 #else
     neon::DivScalar(from, to, dim, scalar);
 #endif
@@ -1214,8 +1237,12 @@ DivScalar(const float* from, float* to, uint64_t dim, float scalar) {
 float
 Normalize(const float* from, float* to, uint64_t dim) {
 #if defined(ENABLE_SVE)
-    // TODO: SVE implementation here
-    return neon::Normalize(from, to, dim);
+    float norm = std::sqrt(sve::FP32ComputeIP(from, from, dim));
+    if (norm == 0) {
+        norm = 1.0f;
+    }
+    sve::DivScalar(from, to, dim, norm);
+    return norm;
 #else
     return neon::Normalize(from, to, dim);
 #endif
@@ -1313,8 +1340,25 @@ PQFastScanLookUp32(const uint8_t* RESTRICT lookup_table,
 void
 KacsWalk(float* data, size_t len) {
 #if defined(ENABLE_SVE)
-    // TODO: SVE implementation here
-    neon::KacsWalk(data, len);
+    size_t n = len / 2;
+    size_t offset = (len % 2) + n;
+    uint64_t i = 0;
+    const uint64_t step = svcntw();
+    svbool_t pg = svwhilelt_b32(i, n);
+    do {
+        svfloat32_t v1 = svld1_f32(pg, data + i);
+        svfloat32_t v2 = svld1_f32(pg, data + i + offset);
+        svfloat32_t add = svadd_f32_z(pg, v1, v2);
+        svfloat32_t sub = svsub_f32_z(pg, v1, v2);
+        svst1_f32(pg, data + i, add);
+        svst1_f32(pg, data + i + offset, sub);
+        i += step;
+        pg = svwhilelt_b32(i, n);
+    } while (svptest_first(svptrue_b32(), pg));
+
+    if (len % 2 != 0) {
+        data[n] *= std::sqrt(2.0F);
+    }
 #else
     neon::KacsWalk(data, len);
 #endif
@@ -1323,8 +1367,31 @@ KacsWalk(float* data, size_t len) {
 void
 FlipSign(const uint8_t* flip, float* data, size_t dim) {
 #if defined(ENABLE_SVE)
-    // TODO: SVE implementation here
-    neon::FlipSign(flip, data, dim);
+    auto predicate_array = std::make_unique<uint8_t[]>(dim);
+    const uint64_t num_bytes = dim / 8;
+    for (uint64_t j = 0; j < num_bytes; ++j) {
+        memcpy(&predicate_array[j * 8], g_bit_lookup_table[flip[j]].data(), 8);
+    }
+    if (dim % 8 != 0) {
+        const uint64_t remaining_bits = dim % 8;
+        memcpy(&predicate_array[num_bytes * 8],
+               g_bit_lookup_table[flip[num_bytes]].data(),
+               remaining_bits);
+    }
+
+    uint64_t d = 0;
+    const uint64_t vl = svcntw();
+    while (d < dim) {
+        const svbool_t pg = svwhilelt_b32(d, dim);
+        const svuint32_t v_preds_extended = svld1ub_u32(pg, &predicate_array[d]);
+        const svbool_t bit_mask = svcmpne_n_u32(pg, v_preds_extended, 0);
+
+        svfloat32_t data_vec = svld1_f32(pg, data + d);
+        svfloat32_t result_vec = svneg_f32_m(bit_mask, data_vec, data_vec);
+        svst1_f32(pg, data + d, result_vec);
+
+        d += vl;
+    }
 #else
     neon::FlipSign(flip, data, dim);
 #endif
@@ -1333,8 +1400,17 @@ FlipSign(const uint8_t* flip, float* data, size_t dim) {
 void
 VecRescale(float* data, size_t dim, float val) {
 #if defined(ENABLE_SVE)
-    // TODO: SVE implementation here
-    neon::VecRescale(data, dim, val);
+    svfloat32_t val_vec = svdup_f32(val);
+    uint64_t i = 0;
+    const uint64_t step = svcntw();
+    svbool_t pg = svwhilelt_b32(i, dim);
+    do {
+        svfloat32_t data_vec = svld1_f32(pg, data + i);
+        svfloat32_t res_vec = svmul_f32_z(pg, data_vec, val_vec);
+        svst1_f32(pg, data + i, res_vec);
+        i += step;
+        pg = svwhilelt_b32(i, dim);
+    } while (svptest_first(svptrue_b32(), pg));
 #else
     neon::VecRescale(data, dim, val);
 #endif
@@ -1343,8 +1419,19 @@ VecRescale(float* data, size_t dim, float val) {
 void
 RotateOp(float* data, int idx, int dim_, int step) {
 #if defined(ENABLE_SVE)
-    // TODO: SVE implementation here
-    neon::RotateOp(data, idx, dim_, step);
+    for (int i = idx; i < dim_; i += 2 * step) {
+        uint64_t j = 0;
+        const uint64_t sve_step = svcntw();
+        svbool_t pg = svwhilelt_b32(j, step);
+        do {
+            svfloat32_t x = svld1_f32(pg, data + i + j);
+            svfloat32_t y = svld1_f32(pg, data + i + j + step);
+            svst1_f32(pg, data + i + j, svadd_f32_z(pg, x, y));
+            svst1_f32(pg, data + i + j + step, svsub_f32_z(pg, x, y));
+            j += sve_step;
+            pg = svwhilelt_b32(j, step);
+        } while (svptest_first(svptrue_b32(), pg));
+    }
 #else
     neon::RotateOp(data, idx, dim_, step);
 #endif
@@ -1353,8 +1440,12 @@ RotateOp(float* data, int idx, int dim_, int step) {
 void
 FHTRotate(float* data, size_t dim_) {
 #if defined(ENABLE_SVE)
-    // TODO: SVE implementation here
-    neon::FHTRotate(data, dim_);
+    size_t n = dim_;
+    size_t step = 1;
+    while (step < n) {
+        sve::RotateOp(data, 0, dim_, step);
+        step *= 2;
+    }
 #else
     neon::FHTRotate(data, dim_);
 #endif
