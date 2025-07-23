@@ -18,8 +18,8 @@
 #include <cstdint>
 #include <memory>
 
-#include "../logger.h"
 #include "computer.h"
+#include "logger.h"
 #include "metric_type.h"
 #include "storage/stream_reader.h"
 #include "storage/stream_writer.h"
@@ -271,4 +271,8 @@ private:
                                  std::declval<float&>())
 };
 
+#define TEMPLATE_QUANTIZER(Name)                        \
+    template class Name<MetricType::METRIC_TYPE_L2SQR>; \
+    template class Name<MetricType::METRIC_TYPE_IP>;    \
+    template class Name<MetricType::METRIC_TYPE_COSINE>;
 }  // namespace vsag

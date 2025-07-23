@@ -37,6 +37,7 @@
 #include "impl/filter/filter_headers.h"
 #include "index_common_param.h"
 #include "index_feature_list.h"
+#include "index_impl.h"
 #include "logger.h"
 #include "typing.h"
 #include "utils/window_result_queue.h"
@@ -76,6 +77,11 @@ public:
     tl::expected<std::vector<int64_t>, Error>
     Build(const DatasetPtr& base) override {
         SAFE_CALL(return this->build(base));
+    }
+
+    IndexType
+    GetIndexType() override {
+        return IndexType::HNSW;
     }
 
     tl::expected<std::vector<int64_t>, Error>
@@ -312,6 +318,11 @@ public:
     bool
     SetDataAndGraph(FlattenInterfacePtr& data, GraphInterfacePtr& graph, Vector<LabelType>& ids);
 
+    tl::expected<void, Error>
+    SetImmutable() override {
+        SAFE_CALL(this->set_immutable());
+    }
+
 private:
     tl::expected<std::vector<int64_t>, Error>
     build(const DatasetPtr& base);
@@ -424,6 +435,9 @@ private:
 
     uint64_t
     estimate_memory(uint64_t num_elements) const;
+
+    void
+    set_immutable();
 
 private:
     std::shared_ptr<hnswlib::AlgorithmInterface<float>> alg_hnsw_;

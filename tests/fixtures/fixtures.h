@@ -97,6 +97,22 @@ generate_ids_and_vectors(int64_t num_elements,
 std::vector<char>
 generate_extra_infos(uint64_t count, uint32_t size, int seed = 47);
 
+
+vsag::AttributeSet*
+generate_attributes(uint64_t count,
+                    uint32_t max_term_count = 10,
+                    uint32_t max_value_count = 10,
+                    int seed = 97);
+
+float
+test_knn_recall(const vsag::IndexPtr& index,
+                const std::string& search_parameters,
+                int64_t num_vectors,
+                int64_t dim,
+                std::vector<int64_t>& ids,
+                std::vector<float>& vectors);
+
+
 std::string
 generate_hnsw_build_parameters_string(const std::string& metric_type, int64_t dim);
 

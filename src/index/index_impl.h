@@ -58,6 +58,11 @@ public:
         SAFE_CALL(return this->inner_index_->Build(base));
     }
 
+    IndexType
+    GetIndexType() override {
+        return this->inner_index_->GetIndexType();
+    }
+
     tl::expected<void, Error>
     Train(const DatasetPtr& data) override {
         if (this->inner_index_->immutable_) {
@@ -110,6 +115,15 @@ public:
                                         "immutable index no support update vector"));
         }
         SAFE_CALL(return this->inner_index_->UpdateVector(id, new_base, force_update));
+    }
+
+    virtual tl::expected<void, Error>
+    UpdateAttribute(int64_t id, const AttributeSet& new_attrs) override {
+        if (this->inner_index_->immutable_) {
+            return tl::unexpected(Error(ErrorType::UNSUPPORTED_INDEX_OPERATION,
+                                        "immutable index no support update attribute"));
+        }
+        SAFE_CALL(this->inner_index_->UpdateAttribute(id, new_attrs));
     }
 
     [[nodiscard]] tl::expected<DatasetPtr, Error>
@@ -313,6 +327,11 @@ public:
             LOG_ERROR_AND_RETURNS(model_value.error().type, model_value.error().message);
         }
         return std::make_shared<IndexImpl<T>>(model_value.value(), this->common_param_);
+    }
+
+    tl::expected<void, Error>
+    SetImmutable() override {
+        SAFE_CALL(this->inner_index_->SetImmutable());
     }
 
     [[nodiscard]] tl::expected<BinarySet, Error>

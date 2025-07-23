@@ -49,6 +49,9 @@ public:
     [[nodiscard]] virtual std::string
     GetName() const = 0;
 
+    [[nodiscard]] virtual IndexType
+    GetIndexType() = 0;
+
     virtual void
     InitFeatures() = 0;
 
@@ -186,6 +189,12 @@ public:
                             "Index doesn't support UpdateVector");
     }
 
+    virtual void
+    UpdateAttribute(int64_t id, const AttributeSet& new_attrs) {
+        throw VsagException(ErrorType::UNSUPPORTED_INDEX_OPERATION,
+                            "Index doesn't support UpdateAttribute");
+    }
+
     virtual uint32_t
     Pretrain(const std::vector<int64_t>& base_tag_ids, uint32_t k, const std::string& parameters) {
         throw VsagException(ErrorType::UNSUPPORTED_INDEX_OPERATION,
@@ -234,6 +243,12 @@ public:
     ExportModel(const IndexCommonParam& param) const {
         throw VsagException(ErrorType::UNSUPPORTED_INDEX_OPERATION,
                             "Index doesn't support ExportModel");
+    }
+
+    virtual void
+    SetImmutable() {
+        throw VsagException(ErrorType::UNSUPPORTED_INDEX_OPERATION,
+                            "Index doesn't support SetImmutable");
     }
 
     [[nodiscard]] virtual BinarySet
@@ -305,6 +320,10 @@ public:
     GetVectorByInnerId(InnerIdType inner_id, float* data) const {
         throw VsagException(ErrorType::UNSUPPORTED_INDEX_OPERATION,
                             "Index doesn't support GetVectorByInnerId");
+    }
+
+    virtual void
+    SetIO(const std::shared_ptr<Reader> reader) {
     }
 
 public:

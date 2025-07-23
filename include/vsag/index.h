@@ -42,6 +42,16 @@ struct MergeUnit {
     IdMapFunction id_map_func = nullptr;
 };
 
+enum class IndexType {
+    HNSW,
+    DISKANN,
+    HGRAPH,
+    IVF,
+    PYRAMID,
+    BRUTEFORCE,
+    SPARSE,
+};
+
 class Index {
 public:
     // [basic methods]
@@ -54,6 +64,15 @@ public:
       */
     virtual tl::expected<std::vector<int64_t>, Error>
     Build(const DatasetPtr& base) = 0;
+
+    /**
+     * @brief Get Index Type
+     * @return IndexType
+     */
+    virtual IndexType
+    GetIndexType() {
+        throw std::runtime_error("Index not support GetIndexType");
+    }
 
     /**
       * @brief Training index with given vectors
@@ -128,6 +147,19 @@ public:
     virtual tl::expected<bool, Error>
     UpdateVector(int64_t id, const DatasetPtr& new_base, bool force_update = false) {
         throw std::runtime_error("Index not support update vector");
+    }
+
+    /**
+     * @brief Update the attribute of a base point from the index
+     *
+     * @param id indicates the id of a base point in index
+     * @param origin_attrs is the origin attributes of the base point
+     * @param new_attrs is the new attributes of the base point
+     * @return result indicates whether the update operation is successful.
+     */
+    virtual tl::expected<void, Error>
+    UpdateAttribute(int64_t id, const AttributeSet& new_attrs) {
+        throw std::runtime_error("Index not support update attribute");
     }
 
     /**
@@ -478,6 +510,17 @@ public:
     virtual tl::expected<IndexPtr, Error>
     ExportModel() const {
         throw std::runtime_error("Index doesn't support ExportModel");
+    }
+
+    /**
+     * @brief set the index to immutable state.
+     * After setting this state, no further modifications are supported, such as no additions or deletions 
+     *
+     * @throws std::runtime_error If the index does not support to set immutable
+     */
+    virtual tl::expected<void, Error>
+    SetImmutable() {
+        throw std::runtime_error("Index doesn't support SetImmutable");
     }
 
 public:

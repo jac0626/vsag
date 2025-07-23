@@ -22,7 +22,6 @@
 #include <stdexcept>
 
 #include "common.h"
-#include "data_cell/graph_datacell_parameter.h"
 #include "data_cell/sparse_graph_datacell.h"
 #include "dataset_impl.h"
 #include "impl/heap/standard_heap.h"
@@ -31,7 +30,7 @@
 #include "impl/reorder.h"
 #include "index/index_impl.h"
 #include "index/iterator_filter.h"
-#include "logger.h"
+#include "io/reader_io_parameter.h"
 #include "storage/serialization.h"
 #include "storage/stream_reader.h"
 #include "typing.h"
@@ -55,13 +54,7 @@ HGraph::HGraph(const HGraphParameterPtr& hgraph_param, const vsag::IndexCommonPa
       hierarchical_datacell_param_(hgraph_param->hierarchical_graph_param),
       extra_info_size_(common_param.extra_info_size_),
       deleted_ids_(allocator_) {
-    this->immutable_ = hgraph_param->immutable;
-    if (immutable_) {
-        neighbors_mutex_ = std::make_shared<EmptyMutex>();
-        this->label_table_ = std::make_shared<LabelTable>(allocator_, false);
-    } else {
-        neighbors_mutex_ = std::make_shared<PointsMutex>(0, common_param.allocator_.get());
-    }
+    neighbors_mutex_ = std::make_shared<PointsMutex>(0, common_param.allocator_.get());
     this->basic_flatten_codes_ =
         FlattenInterface::MakeInstance(hgraph_param->base_codes_param, common_param);
     if (use_reorder_) {
@@ -721,6 +714,7 @@ HGraph::serialize_basic_info() const {
     TO_JSON_BASE64(jsonify_basic_info, mult);
     TO_JSON_ATOMIC(jsonify_basic_info, max_capacity);
     jsonify_basic_info["max_level"] = this->route_graphs_.size();
+    jsonify_basic_info[INDEX_PARAM] = this->create_param_ptr_->ToString();
 
     return jsonify_basic_info;
 }
@@ -746,6 +740,18 @@ HGraph::deserialize_basic_info(JsonType jsonify_basic_info) {
     uint64_t max_level = jsonify_basic_info["max_level"];
     for (uint64_t i = 0; i < max_level; ++i) {
         this->route_graphs_.emplace_back(this->generate_one_route_graph());
+    }
+    if (jsonify_basic_info.contains(INDEX_PARAM)) {
+        std::string index_param_string = jsonify_basic_info[INDEX_PARAM];
+        HGraphParameterPtr index_param = std::make_shared<HGraphParameter>();
+        index_param->FromString(index_param_string);
+        if (not this->create_param_ptr_->CheckCompatibility(index_param)) {
+            auto message = fmt::format("HGraph index parameter not match, current: {}, new: {}",
+                                       this->create_param_ptr_->ToString(),
+                                       index_param->ToString());
+            logger::error(message);
+            throw VsagException(ErrorType::INVALID_ARGUMENT, message);
+        }
     }
 }
 
@@ -832,19 +838,22 @@ HGraph::Deserialize(StreamReader& reader) {
     // try to deserialize footer (only in new version)
     auto footer = Footer::Parse(reader);
 
+    BufferStreamReader buffer_reader(
+        &reader, std::numeric_limits<uint64_t>::max(), this->allocator_);
+
     if (footer == nullptr) {  // old format, DON'T EDIT, remove in the future
         logger::debug("parse with v0.14 version format");
 
-        this->deserialize_basic_info_v0_14(reader);
+        this->deserialize_basic_info_v0_14(buffer_reader);
 
-        this->basic_flatten_codes_->Deserialize(reader);
-        this->bottom_graph_->Deserialize(reader);
+        this->basic_flatten_codes_->Deserialize(buffer_reader);
+        this->bottom_graph_->Deserialize(buffer_reader);
         if (this->use_reorder_) {
-            this->high_precise_codes_->Deserialize(reader);
+            this->high_precise_codes_->Deserialize(buffer_reader);
         }
 
         for (auto& route_graph : this->route_graphs_) {
-            route_graph->Deserialize(reader);
+            route_graph->Deserialize(buffer_reader);
         }
         auto new_size = max_capacity_.load();
         this->neighbors_mutex_->Resize(new_size);
@@ -852,12 +861,12 @@ HGraph::Deserialize(StreamReader& reader) {
         pool_ = std::make_shared<VisitedListPool>(1, allocator_, new_size, allocator_);
 
         if (this->extra_info_size_ > 0 && this->extra_infos_ != nullptr) {
-            this->extra_infos_->Deserialize(reader);
+            this->extra_infos_->Deserialize(buffer_reader);
         }
         this->total_count_ = this->basic_flatten_codes_->TotalCount();
 
         if (this->use_attribute_filter_ and this->attr_filter_index_ != nullptr) {
-            this->attr_filter_index_->Deserialize(reader);
+            this->attr_filter_index_->Deserialize(buffer_reader);
         }
     } else {  // create like `else if ( ver in [v0.15, v0.17] )` here if need in the future
         logger::debug("parse with new version format");
@@ -865,16 +874,16 @@ HGraph::Deserialize(StreamReader& reader) {
         auto metadata = footer->GetMetadata();
         // metadata should NOT be nullptr if footer is not nullptr
         this->deserialize_basic_info(metadata->Get("basic_info"));
-        this->deserialize_label_info(reader);
+        this->deserialize_label_info(buffer_reader);
 
-        this->basic_flatten_codes_->Deserialize(reader);
-        this->bottom_graph_->Deserialize(reader);
+        this->basic_flatten_codes_->Deserialize(buffer_reader);
+        this->bottom_graph_->Deserialize(buffer_reader);
         if (this->use_reorder_) {
-            this->high_precise_codes_->Deserialize(reader);
+            this->high_precise_codes_->Deserialize(buffer_reader);
         }
 
         for (auto& route_graph : this->route_graphs_) {
-            route_graph->Deserialize(reader);
+            route_graph->Deserialize(buffer_reader);
         }
         auto new_size = max_capacity_.load();
         this->neighbors_mutex_->Resize(new_size);
@@ -882,12 +891,12 @@ HGraph::Deserialize(StreamReader& reader) {
         pool_ = std::make_shared<VisitedListPool>(1, allocator_, new_size, allocator_);
 
         if (this->extra_info_size_ > 0 && this->extra_infos_ != nullptr) {
-            this->extra_infos_->Deserialize(reader);
+            this->extra_infos_->Deserialize(buffer_reader);
         }
         this->total_count_ = this->basic_flatten_codes_->TotalCount();
 
         if (this->use_attribute_filter_ and this->attr_filter_index_ != nullptr) {
-            this->attr_filter_index_->Deserialize(reader);
+            this->attr_filter_index_->Deserialize(buffer_reader);
         }
     }
 
@@ -1202,7 +1211,6 @@ static const std::string HGRAPH_PARAMS_TEMPLATE =
         "{HGRAPH_IGNORE_REORDER_KEY}": false,
         "{HGRAPH_BUILD_BY_BASE_QUANTIZATION_KEY}": false,
         "{HGRAPH_USE_ATTRIBUTE_FILTER_KEY}": false,
-        "{HGRSPH_IMMUTABLE_KEY}": false,
         "{HGRAPH_GRAPH_KEY}": {
             "{IO_PARAMS_KEY}": {
                 "{IO_TYPE_KEY}": "{IO_TYPE_VALUE_BLOCK_MEMORY_IO}",
@@ -1420,10 +1428,6 @@ HGraph::CheckAndMappingExternalParam(const JsonType& external_param,
             },
         },
         {
-            HGRAPH_IMMUTABLE,
-            {HGRSPH_IMMUTABLE_KEY},
-        },
-        {
             SQ4_UNIFORM_TRUNC_RATE,
             {
                 HGRAPH_BASE_CODES_KEY,
@@ -1610,4 +1614,26 @@ HGraph::GetVectorByInnerId(InnerIdType inner_id, float* data) const {
     codes->GetCodesById(inner_id, buffer.data());
     codes->Decode(buffer.data(), data);
 }
+
+void
+HGraph::SetImmutable() {
+    if (this->immutable_) {
+        return;
+    }
+    std::lock_guard<std::shared_mutex> wlock(this->global_mutex_);
+    this->neighbors_mutex_.reset();
+    this->neighbors_mutex_ = std::make_shared<EmptyMutex>();
+    this->searcher_->SetMutexArray(this->neighbors_mutex_);
+    this->immutable_ = true;
+}
+
+void
+HGraph::SetIO(const std::shared_ptr<Reader> reader) {
+    if (use_reorder_) {
+        auto reader_param = std::make_shared<ReaderIOParameter>();
+        reader_param->reader = reader;
+        high_precise_codes_->InitIO(reader_param);
+    }
+}
+
 }  // namespace vsag

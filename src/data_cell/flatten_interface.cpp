@@ -68,11 +68,7 @@ make_instance(const FlattenInterfaceParamPtr& param, const IndexCommonParam& com
         return make_instance<ProductQuantizer<metric>, IOTemp>(param, common_param);
     }
     if (quantization_string == QUANTIZATION_TYPE_VALUE_RABITQ) {
-        if constexpr (metric == MetricType::METRIC_TYPE_L2SQR) {
-            return make_instance<RaBitQuantizer<metric>, IOTemp>(param, common_param);
-        } else {
-            return nullptr;
-        }
+        return make_instance<RaBitQuantizer<metric>, IOTemp>(param, common_param);
     }
     if (quantization_string == QUANTIZATION_TYPE_VALUE_SPARSE) {
         return make_instance<SparseQuantizer<metric>, IOTemp>(param, common_param);
@@ -114,6 +110,9 @@ FlattenInterface::MakeInstance(const FlattenInterfaceParamPtr& param,
     }
     if (io_type_name == IO_TYPE_VALUE_MMAP_IO) {
         return make_instance<MMapIO>(param, common_param);
+    }
+    if (io_type_name == IO_TYPE_VALUE_READER_IO) {
+        return make_instance<ReaderIO>(param, common_param);
     }
     return nullptr;
 }

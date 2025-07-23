@@ -205,6 +205,7 @@ BruteForce::Serialize(StreamWriter& writer) const {
     JsonType basic_info;
     basic_info["dim"] = dim_;
     basic_info["total_count"] = total_count_;
+    basic_info[INDEX_PARAM] = this->create_param_ptr_->ToString();
     metadata->Set("basic_info", basic_info);
     auto footer = std::make_shared<Footer>(metadata);
     footer->Write(writer);
@@ -215,21 +216,37 @@ BruteForce::Deserialize(StreamReader& reader) {
     // try to deserialize footer (only in new version)
     auto footer = Footer::Parse(reader);
 
+    BufferStreamReader buffer_reader(
+        &reader, std::numeric_limits<uint64_t>::max(), this->allocator_);
+
     if (footer == nullptr) {  // old format, DON'T EDIT, remove in the future
         logger::debug("parse with v0.13 version format");
 
-        StreamReader::ReadObj(reader, dim_);
-        StreamReader::ReadObj(reader, total_count_);
+        StreamReader::ReadObj(buffer_reader, dim_);
+        StreamReader::ReadObj(buffer_reader, total_count_);
     } else {  // create like `else if ( ver in [v0.15, v0.17] )` here if need in the future
         logger::debug("parse with new version format");
 
         auto metadata = footer->GetMetadata();
         auto basic_info = metadata->Get("basic_info");
+        if (basic_info.contains(INDEX_PARAM)) {
+            std::string index_param_string = basic_info[INDEX_PARAM];
+            BruteForceParameterPtr index_param = std::make_shared<BruteForceParameter>();
+            index_param->FromString(index_param_string);
+            if (not this->create_param_ptr_->CheckCompatibility(index_param)) {
+                auto message =
+                    fmt::format("BruteForce index parameter not match, current: {}, new: {}",
+                                this->create_param_ptr_->ToString(),
+                                index_param->ToString());
+                logger::error(message);
+                throw VsagException(ErrorType::INVALID_ARGUMENT, message);
+            }
+        }
         dim_ = basic_info["dim"];
         total_count_ = basic_info["total_count"];
 
-        this->inner_codes_->Deserialize(reader);
-        this->label_table_->Deserialize(reader);
+        this->inner_codes_->Deserialize(buffer_reader);
+        this->label_table_->Deserialize(buffer_reader);
     }
 
     // post serialize procedure

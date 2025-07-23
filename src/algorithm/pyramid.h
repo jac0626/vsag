@@ -26,7 +26,6 @@
 #include "index_feature_list.h"
 #include "inner_index_interface.h"
 #include "io/memory_io_parameter.h"
-#include "logger.h"
 #include "pyramid_zparameters.h"
 #include "quantization/fp32_quantizer_parameter.h"
 
@@ -99,6 +98,11 @@ public:
     std::string
     GetName() const override {
         return INDEX_PYRAMID;
+    }
+
+    IndexType
+    GetIndexType() override {
+        return IndexType::PYRAMID;
     }
 
     [[nodiscard]] InnerIndexPtr

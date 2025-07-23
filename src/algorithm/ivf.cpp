@@ -15,7 +15,6 @@
 
 #include "ivf.h"
 
-#include <fstream>
 #include <set>
 
 #include "attr/executor/executor.h"
@@ -41,6 +40,7 @@ static constexpr const char* IVF_PARAMS_TEMPLATE =
         "{IVF_TRAIN_TYPE_KEY}": "{IVF_TRAIN_TYPE_KMEANS}",
         "{IVF_USE_ATTRIBUTE_FILTER_KEY}": false,
         "{IVF_USE_REORDER_KEY}": false,
+        "{IVF_THREAD_COUNT_KEY}": 1,
         "{BUCKET_PARAMS_KEY}": {
             "{IO_PARAMS_KEY}": {
                 "{IO_TYPE_KEY}": "{IO_TYPE_VALUE_MEMORY_IO}"
@@ -143,6 +143,12 @@ IVF::CheckAndMappingExternalParam(const JsonType& external_param,
                 PRODUCT_QUANTIZATION_DIM,
             },
         },
+        {
+            IVF_THREAD_COUNT,
+            {
+                IVF_THREAD_COUNT_KEY,
+            },
+        },
     };
 
     if (common_param.data_type_ == DataTypes::DATA_TYPE_INT8) {
@@ -161,7 +167,9 @@ IVF::CheckAndMappingExternalParam(const JsonType& external_param,
 }
 
 IVF::IVF(const IVFParameterPtr& param, const IndexCommonParam& common_param)
-    : InnerIndexInterface(param, common_param), buckets_per_data_(param->buckets_per_data) {
+    : InnerIndexInterface(param, common_param),
+      buckets_per_data_(param->buckets_per_data),
+      location_map_(common_param.allocator_.get()) {
     this->bucket_ = BucketInterface::MakeInstance(param->bucket_param, common_param);
     if (this->bucket_ == nullptr) {
         throw VsagException(ErrorType::INTERNAL_ERROR, "bucket init error");
@@ -184,6 +192,12 @@ IVF::IVF(const IVFParameterPtr& param, const IndexCommonParam& common_param)
     if (this->use_attribute_filter_) {
         this->attr_filter_index_ =
             AttributeInvertedInterface::MakeInstance(allocator_, true /*have_bucket*/);
+    }
+
+    this->thread_pool_ = common_param.thread_pool_;
+    if (param->thread_count > 1 && this->thread_pool_ == nullptr) {
+        this->thread_pool_ = SafeThreadPool::FactoryDefaultThreadPool();
+        this->thread_pool_->SetPoolSize(param->thread_count);
     }
 }
 
@@ -239,6 +253,7 @@ IVF::Build(const DatasetPtr& base) {
     this->Train(base);
     // TODO(LHT): duplicate
     auto result = this->Add(base);
+    this->fill_location_map();
     return result;
 }
 
@@ -288,9 +303,7 @@ IVF::Add(const DatasetPtr& base) {
     const auto* vectors = base->GetFloat32Vectors();
     const auto* attr_sets = base->GetAttributeSets();
     auto buckets = partition_strategy_->ClassifyDatas(vectors, num_element, buckets_per_data_);
-    Vector<float> normalize_data(dim_, allocator_);
-    Vector<float> residual_data(dim_, allocator_);
-    Vector<float> centroid(dim_, allocator_);
+
     int64_t current_num;
     {
         std::lock_guard lock(label_lookup_mutex_);
@@ -304,9 +317,12 @@ IVF::Add(const DatasetPtr& base) {
         current_num = this->total_elements_;
         this->total_elements_ += num_element;
     }
-    for (int64_t i = 0; i < num_element; ++i) {
-        const auto* data_ptr = vectors + i * dim_;
+    auto add_func = [&](int64_t i) -> void {
+        Vector<float> normalize_data(dim_, allocator_);
+        Vector<float> residual_data(dim_, allocator_);
+        Vector<float> centroid(dim_, allocator_);
         for (int64_t j = 0; j < buckets_per_data_; ++j) {
+            const auto* data_ptr = vectors + i * dim_;
             auto idx = i * buckets_per_data_ + j;
 
             if (use_residual_) {
@@ -325,9 +341,25 @@ IVF::Add(const DatasetPtr& base) {
                     data_ptr, buckets[idx], idx + current_num * buckets_per_data_);
             }
         }
+    };
+    std::vector<std::future<void>> futures;
+    for (int64_t i = 0; i < num_element; ++i) {
+        if (this->thread_pool_ != nullptr) {
+            auto future = thread_pool_->GeneralEnqueue(add_func, i);
+            futures.emplace_back(std::move(future));
+        } else {
+            add_func(i);
+        }
     }
 
+    if (this->thread_pool_ != nullptr) {
+        for (auto& future : futures) {
+            future.get();
+        }
+    }
     this->bucket_->Package();
+
+    // TODO(LHT): fix on concurrent add
     if (use_attribute_filter_ and this->attr_filter_index_ != nullptr and attr_sets != nullptr) {
         for (uint64_t i = 0; i < this->bucket_->bucket_count_; ++i) {
             auto bucket_id = static_cast<BucketIdType>(i);
@@ -339,7 +371,7 @@ IVF::Add(const DatasetPtr& base) {
             for (InnerIdType j = 0; j < bucket_size; ++j) {
                 auto inner_id = inner_ids[j];
                 const auto& attr_set = attr_sets[inner_id - current_num];
-                this->attr_filter_index_->InsertWithBucket(attr_set, j, bucket_id);
+                this->attr_filter_index_->Insert(attr_set, j, bucket_id);
             }
         }
     }
@@ -414,6 +446,22 @@ IVF::Merge(const std::vector<MergeUnit>& merge_units) {
     this->bucket_->Package();
 }
 
+std::pair<BucketIdType, InnerIdType>
+IVF::get_location(InnerIdType inner_id) {
+    auto loc = this->location_map_[inner_id];
+    constexpr uint64_t mask = (1ULL << LOCATION_SPLIT_BIT) - 1ULL;
+    auto bucket_id = static_cast<BucketIdType>(loc >> LOCATION_SPLIT_BIT);
+    auto offset_id = static_cast<InnerIdType>(loc & mask);
+    return {bucket_id, offset_id};
+}
+
+void
+IVF::UpdateAttribute(int64_t id, const AttributeSet& new_attrs) {
+    auto inner_id = this->label_table_->GetIdByLabel(id);
+    auto [bucket_id, offset_id] = this->get_location(inner_id);
+    this->attr_filter_index_->UpdateBitsetsByAttr(new_attrs, offset_id, bucket_id);
+}
+
 #define WRITE_DATACELL_WITH_NAME(writer, name, datacell)            \
     datacell_offsets[(name)] = offset;                              \
     auto datacell##_start = (writer).GetCursor();                   \
@@ -424,24 +472,6 @@ IVF::Merge(const std::vector<MergeUnit>& merge_units) {
 
 void
 IVF::Serialize(StreamWriter& writer) const {
-    // FIXME(wxyu): only for testing, remove before merge into the main branch
-    // if (not Options::Instance().new_version()) {
-    //     StreamWriter::WriteObj(writer, this->total_elements_);
-    //     StreamWriter::WriteObj(writer, this->use_reorder_);
-    //     StreamWriter::WriteObj(writer, this->is_trained_);
-
-    //     this->bucket_->Serialize(writer);
-    //     this->partition_strategy_->Serialize(writer);
-    //     this->label_table_->Serialize(writer);
-    //     if (use_reorder_) {
-    //         this->reorder_codes_->Serialize(writer);
-    //     }
-    //     if (use_attribute_filter_) {
-    //         this->attr_filter_index_->Serialize(writer);
-    //     }
-    //     return;
-    // }
-
     JsonType datacell_offsets;
     JsonType datacell_sizes;
     uint64_t offset = 0;
@@ -463,6 +493,7 @@ IVF::Serialize(StreamWriter& writer) const {
     basic_info["total_elements"] = this->total_elements_;
     basic_info["use_reorder"] = this->use_reorder_;
     basic_info["is_trained"] = this->is_trained_;
+    basic_info[INDEX_PARAM] = this->create_param_ptr_->ToString();
 
     auto metadata = std::make_shared<Metadata>();
     metadata->Set("basic_info", basic_info);
@@ -483,22 +514,25 @@ IVF::Deserialize(StreamReader& reader) {
     // try to deserialize footer (only in new version)
     auto footer = Footer::Parse(reader);
 
+    BufferStreamReader buffer_reader(
+        &reader, std::numeric_limits<uint64_t>::max(), this->allocator_);
+
     if (footer == nullptr) {  // old format, DON'T EDIT, remove in the future
         logger::debug("parse with v0.14 version format");
 
-        StreamReader::ReadObj(reader, this->total_elements_);
-        StreamReader::ReadObj(reader, this->use_reorder_);
-        StreamReader::ReadObj(reader, this->is_trained_);
+        StreamReader::ReadObj(buffer_reader, this->total_elements_);
+        StreamReader::ReadObj(buffer_reader, this->use_reorder_);
+        StreamReader::ReadObj(buffer_reader, this->is_trained_);
 
-        this->bucket_->Deserialize(reader);
-        this->partition_strategy_->Deserialize(reader);
-        this->label_table_->Deserialize(reader);
+        this->bucket_->Deserialize(buffer_reader);
+        this->partition_strategy_->Deserialize(buffer_reader);
+        this->label_table_->Deserialize(buffer_reader);
         if (use_reorder_) {
-            this->reorder_codes_->Deserialize(reader);
+            this->reorder_codes_->Deserialize(buffer_reader);
         }
 
         if (use_attribute_filter_) {
-            this->attr_filter_index_->Deserialize(reader);
+            this->attr_filter_index_->Deserialize(buffer_reader);
         }
     } else {  // create like `else if ( ver in [v0.15, v0.17] )` here if need in the future
         logger::debug("parse with new version format");
@@ -512,22 +546,35 @@ IVF::Deserialize(StreamReader& reader) {
         this->total_elements_ = basic_info["total_elements"];
         this->use_reorder_ = basic_info["use_reorder"];
         this->is_trained_ = basic_info["is_trained"];
+        if (basic_info.contains(INDEX_PARAM)) {
+            auto param_str = basic_info[INDEX_PARAM];
+            auto index_param = std::make_shared<IVFParameter>();
+            index_param->FromString(param_str);
+            if (not this->create_param_ptr_->CheckCompatibility(index_param)) {
+                auto message = fmt::format("IVF index parameter not match, current: {}, new: {}",
+                                           this->create_param_ptr_->ToString(),
+                                           index_param->ToString());
+                logger::error(message);
+                throw VsagException(ErrorType::INVALID_ARGUMENT, message);
+            }
+        }
 
-        JsonType datacell_offsets = metadata->Get("datacell_offsets");
+        JsonType datacell_offsets = metadata->Get(DATACELL_OFFSETS);
         logger::debug("datacell_offsets: {}", datacell_offsets.dump());
-        JsonType datacell_sizes = metadata->Get("datacell_sizes");
+        JsonType datacell_sizes = metadata->Get(DATACELL_SIZES);
         logger::debug("datacell_sizes: {}", datacell_sizes.dump());
 
-        READ_DATACELL_WITH_NAME(reader, "bucket", this->bucket_);
-        READ_DATACELL_WITH_NAME(reader, "partition_strategy", this->partition_strategy_);
-        READ_DATACELL_WITH_NAME(reader, "label_table", this->label_table_);
+        READ_DATACELL_WITH_NAME(buffer_reader, "bucket", this->bucket_);
+        READ_DATACELL_WITH_NAME(buffer_reader, "partition_strategy", this->partition_strategy_);
+        READ_DATACELL_WITH_NAME(buffer_reader, "label_table", this->label_table_);
         if (use_reorder_) {
-            READ_DATACELL_WITH_NAME(reader, "reorder_codes", this->reorder_codes_);
+            READ_DATACELL_WITH_NAME(buffer_reader, "reorder_codes", this->reorder_codes_);
         }
         if (use_attribute_filter_) {
-            READ_DATACELL_WITH_NAME(reader, "attr_filter_index", this->attr_filter_index_);
+            READ_DATACELL_WITH_NAME(buffer_reader, "attr_filter_index", this->attr_filter_index_);
         }
     }
+    this->fill_location_map();
 
     // post serialize procedure
 }
@@ -545,6 +592,7 @@ IVF::create_search_param(const std::string& parameters, const FilterPtr& filter)
                                       bucket_->bucket_count_);
     param.factor = search_param.topk_factor;
     param.first_order_scan_ratio = search_param.first_order_scan_ratio;
+    param.parallel_search_thread_count = search_param.parallel_search_thread_count;
     return param;
 }
 
@@ -584,7 +632,6 @@ IVF::search(const DatasetPtr& query, const InnerSearchParam& param) const {
     auto candidate_buckets = partition_strategy_->ClassifyDatasForSearch(query_data, 1, param);
     auto computer = bucket_->FactoryComputer(query_data);
 
-    Vector<float> dist(allocator_);
     auto cur_heap_top = std::numeric_limits<float>::max();
     int64_t topk = param.topk;
     if constexpr (mode == RANGE_SEARCH) {
@@ -605,55 +652,89 @@ IVF::search(const DatasetPtr& query, const InnerSearchParam& param) const {
 
     auto search_result = DistanceHeap::MakeInstanceBySize<true, false>(this->allocator_, topk);
     const auto& ft = param.is_inner_id_allowed;
-    Vector<float> centroid(dim_, allocator_);
 
-    for (auto& bucket_id : candidate_buckets) {
-        if (bucket_id == -1) {
-            break;
-        }
-        auto bucket_size = bucket_->GetBucketSize(bucket_id);
-        const auto* ids = bucket_->GetInnerIds(bucket_id);
-        if (bucket_size > dist.size()) {
-            dist.resize(bucket_size);
-        }
-        auto ip_distance = 0.0F;
-        if (use_residual_) {
-            partition_strategy_->GetCentroid(bucket_id, centroid);
-            ip_distance = FP32ComputeIP(query_data, centroid.data(), dim_);
-            if (metric_ == MetricType::METRIC_TYPE_L2SQR) {
-                ip_distance *= 2;
-            }
-        }
+    auto bucket_count = candidate_buckets.size();
+    const auto search_thread_count = param.parallel_search_thread_count;
+    std::mutex heap_mutex;
 
-        bucket_->ScanBucketById(dist.data(), computer, bucket_id);
-        FilterPtr attr_ft = nullptr;
-        if (param.executor != nullptr) {
-            param.executor->Clear();
-            attr_ft = param.executor->RunWithBucket(bucket_id);
-        }
-        for (int j = 0; j < bucket_size; ++j) {
-            auto origin_id = ids[j] / buckets_per_data_;
-            if (attr_ft != nullptr and not attr_ft->CheckValid(j)) {
+    auto search_func = [&](int64_t thread_id) -> void {
+        std::unique_ptr<std::lock_guard<std::mutex>> lock_ptr = nullptr;
+        Vector<float> centroid(dim_, allocator_);
+        Vector<float> dist(allocator_);
+        for (uint64_t i = 0; i < bucket_count; ++i) {
+            if (i % search_thread_count != thread_id) {
                 continue;
             }
-            if (ft == nullptr or ft->CheckValid(origin_id)) {
-                dist[j] -= ip_distance;
-                if constexpr (mode == KNN_SEARCH) {
-                    if (search_result->Size() < topk or dist[j] < cur_heap_top) {
-                        search_result->Push(dist[j], ids[j]);
-                    }
-                } else if constexpr (mode == RANGE_SEARCH) {
-                    if (dist[j] <= param.radius + THRESHOLD_ERROR and dist[j] < cur_heap_top) {
-                        search_result->Push(dist[j], ids[j]);
-                    }
-                }
-                if (search_result->Size() > topk) {
-                    search_result->Pop();
-                }
-                if (not search_result->Empty() and search_result->Size() == topk) {
-                    cur_heap_top = search_result->Top().first;
+            auto bucket_id = candidate_buckets[i];
+            if (bucket_id == -1) {
+                break;
+            }
+            auto bucket_size = bucket_->GetBucketSize(bucket_id);
+            const auto* ids = bucket_->GetInnerIds(bucket_id);
+            if (bucket_size > dist.size()) {
+                dist.resize(bucket_size);
+            }
+            auto ip_distance = 0.0F;
+
+            if (use_residual_) {
+                partition_strategy_->GetCentroid(bucket_id, centroid);
+                ip_distance = FP32ComputeIP(query_data, centroid.data(), dim_);
+                if (metric_ == MetricType::METRIC_TYPE_L2SQR) {
+                    ip_distance *= 2;
                 }
             }
+
+            bucket_->ScanBucketById(dist.data(), computer, bucket_id);
+            Filter* attr_ft = nullptr;
+            if (param.executor != nullptr) {
+                param.executor->Clear();
+                attr_ft = param.executor->Run(bucket_id);
+            }
+            for (int j = 0; j < bucket_size; ++j) {
+                auto origin_id = ids[j] / buckets_per_data_;
+                if (attr_ft != nullptr and not attr_ft->CheckValid(j)) {
+                    continue;
+                }
+                if (ft == nullptr or ft->CheckValid(origin_id)) {
+                    dist[j] -= ip_distance;
+                    if (search_thread_count > 1) {
+                        lock_ptr = std::make_unique<std::lock_guard<std::mutex>>(heap_mutex);
+                    }
+                    if constexpr (mode == KNN_SEARCH) {
+                        if (search_result->Size() < topk or dist[j] < cur_heap_top) {
+                            search_result->Push(dist[j], ids[j]);
+                        }
+                    } else if constexpr (mode == RANGE_SEARCH) {
+                        if (dist[j] <= param.radius + THRESHOLD_ERROR and dist[j] < cur_heap_top) {
+                            search_result->Push(dist[j], ids[j]);
+                        }
+                    }
+                    if (search_result->Size() > topk) {
+                        search_result->Pop();
+                    }
+                    if (not search_result->Empty() and search_result->Size() == topk) {
+                        cur_heap_top = search_result->Top().first;
+                    }
+                    if (search_thread_count > 1) {
+                        lock_ptr.reset(nullptr);
+                    }
+                }
+            }
+        }
+    };
+    std::vector<std::future<void>> futures;
+    if (this->thread_pool_ != nullptr and search_thread_count > 1) {
+        for (int64_t thread_id = 0; thread_id < search_thread_count; ++thread_id) {
+            auto future = this->thread_pool_->GeneralEnqueue(search_func, thread_id);
+            futures.emplace_back(std::move(future));
+        }
+    } else {
+        search_func(0);
+    }
+
+    if (this->thread_pool_ != nullptr and search_thread_count > 1) {
+        for (auto& future : futures) {
+            future.get();
         }
     }
 
@@ -766,6 +847,7 @@ IVF::SearchWithRequest(const SearchRequest& request) const {
         auto& schema = this->attr_filter_index_->field_type_map_;
         auto expr = AstParse(request.attribute_filter_str_, &schema);
         auto executor = Executor::MakeInstance(this->allocator_, expr, this->attr_filter_index_);
+        executor->Init();
         param.executor = executor;
     }
     auto search_result = this->search<KNN_SEARCH>(query, param);
@@ -780,6 +862,23 @@ IVF::SearchWithRequest(const SearchRequest& request) const {
         search_result->Pop();
     }
     return std::move(dataset_results);
+}
+
+void
+IVF::fill_location_map() {
+    this->location_map_.resize(this->total_elements_ * buckets_per_data_);
+    auto bucket_count = this->bucket_->bucket_count_;
+    for (BucketIdType i = 0; i < bucket_count; ++i) {
+        auto* ids = this->bucket_->GetInnerIds(i);
+        auto bucket_size = this->bucket_->GetBucketSize(i);
+        for (uint64_t j = 0; j < bucket_size; ++j) {
+            if (ids[j] >= this->total_elements_ * buckets_per_data_) {
+                throw VsagException(ErrorType::INTERNAL_ERROR, "invalid inner_id");
+            }
+            this->location_map_[ids[j]] =
+                (static_cast<uint64_t>(i) << LOCATION_SPLIT_BIT) | static_cast<uint64_t>(j);
+        }
+    }
 }
 
 }  // namespace vsag

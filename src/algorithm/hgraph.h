@@ -65,6 +65,11 @@ public:
         return INDEX_TYPE_HGRAPH;
     }
 
+    IndexType
+    GetIndexType() override {
+        return IndexType::HGRAPH;
+    }
+
     void
     InitFeatures() override;
 
@@ -170,6 +175,12 @@ public:
 
     void
     Merge(const std::vector<MergeUnit>& merge_units) override;
+
+    void
+    SetImmutable() override;
+
+    void
+    SetIO(const std::shared_ptr<Reader> reader) override;
 
 private:
     const void*

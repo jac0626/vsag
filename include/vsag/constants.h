@@ -146,7 +146,6 @@ extern const char* const HGRAPH_INIT_CAPACITY;
 extern const char* const HGRAPH_GRAPH_TYPE;
 extern const char* const HGRAPH_GRAPH_STORAGE_TYPE;
 extern const char* const HGRAPH_BUILD_THREAD_COUNT;
-extern const char* const HGRAPH_IMMUTABLE;
 extern const char* const HGRAPH_PRECISE_QUANTIZATION_TYPE;
 extern const char* const HGRAPH_BASE_IO_TYPE;
 extern const char* const HGRAPH_BASE_PQ_DIM;
@@ -173,6 +172,7 @@ extern const char* const IVF_PRECISE_QUANTIZATION_TYPE;
 extern const char* const IVF_PRECISE_IO_TYPE;
 extern const char* const IVF_PRECISE_FILE_PATH;
 extern const char* const IVF_USE_ATTRIBUTE_FILTER;
+extern const char* const IVF_THREAD_COUNT;
 
 extern const char* const GNO_IMI_FIRST_ORDER_BUCKETS_COUNT;
 extern const char* const GNO_IMI_SECOND_ORDER_BUCKETS_COUNT;
