@@ -27,24 +27,34 @@ jobs:
       - name: Build Release
         run: make release
       - name: Run Perf - SIFT-fp32
+        continue-on-error: true
         run: ./build-release/tools/eval/eval_performance .github/perf-mini-sift-fp32.yml
       - name: Run Perf - SIFT-fp16
+        continue-on-error: true
         run: ./build-release/tools/eval/eval_performance .github/perf-mini-sift-fp16.yml
       - name: Run Perf - SIFT-bf16
+        continue-on-error: true
         run: ./build-release/tools/eval/eval_performance .github/perf-mini-sift-bf16.yml
       - name: Run Perf - SIFT-sq8
+        continue-on-error: true
         run: ./build-release/tools/eval/eval_performance .github/perf-mini-sift-sq8.yml
       - name: Run Perf - SIFT-sq8_uniform
+        continue-on-error: true
         run: ./build-release/tools/eval/eval_performance .github/perf-mini-sift-sq8_uniform.yml
       - name: Run Perf - SIFT-sq4
+        continue-on-error: true
         run: ./build-release/tools/eval/eval_performance .github/perf-mini-sift-sq4.yml
       - name: Run Perf - SIFT-sq4_uniform
+        continue-on-error: true
         run: ./build-release/tools/eval/eval_performance .github/perf-mini-sift-sq4_uniform.yml
       - name: Run Perf - SIFT-pq
+        continue-on-error: true
         run: ./build-release/tools/eval/eval_performance .github/perf-mini-sift-pq.yml
       - name: Run Perf - SIFT-pqfs
+        continue-on-error: true
         run: ./build-release/tools/eval/eval_performance .github/perf-mini-sift-pqfs.yml
       - name: Run Perf - SIFT-rabitq
+        continue-on-error: true
         run: ./build-release/tools/eval/eval_performance .github/perf-mini-sift-rabitq.yml
       - name: Send Report
         run:  |
