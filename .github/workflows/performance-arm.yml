@@ -16,6 +16,8 @@ jobs:
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y build-essential
       
+      - name: Download Datasets
+        run: bash ./scripts/download_annbench_datasets.sh
       - name: Install dependencies
         run:  sudo bash ./scripts/deps/install_deps_ubuntu.sh
 
