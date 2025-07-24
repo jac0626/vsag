@@ -21,7 +21,7 @@ jobs:
         run:  sudo bash ./scripts/deps/install_deps_ubuntu.sh
 
       - name: Build test executables
-        run: cmake -B build -S . -DDISABLE_SVE_FORCE=ON -DDISABLE_SVE_FORCE=ON -DENABLE_TOOLS=ON -DCMAKE_BUILD_TYPE=Release &&cmake --build build -j6
+        run: cmake -B build -S . -DDISABLE_NEON_FORCE=ON -DDISABLE_SVE_FORCE=ON -DENABLE_TOOLS=ON -DCMAKE_BUILD_TYPE=Release &&cmake --build build -j6
 
       - name: Run Perf - SIFT-fp32
         run: ./build/tools/eval/eval_performance .github/perf-mini-sift-fp32.yml
