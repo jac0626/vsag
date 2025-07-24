@@ -95,6 +95,56 @@ try_compile(RUNTIME_NEON_SUPPORTED
     OUTPUT_VARIABLE COMPILE_OUTPUT
     )
 
+file(WRITE ${CMAKE_BINARY_DIR}/instructions_test_sve.cpp
+    "#include <arm_sve.h>\n"
+    "int main() {\n"
+    "    svbool_t pg = svptrue_b32();\n"
+    "    svfloat32_t a = svdup_f32(1.0f);\n"
+    "    svfloat32_t b = svdup_f32(2.0f);\n"
+    "    a = svadd_f32_x(pg, a, b);\n"
+    "    return 0;\n"
+    "}"
+)
+try_compile(COMPILER_SVE_SUPPORTED
+    ${CMAKE_BINARY_DIR}/instructions_test_sve
+    ${CMAKE_BINARY_DIR}/instructions_test_sve.cpp
+    COMPILE_DEFINITIONS "-march=armv8-a+sve" 
+    OUTPUT_VARIABLE COMPILE_OUTPUT
+)
+
+
+try_compile(RUNTIME_SVE_SUPPORTED
+    ${CMAKE_BINARY_DIR}/instructions_test_sve
+    ${CMAKE_BINARY_DIR}/instructions_test_sve.cpp
+    COMPILE_DEFINITIONS "-march=native" 
+    OUTPUT_VARIABLE COMPILE_OUTPUT
+)
+
+
+file(WRITE ${CMAKE_BINARY_DIR}/instructions_test_sve2.cpp
+    "#include <arm_sve.h>\n"
+    "int main() {\n"
+    "    svbool_t pg = svptrue_b16();\n"
+    "    svuint16_t u16_a, u16_b;\n"
+    "    svuint32_t u32_c = svdup_u32(0);\n"
+    "    u32_c = svmlalt_u32(u32_c, u16_a, u16_b);\n"
+    "    return 0;\n"
+    "}"
+)
+try_compile(COMPILER_SVE2_SUPPORTED
+    ${CMAKE_BINARY_DIR}/instructions_test_sve2
+    ${CMAKE_BINARY_DIR}/instructions_test_sve2.cpp
+    COMPILE_DEFINITIONS "-march=armv8-a+sve2" 
+    OUTPUT_VARIABLE COMPILE_OUTPUT
+)
+try_compile(RUNTIME_SVE2_SUPPORTED
+    ${CMAKE_BINARY_DIR}/instructions_test_sve2
+    ${CMAKE_BINARY_DIR}/instructions_test_sve2.cpp
+    COMPILE_DEFINITIONS "-march=native" 
+    OUTPUT_VARIABLE COMPILE_OUTPUT
+)
+
+
 # determine which instructions can be package into distribution
 set (COMPILER_SUPPORTED "compiler support instructions: ")
 if (COMPILER_SSE_SUPPORTED)
@@ -114,6 +164,12 @@ if (COMPILER_AVX512VPOPCNTDQ_SUPPORTED)
 endif ()
 if (COMPILER_NEON_SUPPORTED)
   set (COMPILER_SUPPORTED "${COMPILER_SUPPORTED} NEON")
+endif ()
+if (COMPILER_SVE_SUPPORTED)
+  set (COMPILER_SUPPORTED "${COMPILER_SUPPORTED} SVE")
+endif ()
+if (COMPILER_SVE2_SUPPORTED)
+  set (COMPILER_SUPPORTED "${COMPILER_SUPPORTED} SVE2")
 endif ()
 message (${COMPILER_SUPPORTED})
 
@@ -136,6 +192,12 @@ if (RUNTIME_AVX512VPOPCNTDQ_SUPPORTED)
 endif ()
 if (RUNTIME_NEON_SUPPORTED)
   set (RUNTIME_SUPPORTED "${RUNTIME_SUPPORTED} NEON")
+endif ()
+if (RUNTIME_SVE_SUPPORTED)
+  set (RUNTIME_SUPPORTED "${RUNTIME_SUPPORTED} SVE")
+endif ()
+if (RUNTIME_SVE2_SUPPORTED)
+  set (RUNTIME_SUPPORTED "${RUNTIME_SUPPORTED} SVE2")
 endif ()
 message (${RUNTIME_SUPPORTED})
 
@@ -165,5 +227,13 @@ endif ()
 if (NOT DISABLE_NEON_FORCE AND COMPILER_NEON_SUPPORTED)
   set (DIST_CONTAINS_NEON ON)
   set (DIST_CONTAINS_INSTRUCTIONS "${DIST_CONTAINS_INSTRUCTIONS} NEON")
+endif ()
+if (NOT DISABLE_SVE_FORCE AND COMPILER_SVE_SUPPORTED)
+  set (DIST_CONTAINS_SVE ON)
+  set (DIST_CONTAINS_INSTRUCTIONS "${DIST_CONTAINS_INSTRUCTIONS} SVE")
+endif ()
+if (NOT DISABLE_SVE_FORCE2 AND COMPILER_SVE2_SUPPORTED)
+  set (DIST_CONTAINS_SVE2 ON)
+  set (DIST_CONTAINS_INSTRUCTIONS "${DIST_CONTAINS_INSTRUCTIONS} SVE2")
 endif ()
 message (${DIST_CONTAINS_INSTRUCTIONS})
