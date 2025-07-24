@@ -24,9 +24,26 @@ jobs:
       - name: Build test executables
         run: cmake -B build -S .  -DENABLE_TOOLS=ON -DDISABLE_NEON_FORCE=ON -DCMAKE_BUILD_TYPE=Release &&cmake --build build -j6
 
-      - name: Run Perf - Recall 90%, 95%, 99%
-        run:  |
-          ./build/tools/eval/eval_performance .github/perf-mini.yml
+      - name: Run Perf - SIFT-fp32
+        run: ./build/tools/eval/eval_performance .github/perf-mini-sift-fp32.yml
+      - name: Run Perf - SIFT-fp16
+        run: ./build/tools/eval/eval_performance .github/perf-mini-sift-fp16.yml
+      - name: Run Perf - SIFT-bf16
+        run: ./build/tools/eval/eval_performance .github/perf-mini-sift-bf16.yml
+      - name: Run Perf - SIFT-sq8
+        run: ./build/tools/eval/eval_performance .github/perf-mini-sift-sq8.yml
+      - name: Run Perf - SIFT-sq8_uniform
+        run: ./build/tools/eval/eval_performance .github/perf-mini-sift-sq8_uniform.yml
+      - name: Run Perf - SIFT-sq4
+        run: ./build/tools/eval/eval_performance .github/perf-mini-sift-sq4.yml
+      - name: Run Perf - SIFT-sq4_uniform
+        run: ./build/tools/eval/eval_performance .github/perf-mini-sift-sq4_uniform.yml
+      - name: Run Perf - SIFT-pq
+        run: ./build/tools/eval/eval_performance .github/perf-mini-sift-pq.yml
+      - name: Run Perf - SIFT-pqfs
+        run: ./build/tools/eval/eval_performance .github/perf-mini-sift-pqfs.yml
+      - name: Run Perf - SIFT-rabitq
+        run: ./build/tools/eval/eval_performance .github/perf-mini-sift-rabitq.yml
       - name: Send Report
         run:  |
           python3 scripts/perf_reports/dingding.py /tmp/github-perf.json || echo "send report to dingding failed"
