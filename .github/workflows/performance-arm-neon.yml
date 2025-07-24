@@ -1,4 +1,4 @@
-name: Performance-arm-sve 
+name: Performance-arm-neon
 
 on:
   schedule:
@@ -15,14 +15,13 @@ jobs:
         uses: actions/checkout@v4
       - name: Install build dependencies
         run: sudo apt-get update && sudo apt-get install -y build-essential
-      
       - name: Download Datasets
         run: bash ./scripts/download_annbench_datasets.sh
       - name: Install dependencies
         run:  sudo bash ./scripts/deps/install_deps_ubuntu.sh
 
       - name: Build test executables
-        run: cmake -B build -S .  -DENABLE_TOOLS=ON -DDISABLE_NEON_FORCE=ON -DCMAKE_BUILD_TYPE=Release &&cmake --build build -j6
+        run: cmake -B build -S . -DDISABLE_SVE_FORCE=ON  -DENABLE_TOOLS=ON -DCMAKE_BUILD_TYPE=Release &&cmake --build build -j6
 
       - name: Run Perf - Recall 90%, 95%, 99%
         run:  |

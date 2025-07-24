@@ -1,4 +1,4 @@
-name: Performance
+name: Performance-x86-sse
 
 on:
   schedule:
