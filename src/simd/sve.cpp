@@ -712,7 +712,6 @@ SQ4ComputeIP(const float* RESTRICT query,
 
         z_result_vec = svmla_f32_x(pg, z_result_vec, z_query_even, z_y_even);
         z_result_vec = svmla_f32_x(pg, z_result_vec, z_query_odd, z_y_odd);
-        i += 2 * step
     }
 
     if (i < dim) {
