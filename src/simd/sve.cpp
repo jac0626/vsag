@@ -1349,7 +1349,7 @@ FlipSign(const uint8_t* flip, float* data, size_t dim) {
     uint64_t d = 0;
     const uint64_t step = svcntw();
     svbool_t pg = svwhilelt_b32(d, dim);
-    do{
+    do {
         const svbool_t pg = svwhilelt_b32(d, dim);
         const svuint32_t v_preds_extended = svld1ub_u32(pg, &predicate_array[d]);
         const svbool_t bit_mask = svcmpne_n_u32(pg, v_preds_extended, 0);
@@ -1360,7 +1360,7 @@ FlipSign(const uint8_t* flip, float* data, size_t dim) {
 
         d += step;
         pg = svwhilelt_b32(d, dim);
-    }while(svptest_first(svptrue_b32(), pg));
+    } while (svptest_first(svptrue_b32(), pg));
 #else
     neon::FlipSign(flip, data, dim);
 #endif
