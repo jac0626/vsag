@@ -959,13 +959,13 @@ SQ4UniformComputeCodesIP(const uint8_t* RESTRICT codes1,
     const uint64_t step = svcntb() * 2;
     svbool_t pg = svwhilelt_b8(d / 2, (dim + 1) / 2);
     do {
-        svuint8_t packed_codes1 = svld1_u8(pg_bytes, codes1 + d / 2);
-        svuint8_t packed_codes2 = svld1_u8(pg_bytes, codes2 + d / 2);
+        svuint8_t packed_codes1 = svld1_u8(pg, codes1 + d / 2);
+        svuint8_t packed_codes2 = svld1_u8(pg, codes2 + d / 2);
 
-        svuint8_t c1_low_u8 = svand_u8_z(pg_bytes, packed_codes1, svdup_u8(0x0F));
-        svuint8_t c1_high_u8 = svlsr_n_u8_z(pg_bytes, packed_codes1, 4);
-        svuint8_t c2_low_u8 = svand_u8_z(pg_bytes, packed_codes2, svdup_u8(0x0F));
-        svuint8_t c2_high_u8 = svlsr_n_u8_z(pg_bytes, packed_codes2, 4);
+        svuint8_t c1_low_u8 = svand_u8_z(pg, packed_codes1, svdup_u8(0x0F));
+        svuint8_t c1_high_u8 = svlsr_n_u8_z(pg, packed_codes1, 4);
+        svuint8_t c2_low_u8 = svand_u8_z(pg, packed_codes2, svdup_u8(0x0F));
+        svuint8_t c2_high_u8 = svlsr_n_u8_z(pg, packed_codes2, 4);
 
         sum_vec = svdot_u32(sum_vec, c1_low_u8, c2_low_u8);
         sum_vec = svdot_u32(sum_vec, c1_high_u8, c2_high_u8);
@@ -1249,14 +1249,14 @@ PQFastScanLookUp32(const uint8_t* RESTRICT lookup_table,
 
     svbool_t pg = svwhilelt_b8(i, total_bytes);
     do {
-        svuint8_t super_table = svld1_u8(pg_bytes, lookup_table + i);
-        svuint8_t super_codes = svld1_u8(pg_bytes, codes + i);
+        svuint8_t super_table = svld1_u8(pg, lookup_table + i);
+        svuint8_t super_codes = svld1_u8(pg, codes + i);
 
-        svuint8_t low_nibbles = svand_u8_z(pg_bytes, super_codes, mask4);
-        svuint8_t high_nibbles = svlsr_n_u8_z(pg_bytes, super_codes, 4);
+        svuint8_t low_nibbles = svand_u8_z(pg, super_codes, mask4);
+        svuint8_t high_nibbles = svlsr_n_u8_z(pg, super_codes, 4);
 
-        svuint8_t adjusted_low_indices = svadd_u8_z(pg_bytes, low_nibbles, index_offsets);
-        svuint8_t adjusted_high_indices = svadd_u8_z(pg_bytes, high_nibbles, index_offsets);
+        svuint8_t adjusted_low_indices = svadd_u8_z(pg, low_nibbles, index_offsets);
+        svuint8_t adjusted_high_indices = svadd_u8_z(pg, high_nibbles, index_offsets);
 
         svuint8_t low_vals = svtbl_u8(super_table, adjusted_low_indices);
         svuint8_t high_vals = svtbl_u8(super_table, adjusted_high_indices);
