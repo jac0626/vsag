@@ -957,8 +957,8 @@ SQ4UniformComputeCodesIP(const uint8_t* RESTRICT codes1,
     svuint32_t sum_vec = svdup_u32(0);
     uint64_t i = 0;
     const uint64_t step = svcntb() * 2;
+    svbool_t pg = svwhilelt_b8(i / 2, (dim + 1) / 2);
     do {
-        svbool_t pg = svwhilelt_b8(i / 2, (dim + 1) / 2);
         svuint8_t packed_codes1 = svld1_u8(pg, codes1 + i / 2);
         svuint8_t packed_codes2 = svld1_u8(pg, codes2 + i / 2);
 
@@ -972,7 +972,7 @@ SQ4UniformComputeCodesIP(const uint8_t* RESTRICT codes1,
 
         i += step;
         pg = svwhilelt_b8(i / 2, (dim + 1) / 2);
-    } while (i < dim);
+    } while (svptest_first(svptrue_b8(), pg));
 
     return static_cast<float>(svaddv_u32(svptrue_b32(), sum_vec));
 #else
@@ -1271,6 +1271,7 @@ PQFastScanLookUp32(const uint8_t* RESTRICT lookup_table,
         acc3 = svadd_u16_m(pg_u16, acc3, svlsr_n_u16_z(pg_u16, svreinterpret_u16_u8(high_vals), 8));
 
         i += step;
+        pg = svwhilelt_b8(i, total_bytes);
     } while (svptest_first(svptrue_b8(), pg));
 
     uint16_t temp[svcntb() / 2];
