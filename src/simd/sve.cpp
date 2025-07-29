@@ -955,12 +955,12 @@ SQ4UniformComputeCodesIP(const uint8_t* RESTRICT codes1,
                          uint64_t dim) {
 #if defined(ENABLE_SVE)
     svuint32_t sum_vec = svdup_u32(0);
-    uint64_t d = 0;
+    uint64_t i = 0;
     const uint64_t step = svcntb() * 2;
-    svbool_t pg = svwhilelt_b8(d / 2, (dim + 1) / 2);
     do {
-        svuint8_t packed_codes1 = svld1_u8(pg, codes1 + d / 2);
-        svuint8_t packed_codes2 = svld1_u8(pg, codes2 + d / 2);
+        svbool_t pg = svwhilelt_b8(i / 2, (dim + 1) / 2);
+        svuint8_t packed_codes1 = svld1_u8(pg, codes1 + i / 2);
+        svuint8_t packed_codes2 = svld1_u8(pg, codes2 + i / 2);
 
         svuint8_t c1_low_u8 = svand_u8_z(pg, packed_codes1, svdup_u8(0x0F));
         svuint8_t c1_high_u8 = svlsr_n_u8_z(pg, packed_codes1, 4);
@@ -970,9 +970,9 @@ SQ4UniformComputeCodesIP(const uint8_t* RESTRICT codes1,
         sum_vec = svdot_u32(sum_vec, c1_low_u8, c2_low_u8);
         sum_vec = svdot_u32(sum_vec, c1_high_u8, c2_high_u8);
 
-        d += step;
-        pg = svwhilelt_b8(d / 2, (dim + 1) / 2);
-    } while (svptest_first(svptrue_b8(), pg));
+        i += step;
+        pg = svwhilelt_b8(i / 2, (dim + 1) / 2);
+    } while (i < dim);
 
     return static_cast<float>(svaddv_u32(svptrue_b32(), sum_vec));
 #else
@@ -1027,24 +1027,24 @@ RaBitQFloatBinaryIP(const float* vector, const uint8_t* bits, uint64_t dim, floa
                remaining_bits);
     }
 
-    uint64_t d = 0;
-    const uint64_t vl = svcntw();
+    uint64_t i = 0;
+    const uint64_t step = svcntw();
     svfloat32_t vec_sum = svdup_f32(0.0f);
 
     const svfloat32_t v_inv = svdup_f32(inv_sqrt_d);
     const svfloat32_t v_neg_inv = svdup_f32(-inv_sqrt_d);
-    svbool_t pg = svwhilelt_b32(d, dim);
+    svbool_t pg = svwhilelt_b32(i, dim);
     do {
-        svuint32_t v_preds_extended = svld1ub_u32(pg, &predicate_array[d]);
+        svuint32_t v_preds_extended = svld1ub_u32(pg, &predicate_array[i]);
 
         svbool_t bit_mask = svcmpne_n_u32(pg, v_preds_extended, 0);
 
         svfloat32_t vec_b = svsel_f32(bit_mask, v_inv, v_neg_inv);
-        svfloat32_t vec_v = svld1_f32(pg, &vector[d]);
+        svfloat32_t vec_v = svld1_f32(pg, &vector[i]);
         vec_sum = svmla_f32_m(pg, vec_sum, vec_v, vec_b);
 
-        d += vl;
-        pg = svwhilelt_b32(d, dim);
+        i += step;
+        pg = svwhilelt_b32(i, dim);
     } while (svptest_first(svptrue_b32(), pg));
 
     return svaddv_f32(svptrue_b32(), vec_sum);
@@ -1346,19 +1346,19 @@ FlipSign(const uint8_t* flip, float* data, size_t dim) {
                remaining_bits);
     }
 
-    uint64_t d = 0;
+    uint64_t i = 0;
     const uint64_t step = svcntw();
-    svbool_t pg = svwhilelt_b32(d, dim);
+    svbool_t pg = svwhilelt_b32(i, dim);
     do {
-        svuint32_t v_preds_extended = svld1ub_u32(pg, &predicate_array[d]);
+        svuint32_t v_preds_extended = svld1ub_u32(pg, &predicate_array[i]);
         svbool_t bit_mask = svcmpne_n_u32(pg, v_preds_extended, 0);
 
-        svfloat32_t data_vec = svld1_f32(pg, data + d);
+        svfloat32_t data_vec = svld1_f32(pg, data + i);
         svfloat32_t result_vec = svneg_f32_m(data_vec, bit_mask, data_vec);
-        svst1_f32(pg, data + d, result_vec);
+        svst1_f32(pg, data + i, result_vec);
 
-        d += step;
-        pg = svwhilelt_b32(d, dim);
+        i += step;
+        pg = svwhilelt_b32(i, dim);
     } while (svptest_first(svptrue_b32(), pg));
 #else
     neon::FlipSign(flip, data, dim);
