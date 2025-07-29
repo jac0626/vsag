@@ -56,9 +56,6 @@ endif ()
 if (DIST_CONTAINS_SVE)
     set_source_files_properties (sve.cpp PROPERTIES COMPILE_FLAGS "-march=armv8-a+sve")
 endif ()
-if (DIST_CONTAINS_SVE2)
-    set_source_files_properties (sve.cpp PROPERTIES COMPILE_FLAGS "-march=armv8-a+sve2")
-endif ()
 
 set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3")
 set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -ftree-vectorize")
@@ -84,7 +81,7 @@ simd_add_definitions (DIST_CONTAINS_AVX512 -DENABLE_AVX512=1)
 simd_add_definitions (DIST_CONTAINS_AVX512VPOPCNTDQ -DENABLE_AVX512VPOPCNTDQ=1)
 simd_add_definitions (DIST_CONTAINS_NEON -DENABLE_NEON=1)
 simd_add_definitions (DIST_CONTAINS_SVE -DENABLE_SVE=1)
-simd_add_definitions (DIST_CONTAINS_SVE2 -DENABLE_SVE2=1)
+
 
 target_link_libraries (simd INTERFACE cpuinfo )
 install (TARGETS simd ARCHIVE DESTINATION lib)
