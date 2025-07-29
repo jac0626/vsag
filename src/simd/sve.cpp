@@ -726,7 +726,7 @@ SQ4ComputeIP(const float* RESTRICT query,
         i += 2 * step;
         pg_ld2=svwhilelt_b8(i, dim*2);
         pg=svwhilelt_b32(i, dim);
-    }(svptest_first(svptrue_b32(), pg));
+    }while(svptest_first(svptrue_b32(), pg));
 
     
     return svaddv_f32(pg, z_result_vec);
