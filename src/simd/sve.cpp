@@ -33,14 +33,14 @@ generate_bit_lookup_table() {
     return table;
 }
 
-// 在编译时生成并初始化全局查找表，无任何运行时开销
+
 static constexpr auto g_bit_lookup_table = generate_bit_lookup_table();
 #include "simd.h"
 
-#if defined(__ARM_FEATURE_SVE_BF16)
+#if defined(ENABLE_SVE)
 #include <arm_bf16.h>
 #endif
-#if defined(__ARM_FEATURE_SVE_FP16)
+#if defined(ENABLE_SVE)
 #include <arm_fp16.h>
 #endif
 
@@ -401,7 +401,7 @@ FP32ReduceAdd(const float* x, uint64_t dim) {
 
 float
 BF16ComputeIP(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, uint64_t dim) {
-#if defined(__ARM_FEATURE_SVE_BF16)
+#if defined(ENABLE_SVE)
     const bfloat16_t* query_bf16 = (const bfloat16_t*)query;
     const bfloat16_t* codes_bf16 = (const bfloat16_t*)codes;
 
@@ -433,7 +433,7 @@ BF16ComputeIP(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, uint
 
 float
 BF16ComputeL2Sqr(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, uint64_t dim) {
-#if defined(__ARM_FEATURE_SVE_BF16)
+#if defined(ENABLE_SVE)
     const bfloat16_t* query_bf16 = (const bfloat16_t*)query;
     const bfloat16_t* codes_bf16 = (const bfloat16_t*)codes;
     svfloat32_t sum_vec = svdup_f32(0.0f);
@@ -465,7 +465,7 @@ BF16ComputeL2Sqr(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, u
 
 float
 FP16ComputeIP(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, uint64_t dim) {
-#if defined(__ARM_FEATURE_SVE_FP16)
+#if defined(ENABLE_SVE)
     const _Float16* query_f16 = (const _Float16*)query;
     const _Float16* codes_f16 = (const _Float16*)codes;
 
@@ -496,7 +496,7 @@ FP16ComputeIP(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, uint
 
 float
 FP16ComputeL2Sqr(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, uint64_t dim) {
-#if defined(__ARM_FEATURE_SVE_FP16)
+#if defined(ENABLE_SVE)
     const _Float16* query_f16 = (const _Float16*)query;
     const _Float16* codes_f16 = (const _Float16*)codes;
     svfloat32_t sum_vec = svdup_f32(0.0f);
