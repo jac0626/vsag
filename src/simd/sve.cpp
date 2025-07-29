@@ -723,7 +723,7 @@ SQ4ComputeIP(const float* RESTRICT query,
 
         z_result_vec = svmla_f32_x(pg, z_result_vec, z_query_even, z_y_even);
         z_result_vec = svmla_f32_x(pg, z_result_vec, z_query_odd, z_y_odd);
-        i += 2 * step
+        i += 2 * step;
         pg_ld2=svwhilelt_b(i, dim*2);
         pg=svwhilelt_b32(i, dim);
     }(svptest_first(svptrue_b32(), pg));
