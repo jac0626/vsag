@@ -132,9 +132,6 @@ FP32ComputeIP(const float* RESTRICT query, const float* RESTRICT codes, uint64_t
 
     svbool_t pg = svwhilelt_b32(i, dim);
     do {
-        svprfw(svptrue_b32(), query + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b32(), codes + i + step, SV_PLDL1KEEP);
-
         svfloat32_t q_vec = svld1_f32(pg, query + i);
         svfloat32_t c_vec = svld1_f32(pg, codes + i);
 
@@ -159,9 +156,6 @@ FP32ComputeL2Sqr(const float* RESTRICT query, const float* RESTRICT codes, uint6
 
     svbool_t pg = svwhilelt_b32(i, dim);
     do {
-        svprfw(svptrue_b32(), query + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b32(), codes + i + step, SV_PLDL1KEEP);
-
         svfloat32_t q_vec = svld1_f32(pg, query + i);
         svfloat32_t c_vec = svld1_f32(pg, codes + i);
 
@@ -202,12 +196,6 @@ FP32ComputeIPBatch4(const float* RESTRICT query,
 
     svbool_t pg = svwhilelt_b32(i, dim);
     do {
-        svprfw(svptrue_b32(), query + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b32(), codes1 + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b32(), codes2 + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b32(), codes3 + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b32(), codes4 + i + step, SV_PLDL1KEEP);
-
         svfloat32_t q_vec = svld1_f32(pg, query + i);
 
         svfloat32_t c1_vec = svld1_f32(pg, codes1 + i);
@@ -258,12 +246,6 @@ FP32ComputeL2SqrBatch4(const float* RESTRICT query,
 
     svbool_t pg = svwhilelt_b32(i, dim);
     do {
-        svprfw(svptrue_b32(), query + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b32(), codes1 + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b32(), codes2 + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b32(), codes3 + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b32(), codes4 + i + step, SV_PLDL1KEEP);
-
         svfloat32_t q_vec = svld1_f32(pg, query + i);
 
         svfloat32_t c1_vec = svld1_f32(pg, codes1 + i);
@@ -406,7 +388,7 @@ BF16ComputeIP(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, uint
 
     svfloat32_t sum_vec = svdup_n_f32(0.0f);
     uint64_t i = 0;
-    uint64_t vl_f32 = svcntw();
+    uint64_t step = svcntw();
     svbool_t pg = svwhilelt_b32(i, dim);
     do {
         svuint32_t query_u32 = svld1uh_u32(pg, &query_bf16[i]);
@@ -419,7 +401,7 @@ BF16ComputeIP(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, uint
         svfloat32_t codes_f32 = svreinterpret_f32_u32(codes_u32);
 
         sum_vec = svmla_f32_x(pg, sum_vec, query_f32, codes_f32);
-        i += vl_f32;
+        i += step;
         pg = svwhilelt_b32(i, dim);
     } while (svptest_first(svptrue_b32(), pg));
 
@@ -437,7 +419,7 @@ BF16ComputeL2Sqr(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, u
 
     svfloat32_t sum_vec = svdup_n_f32(0.0f);
     uint64_t i = 0;
-    uint64_t vl_f32 = svcntw();
+    uint64_t step = svcntw();
     svbool_t pg = svwhilelt_b32(i, dim);
     do {
         svuint32_t query_u32 = svld1uh_u32(pg, &query_bf16[i]);
@@ -451,7 +433,7 @@ BF16ComputeL2Sqr(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, u
 
         svfloat32_t diff = svsub_f32_x(pg, query_f32, codes_f32);
         sum_vec = svmla_f32_x(pg, sum_vec, diff, diff);
-        i += vl_f32;
+        i += step;
         pg = svwhilelt_b32(i, dim);
     } while (svptest_first(svptrue_b32(), pg));
 
@@ -469,7 +451,7 @@ FP16ComputeIP(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, uint
 
     svfloat32_t sum_vec = svdup_n_f32(0.0f);
     uint64_t i = 0;
-    uint64_t vl_f16 = svcnth();
+    uint64_t step = svcnth();
     svbool_t pg = svwhilelt_b16(i, dim);
     do {
         // Load FP16 values directly
@@ -492,7 +474,7 @@ FP16ComputeIP(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, uint
         // Accumulate
         sum_vec = svmla_f32_x(svptrue_b32(), sum_vec, query_f32_lo, codes_f32_lo);
         sum_vec = svmla_f32_x(svptrue_b32(), sum_vec, query_f32_hi, codes_f32_hi);
-        i += vl_f16;
+        i += step;
         pg = svwhilelt_b16(i, dim);
     } while (svptest_first(svptrue_b32(), pg));
 
@@ -505,13 +487,13 @@ FP16ComputeIP(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, uint
 float
 FP16ComputeL2Sqr(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, uint64_t dim) {
 #if defined(ENABLE_SVE)
-    
+
     auto* query_fp16 = reinterpret_cast<const __fp16*>(query);
     auto* codes_fp16 = reinterpret_cast<const __fp16*>(codes);
 
     svfloat32_t sum_vec = svdup_n_f32(0.0f);
     uint64_t i = 0;
-    uint64_t vl_f16 = svcnth();
+    uint64_t step = svcnth();
     svbool_t pg = svwhilelt_b16(i, dim);
     do {
         // Load FP16 values directly
@@ -537,7 +519,7 @@ FP16ComputeL2Sqr(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, u
 
         sum_vec = svmla_f32_x(svptrue_b32(), sum_vec, diff_lo, diff_lo);
         sum_vec = svmla_f32_x(svptrue_b32(), sum_vec, diff_hi, diff_hi);
-        i += vl_f16;
+        i += step;
         pg = svwhilelt_b16(i, dim);
     } while (svptest_first(svptrue_b32(), pg));
 
@@ -561,11 +543,6 @@ SQ8ComputeIP(const float* RESTRICT query,
 
     svbool_t pg = svwhilelt_b32(i, dim);
     do {
-        svprfw(svptrue_b32(), query + i + step, SV_PLDL1KEEP);
-        svprfb(svptrue_b8(), codes + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b32(), lower_bound + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b32(), diff + i + step, SV_PLDL1KEEP);
-
         svuint32_t c_u32_vec = svld1ub_u32(pg, codes + i);
         svfloat32_t c_f32_vec = svcvt_f32_u32_z(pg, c_u32_vec);
 
@@ -602,11 +579,6 @@ SQ8ComputeL2Sqr(const float* RESTRICT query,
 
     svbool_t pg = svwhilelt_b32(i, dim);
     do {
-        svprfw(svptrue_b32(), query + i + step, SV_PLDL1KEEP);
-        svprfb(svptrue_b8(), codes + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b32(), lower_bound + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b32(), diff + i + step, SV_PLDL1KEEP);
-
         svuint32_t c_u32_vec = svld1ub_u32(pg, codes + i);
         svfloat32_t c_f32_vec = svcvt_f32_u32_z(pg, c_u32_vec);
 
@@ -643,11 +615,6 @@ SQ8ComputeCodesIP(const uint8_t* RESTRICT codes1,
 
     svbool_t pg = svwhilelt_b32(i, dim);
     do {
-        svprfb(svptrue_b8(), codes1 + i + step, SV_PLDL1KEEP);
-        svprfb(svptrue_b8(), codes2 + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b32(), lower_bound + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b32(), diff + i + step, SV_PLDL1KEEP);
-
         svuint32_t c1_u32_vec = svld1ub_u32(pg, codes1 + i);
         svfloat32_t c1_f32_vec = svcvt_f32_u32_z(pg, c1_u32_vec);
         svuint32_t c2_u32_vec = svld1ub_u32(pg, codes2 + i);
@@ -687,11 +654,6 @@ SQ8ComputeCodesL2Sqr(const uint8_t* RESTRICT codes1,
 
     svbool_t pg = svwhilelt_b32(i, dim);
     do {
-        svprfb(svptrue_b8(), codes1 + i + step, SV_PLDL1KEEP);
-        svprfb(svptrue_b8(), codes2 + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b32(), lower_bound + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b32(), diff + i + step, SV_PLDL1KEEP);
-
         svuint32_t c1_u32_vec = svld1ub_u32(pg, codes1 + i);
         svfloat32_t c1_f32_vec = svcvt_f32_u32_z(pg, c1_u32_vec);
         svuint32_t c2_u32_vec = svld1ub_u32(pg, codes2 + i);
@@ -994,11 +956,9 @@ SQ4UniformComputeCodesIP(const uint8_t* RESTRICT codes1,
 #if defined(ENABLE_SVE)
     svuint32_t sum_vec = svdup_u32(0);
     uint64_t d = 0;
-    const uint64_t step = svcntb() * 2;  // 修正：每次处理的字节数
-
-    while (d < dim) {
-        svbool_t pg_bytes = svwhilelt_b8(d / 2, (dim + 1) / 2);
-
+    const uint64_t step = svcntb() * 2;
+    svbool_t pg = svwhilelt_b8(d / 2, (dim + 1) / 2);
+    do {
         svuint8_t packed_codes1 = svld1_u8(pg_bytes, codes1 + d / 2);
         svuint8_t packed_codes2 = svld1_u8(pg_bytes, codes2 + d / 2);
 
@@ -1011,7 +971,8 @@ SQ4UniformComputeCodesIP(const uint8_t* RESTRICT codes1,
         sum_vec = svdot_u32(sum_vec, c1_high_u8, c2_high_u8);
 
         d += step;
-    }
+        pg = svwhilelt_b8(d / 2, (dim + 1) / 2);
+    } while (svptest_first(svptrue_b8(), pg));
 
     return static_cast<float>(svaddv_u32(svptrue_b32(), sum_vec));
 #else
@@ -1072,20 +1033,19 @@ RaBitQFloatBinaryIP(const float* vector, const uint8_t* bits, uint64_t dim, floa
 
     const svfloat32_t v_inv = svdup_f32(inv_sqrt_d);
     const svfloat32_t v_neg_inv = svdup_f32(-inv_sqrt_d);
+    svbool_t pg = svwhilelt_b32(d, dim);
+    do {
+        svuint32_t v_preds_extended = svld1ub_u32(pg, &predicate_array[d]);
 
-    while (d < dim) {
-        const svbool_t pg = svwhilelt_b32(d, dim);
+        svbool_t bit_mask = svcmpne_n_u32(pg, v_preds_extended, 0);
 
-        const svuint32_t v_preds_extended = svld1ub_u32(pg, &predicate_array[d]);
-
-        const svbool_t bit_mask = svcmpne_n_u32(pg, v_preds_extended, 0);
-
-        const svfloat32_t vec_b = svsel_f32(bit_mask, v_inv, v_neg_inv);
-        const svfloat32_t vec_v = svld1_f32(pg, &vector[d]);
+        svfloat32_t vec_b = svsel_f32(bit_mask, v_inv, v_neg_inv);
+        svfloat32_t vec_v = svld1_f32(pg, &vector[d]);
         vec_sum = svmla_f32_m(pg, vec_sum, vec_v, vec_b);
 
         d += vl;
-    }
+        pg = svwhilelt_b32(d, dim);
+    } while (svptest_first(svptrue_b32(), pg));
 
     return svaddv_f32(svptrue_b32(), vec_sum);
 #else
@@ -1223,11 +1183,6 @@ BitNot(const uint8_t* x, const uint64_t num_byte, uint8_t* result) {
 
 void
 Prefetch(const void* data) {
-#if defined(ENABLE_SVE)
-    svprfw(svptrue_b32(), data, SV_PLDL1KEEP);
-#else
-    neon::Prefetch(data);
-#endif
 }
 
 void
@@ -1281,16 +1236,19 @@ PQFastScanLookUp32(const uint8_t* RESTRICT lookup_table,
 
     const svuint8_t mask4 = svdup_u8(0x0F);
     const svuint16_t mask8 = svdup_u16(0x00FF);
-    svuint16x4_t accumulators =
-        svcreate4_u16(svdup_u16(0), svdup_u16(0), svdup_u16(0), svdup_u16(0));
+
+    svuint16_t acc0 = svdup_u16(0);
+    svuint16_t acc1 = svdup_u16(0);
+    svuint16_t acc2 = svdup_u16(0);
+    svuint16_t acc3 = svdup_u16(0);
 
     uint8_t offsets_data[svcntb()];
     for (uint64_t c = 0; c < svcntb() / 16; ++c) std::memset(offsets_data + c * 16, c * 16, 16);
+
     const svuint8_t index_offsets = svld1_u8(svptrue_b8(), offsets_data);
 
-    while (i < total_bytes) {
-        svbool_t pg_bytes = svwhilelt_b8(i, total_bytes);
-
+    svbool_t pg = svwhilelt_b8(i, total_bytes);
+    do {
         svuint8_t super_table = svld1_u8(pg_bytes, lookup_table + i);
         svuint8_t super_codes = svld1_u8(pg_bytes, codes + i);
 
@@ -1305,11 +1263,6 @@ PQFastScanLookUp32(const uint8_t* RESTRICT lookup_table,
 
         svbool_t pg_u16 = svwhilelt_b16(i / 2, total_bytes / 2);
 
-        svuint16_t acc0 = svget4_u16(accumulators, 0);
-        svuint16_t acc1 = svget4_u16(accumulators, 1);
-        svuint16_t acc2 = svget4_u16(accumulators, 2);
-        svuint16_t acc3 = svget4_u16(accumulators, 3);
-
         acc0 =
             svadd_u16_m(pg_u16, acc0, svand_u16_z(pg_u16, svreinterpret_u16_u8(low_vals), mask8));
         acc1 = svadd_u16_m(pg_u16, acc1, svlsr_n_u16_z(pg_u16, svreinterpret_u16_u8(low_vals), 8));
@@ -1317,41 +1270,34 @@ PQFastScanLookUp32(const uint8_t* RESTRICT lookup_table,
             svadd_u16_m(pg_u16, acc2, svand_u16_z(pg_u16, svreinterpret_u16_u8(high_vals), mask8));
         acc3 = svadd_u16_m(pg_u16, acc3, svlsr_n_u16_z(pg_u16, svreinterpret_u16_u8(high_vals), 8));
 
-        accumulators = svset4_u16(accumulators, 0, acc0);
-        accumulators = svset4_u16(accumulators, 1, acc1);
-        accumulators = svset4_u16(accumulators, 2, acc2);
-        accumulators = svset4_u16(accumulators, 3, acc3);
-
         i += step;
-    }
+    } while (svptest_first(svptrue_b8(), pg));
 
     uint16_t temp[svcntb() / 2];
-    {
-        // Segment 0
 
-        svst1_u16(svptrue_b16(), temp, svget4_u16(accumulators, 0));
-        for (int j = 0; j < 8; ++j)
-            for (int k = 0; k < svcntb() / 16; k++) result[0 * 8 + j] += temp[j + 8 * (k)];
+    // Segment 0
 
-        // Segment 1
+    svst1_u16(svptrue_b16(), temp, acc0);
+    for (int j = 0; j < 8; ++j)
+        for (int k = 0; k < svcntb() / 16; k++) result[0 * 8 + j] += temp[j + 8 * (k)];
 
-        svst1_u16(svptrue_b16(), temp, svget4_u16(accumulators, 1));
-        for (int j = 0; j < 8; ++j)
-            for (int k = 0; k < svcntb() / 16; k++) result[1 * 8 + j] += temp[j + 8 * k];
+    // Segment 1
 
-        // Segment 2
+    svst1_u16(svptrue_b16(), temp, acc1);
+    for (int j = 0; j < 8; ++j)
+        for (int k = 0; k < svcntb() / 16; k++) result[1 * 8 + j] += temp[j + 8 * k];
 
-        svst1_u16(svptrue_b16(), temp, svget4_u16(accumulators, 2));
-        for (int j = 0; j < 8; ++j)
-            for (int k = 0; k < svcntb() / 16; k++) result[2 * 8 + j] += temp[j + 8 * k];
+    // Segment 2
 
-        // Segment 3
+    svst1_u16(svptrue_b16(), temp, acc2);
+    for (int j = 0; j < 8; ++j)
+        for (int k = 0; k < svcntb() / 16; k++) result[2 * 8 + j] += temp[j + 8 * k];
 
-        svst1_u16(svptrue_b16(), temp, svget4_u16(accumulators, 3));
-        for (int j = 0; j < 8; ++j)
-            for (int k = 0; k < svcntb() / 16; k++) result[3 * 8 + j] += temp[j + 8 * k];
-        ;
-    }
+    // Segment 3
+
+    svst1_u16(svptrue_b16(), temp, acc3);
+    for (int j = 0; j < 8; ++j)
+        for (int k = 0; k < svcntb() / 16; k++) result[3 * 8 + j] += temp[j + 8 * k];
 
 #else
     neon::PQFastScanLookUp32(lookup_table, codes, pq_dim, result);
@@ -1401,8 +1347,9 @@ FlipSign(const uint8_t* flip, float* data, size_t dim) {
     }
 
     uint64_t d = 0;
-    const uint64_t vl = svcntw();
-    while (d < dim) {
+    const uint64_t step = svcntw();
+    svbool_t pg = svwhilelt_b32(d, dim);
+    do{
         const svbool_t pg = svwhilelt_b32(d, dim);
         const svuint32_t v_preds_extended = svld1ub_u32(pg, &predicate_array[d]);
         const svbool_t bit_mask = svcmpne_n_u32(pg, v_preds_extended, 0);
@@ -1411,8 +1358,9 @@ FlipSign(const uint8_t* flip, float* data, size_t dim) {
         svfloat32_t result_vec = svneg_f32_m(data_vec, bit_mask, data_vec);
         svst1_f32(pg, data + d, result_vec);
 
-        d += vl;
-    }
+        d += step;
+        pg = svwhilelt_b32(d, dim);
+    }while(svptest_first(svptrue_b32(), pg));
 #else
     neon::FlipSign(flip, data, dim);
 #endif
