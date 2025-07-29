@@ -1350,9 +1350,8 @@ FlipSign(const uint8_t* flip, float* data, size_t dim) {
     const uint64_t step = svcntw();
     svbool_t pg = svwhilelt_b32(d, dim);
     do {
-        const svbool_t pg = svwhilelt_b32(d, dim);
-        const svuint32_t v_preds_extended = svld1ub_u32(pg, &predicate_array[d]);
-        const svbool_t bit_mask = svcmpne_n_u32(pg, v_preds_extended, 0);
+        svuint32_t v_preds_extended = svld1ub_u32(pg, &predicate_array[d]);
+        svbool_t bit_mask = svcmpne_n_u32(pg, v_preds_extended, 0);
 
         svfloat32_t data_vec = svld1_f32(pg, data + d);
         svfloat32_t result_vec = svneg_f32_m(data_vec, bit_mask, data_vec);
