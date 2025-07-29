@@ -505,7 +505,7 @@ FP16ComputeIP(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, uint
 float
 FP16ComputeL2Sqr(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, uint64_t dim) {
 #if defined(ENABLE_SVE)
-    const _Float16* query_f16 = (const _Float16*)query;
+    
     auto* query_fp16 = reinterpret_cast<const __fp16*>(query);
     auto* codes_fp16 = reinterpret_cast<const __fp16*>(codes);
 
