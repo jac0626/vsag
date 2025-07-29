@@ -692,37 +692,29 @@ SQ4ComputeIP(const float* RESTRICT query,
     const uint64_t vl = svcntw();
     const svbool_t pg_all = svptrue_b32();
 
-    const svuint32_t z_base_indices = svindex_u32(0, 1);
-    const svuint32_t z_even_elem_indices = svmul_n_u32_x(pg_all, z_base_indices, 2);
-    const svuint32_t z_even_byte_offsets =
-        svmul_n_u32_x(pg_all, z_even_elem_indices, sizeof(float));
-    const svuint32_t z_odd_elem_indices = svadd_n_u32_x(pg_all, z_even_elem_indices, 1);
-    const svuint32_t z_odd_byte_offsets = svmul_n_u32_x(pg_all, z_odd_elem_indices, sizeof(float));
-
     uint64_t d = 0;
     for (; d + 2 * vl <= dim; d += 2 * vl) {
-        const svfloat32_t z_query_even =
-            svld1_gather_u32offset_f32(pg_all, &query[d], z_even_byte_offsets);
-        const svfloat32_t z_query_odd =
-            svld1_gather_u32offset_f32(pg_all, &query[d], z_odd_byte_offsets);
-        const svfloat32_t z_lower_even =
-            svld1_gather_u32offset_f32(pg_all, &lower_bound[d], z_even_byte_offsets);
-        const svfloat32_t z_lower_odd =
-            svld1_gather_u32offset_f32(pg_all, &lower_bound[d], z_odd_byte_offsets);
-        const svfloat32_t z_diff_even =
-            svld1_gather_u32offset_f32(pg_all, &diff[d], z_even_byte_offsets);
+        // 使用 svld2_f32 一次加载奇偶元素
+        svfloat32x2_t z_query = svld2_f32(pg_all, &query[d]);
+        svfloat32x2_t z_lower = svld2_f32(pg_all, &lower_bound[d]);
+        svfloat32x2_t z_diff_tuple = svld2_f32(pg_all, &diff[d]);
+        
+        // 提取偶数和奇数元素
+        svfloat32_t z_query_even = svget2_f32(z_query, 0);
+        svfloat32_t z_query_odd = svget2_f32(z_query, 1);
+        svfloat32_t z_lower_even = svget2_f32(z_lower, 0);
+        svfloat32_t z_lower_odd = svget2_f32(z_lower, 1);
+        svfloat32_t z_diff_even = svget2_f32(z_diff_tuple, 0);
+        svfloat32_t z_diff_odd = svget2_f32(z_diff_tuple, 1);
 
-        const svfloat32_t z_diff_odd =
-            svld1_gather_u32offset_f32(pg_all, &diff[d], z_odd_byte_offsets);
-
+        // 处理编码（保持不变）
         const svuint32_t z_packed_u32 = svld1ub_u32(pg_all, &codes[d / 2]);
-
         const svuint32_t z_codes_even_u32 = svand_n_u32_x(pg_all, z_packed_u32, 0x0F);
         const svuint32_t z_codes_odd_u32 = svlsr_n_u32_x(pg_all, z_packed_u32, 4);
-
         const svfloat32_t z_codes_even_f32 = svcvt_f32_u32_x(pg_all, z_codes_even_u32);
         const svfloat32_t z_codes_odd_f32 = svcvt_f32_u32_x(pg_all, z_codes_odd_u32);
 
+        // 计算结果
         svfloat32_t z_y_even = svmla_f32_x(
             pg_all, z_lower_even, svmul_f32_x(pg_all, z_codes_even_f32, z_inv_15), z_diff_even);
         svfloat32_t z_y_odd = svmla_f32_x(
@@ -755,36 +747,29 @@ SQ4ComputeL2Sqr(const float* RESTRICT query,
     const uint64_t vl = svcntw();
     const svbool_t pg_all = svptrue_b32();
 
-    const svuint32_t z_base_indices = svindex_u32(0, 1);
-    const svuint32_t z_even_elem_indices = svmul_n_u32_x(pg_all, z_base_indices, 2);
-    const svuint32_t z_even_byte_offsets =
-        svmul_n_u32_x(pg_all, z_even_elem_indices, sizeof(float));
-    const svuint32_t z_odd_elem_indices = svadd_n_u32_x(pg_all, z_even_elem_indices, 1);
-    const svuint32_t z_odd_byte_offsets = svmul_n_u32_x(pg_all, z_odd_elem_indices, sizeof(float));
-
     uint64_t d = 0;
     for (; d + 2 * vl <= dim; d += 2 * vl) {
-        const svfloat32_t z_query_even =
-            svld1_gather_u32offset_f32(pg_all, &query[d], z_even_byte_offsets);
-        const svfloat32_t z_query_odd =
-            svld1_gather_u32offset_f32(pg_all, &query[d], z_odd_byte_offsets);
-        const svfloat32_t z_lower_even =
-            svld1_gather_u32offset_f32(pg_all, &lower_bound[d], z_even_byte_offsets);
-        const svfloat32_t z_lower_odd =
-            svld1_gather_u32offset_f32(pg_all, &lower_bound[d], z_odd_byte_offsets);
-        const svfloat32_t z_diff_even_param =
-            svld1_gather_u32offset_f32(pg_all, &diff[d], z_even_byte_offsets);
-        const svfloat32_t z_diff_odd_param =
-            svld1_gather_u32offset_f32(pg_all, &diff[d], z_odd_byte_offsets);
+        // 使用 svld2_f32 一次加载奇偶元素
+        svfloat32x2_t z_query = svld2_f32(pg_all, &query[d]);
+        svfloat32x2_t z_lower = svld2_f32(pg_all, &lower_bound[d]);
+        svfloat32x2_t z_diff_tuple = svld2_f32(pg_all, &diff[d]);
+        
+        // 提取偶数和奇数元素
+        svfloat32_t z_query_even = svget2_f32(z_query, 0);
+        svfloat32_t z_query_odd = svget2_f32(z_query, 1);
+        svfloat32_t z_lower_even = svget2_f32(z_lower, 0);
+        svfloat32_t z_lower_odd = svget2_f32(z_lower, 1);
+        svfloat32_t z_diff_even_param = svget2_f32(z_diff_tuple, 0);
+        svfloat32_t z_diff_odd_param = svget2_f32(z_diff_tuple, 1);
 
+        // 处理编码（保持不变）
         const svuint32_t z_packed_u32 = svld1ub_u32(pg_all, &codes[d / 2]);
-
         const svuint32_t z_codes_even_u32 = svand_n_u32_x(pg_all, z_packed_u32, 0x0F);
         const svuint32_t z_codes_odd_u32 = svlsr_n_u32_x(pg_all, z_packed_u32, 4);
-
         const svfloat32_t z_codes_even_f32 = svcvt_f32_u32_x(pg_all, z_codes_even_u32);
         const svfloat32_t z_codes_odd_f32 = svcvt_f32_u32_x(pg_all, z_codes_odd_u32);
 
+        // 计算结果
         svfloat32_t z_y_even = svmla_f32_x(pg_all,
                                            z_lower_even,
                                            svmul_f32_x(pg_all, z_codes_even_f32, z_inv_15),
@@ -822,24 +807,19 @@ SQ4ComputeCodesIP(const uint8_t* RESTRICT codes1,
     const uint64_t vl = svcntw();
     const svbool_t pg_all = svptrue_b32();
 
-    const svuint32_t z_base_indices = svindex_u32(0, 1);
-    const svuint32_t z_even_elem_indices = svmul_n_u32_x(pg_all, z_base_indices, 2);
-    const svuint32_t z_even_byte_offsets =
-        svmul_n_u32_x(pg_all, z_even_elem_indices, sizeof(float));
-    const svuint32_t z_odd_elem_indices = svadd_n_u32_x(pg_all, z_even_elem_indices, 1);
-    const svuint32_t z_odd_byte_offsets = svmul_n_u32_x(pg_all, z_odd_elem_indices, sizeof(float));
-
     uint64_t d = 0;
     for (; d + 2 * vl <= dim; d += 2 * vl) {
-        const svfloat32_t z_lower_even =
-            svld1_gather_u32offset_f32(pg_all, &lower_bound[d], z_even_byte_offsets);
-        const svfloat32_t z_lower_odd =
-            svld1_gather_u32offset_f32(pg_all, &lower_bound[d], z_odd_byte_offsets);
-        const svfloat32_t z_diff_even =
-            svld1_gather_u32offset_f32(pg_all, &diff[d], z_even_byte_offsets);
-        const svfloat32_t z_diff_odd =
-            svld1_gather_u32offset_f32(pg_all, &diff[d], z_odd_byte_offsets);
+        // 使用 svld2_f32 一次加载奇偶元素
+        svfloat32x2_t z_lower = svld2_f32(pg_all, &lower_bound[d]);
+        svfloat32x2_t z_diff_tuple = svld2_f32(pg_all, &diff[d]);
+        
+        // 提取偶数和奇数元素
+        svfloat32_t z_lower_even = svget2_f32(z_lower, 0);
+        svfloat32_t z_lower_odd = svget2_f32(z_lower, 1);
+        svfloat32_t z_diff_even = svget2_f32(z_diff_tuple, 0);
+        svfloat32_t z_diff_odd = svget2_f32(z_diff_tuple, 1);
 
+        // 处理编码（保持不变）
         const svuint32_t z_packed1_u32 = svld1ub_u32(pg_all, &codes1[d / 2]);
         const svuint32_t z_packed2_u32 = svld1ub_u32(pg_all, &codes2[d / 2]);
 
@@ -853,6 +833,7 @@ SQ4ComputeCodesIP(const uint8_t* RESTRICT codes1,
         const svfloat32_t z_codes2_even_f32 = svcvt_f32_u32_x(pg_all, z_codes2_even_u32);
         const svfloat32_t z_codes2_odd_f32 = svcvt_f32_u32_x(pg_all, z_codes2_odd_u32);
 
+        // 计算结果
         svfloat32_t z_y1_even = svmla_f32_x(
             pg_all, z_lower_even, svmul_f32_x(pg_all, z_codes1_even_f32, z_inv_15), z_diff_even);
         svfloat32_t z_y1_odd = svmla_f32_x(
@@ -890,24 +871,19 @@ SQ4ComputeCodesL2Sqr(const uint8_t* RESTRICT codes1,
     const uint64_t vl = svcntw();
     const svbool_t pg_all = svptrue_b32();
 
-    const svuint32_t z_base_indices = svindex_u32(0, 1);
-    const svuint32_t z_even_elem_indices = svmul_n_u32_x(pg_all, z_base_indices, 2);
-    const svuint32_t z_even_byte_offsets =
-        svmul_n_u32_x(pg_all, z_even_elem_indices, sizeof(float));
-    const svuint32_t z_odd_elem_indices = svadd_n_u32_x(pg_all, z_even_elem_indices, 1);
-    const svuint32_t z_odd_byte_offsets = svmul_n_u32_x(pg_all, z_odd_elem_indices, sizeof(float));
-
     uint64_t d = 0;
     for (; d + 2 * vl <= dim; d += 2 * vl) {
-        const svfloat32_t z_lower_even =
-            svld1_gather_u32offset_f32(pg_all, &lower_bound[d], z_even_byte_offsets);
-        const svfloat32_t z_lower_odd =
-            svld1_gather_u32offset_f32(pg_all, &lower_bound[d], z_odd_byte_offsets);
-        const svfloat32_t z_diff_even =
-            svld1_gather_u32offset_f32(pg_all, &diff[d], z_even_byte_offsets);
-        const svfloat32_t z_diff_odd =
-            svld1_gather_u32offset_f32(pg_all, &diff[d], z_odd_byte_offsets);
+        // 使用 svld2_f32 一次加载奇偶元素
+        svfloat32x2_t z_lower = svld2_f32(pg_all, &lower_bound[d]);
+        svfloat32x2_t z_diff_tuple = svld2_f32(pg_all, &diff[d]);
+        
+        // 提取偶数和奇数元素
+        svfloat32_t z_lower_even = svget2_f32(z_lower, 0);
+        svfloat32_t z_lower_odd = svget2_f32(z_lower, 1);
+        svfloat32_t z_diff_even = svget2_f32(z_diff_tuple, 0);
+        svfloat32_t z_diff_odd = svget2_f32(z_diff_tuple, 1);
 
+        // 处理编码（保持不变）
         const svuint32_t z_packed1_u32 = svld1ub_u32(pg_all, &codes1[d / 2]);
         const svuint32_t z_packed2_u32 = svld1ub_u32(pg_all, &codes2[d / 2]);
 
@@ -921,6 +897,7 @@ SQ4ComputeCodesL2Sqr(const uint8_t* RESTRICT codes1,
         const svfloat32_t z_codes2_even_f32 = svcvt_f32_u32_x(pg_all, z_codes2_even_u32);
         const svfloat32_t z_codes2_odd_f32 = svcvt_f32_u32_x(pg_all, z_codes2_odd_u32);
 
+        // 计算结果
         svfloat32_t z_y1_even = svmla_f32_x(
             pg_all, z_lower_even, svmul_f32_x(pg_all, z_codes1_even_f32, z_inv_15), z_diff_even);
         svfloat32_t z_y1_odd = svmla_f32_x(
@@ -948,7 +925,6 @@ SQ4ComputeCodesL2Sqr(const uint8_t* RESTRICT codes1,
     return neon::SQ4ComputeCodesL2Sqr(codes1, codes2, lower_bound, diff, dim);
 #endif
 }
-
 float
 SQ4UniformComputeCodesIP(const uint8_t* RESTRICT codes1,
                          const uint8_t* RESTRICT codes2,
