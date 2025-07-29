@@ -141,3 +141,33 @@ TEST_CASE("SQ4 SIMD Compute Benchmark", "[ut][simd][!benchmark]") {
         BENCHMARK_SIMD_COMPUTE(sve, SQ4ComputeIP);
     }
 }
+TEST_CASE("SQ4 SIMD Compute Codes Benchmark", "[ut][simd][!benchmark]") {
+    const std::vector<int64_t> dims = {256};
+    int64_t count = 200;
+    int64_t dim = 256;
+    uint32_t code_size = (dim + 1) / 2;
+
+    auto codes1 =  fixtures::generate_int4_codes(count, dim);
+    std::vector<uint8_t> codes2 = fixtures::generate_int4_codes(count, dim);
+    auto lb = fixtures::generate_vectors(1, dim, true, 180);
+    auto diff = fixtures::generate_vectors(1, dim, true, 6217);
+    BENCHMARK_SIMD_COMPUTE(generic, SQ4ComputeCodesIP);
+    if (SimdStatus::SupportSSE()) {
+        BENCHMARK_SIMD_COMPUTE(sse, SQ4ComputeCodesIP);
+    }
+    if (SimdStatus::SupportAVX()) {
+        BENCHMARK_SIMD_COMPUTE(avx, SQ4ComputeCodesIP);
+    }
+    if (SimdStatus::SupportAVX2()) {
+        BENCHMARK_SIMD_COMPUTE(avx2, SQ4ComputeCodesIP);
+    }
+    if (SimdStatus::SupportAVX512()) {
+        BENCHMARK_SIMD_COMPUTE(avx512, SQ4ComputeCodesIP);
+    }
+    if (SimdStatus::SupportNEON()) {
+        BENCHMARK_SIMD_COMPUTE(neon, SQ4ComputeCodesIP);
+    }
+    if (SimdStatus::SupportSVE()) {
+        BENCHMARK_SIMD_COMPUTE(sve, SQ4ComputeCodesIP);
+    }
+}
