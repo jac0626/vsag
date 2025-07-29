@@ -1062,38 +1062,29 @@ RaBitQSQ4UBinaryIP(const uint8_t* codes, const uint8_t* bits, uint64_t dim) {
 
     uint32_t result = 0;
     size_t num_bytes = (dim + 7) / 8;
-    uint64_t num_u64_lanes = svcntd();
-
-    uint64_t chunk_size_bytes = num_u64_lanes * 8;
 
     for (uint64_t bit_pos = 0; bit_pos < 4; ++bit_pos) {
-        const uint8_t* cur_codes = codes + bit_pos * num_bytes;
-        uint64_t plane_sum = 0;
         size_t i = 0;
+        uint64_t sum = 0;
 
-        svuint64_t acc = svdup_u64(0);
+        const uint8_t* cur = codes + bit_pos * num_bytes;
 
-        for (; i + chunk_size_bytes <= num_bytes; i += chunk_size_bytes) {
-            svuint64_t vec_codes =
-                svld1_u64(svptrue_b64(), reinterpret_cast<const uint64_t*>(cur_codes + i));
-            svuint64_t vec_bits =
-                svld1_u64(svptrue_b64(), reinterpret_cast<const uint64_t*>(bits + i));
+        svbool_t pg = svwhilelt_b8(i, num_bytes);
+        do {
+            svuint8_t vec_codes = svld1_u8(pg, cur + i);
+            svuint8_t vec_bits = svld1_u8(pg, bits + i);
 
-            svuint64_t and_result = svand_u64_z(svptrue_b64(), vec_codes, vec_bits);
+            svuint8_t and_result = svand_u8_x(pg, vec_codes, vec_bits);
 
-            svuint64_t popcnt_result = svcnt_u64_z(svptrue_b64(), and_result);
+            svuint8_t popcnt_result = svcnt_u8_x(pg, and_result);
 
-            acc = svadd_u64_m(svptrue_b64(), acc, popcnt_result);
-        }
+            sum += svaddv_u8(pg, popcnt_result);
 
-        plane_sum += svaddv_u64(svptrue_b64(), acc);
+            i += svcntb();
+            pg = svwhilelt_b8(i, num_bytes);
+        } while (svptest_first(svptrue_b8(), pg));
 
-        for (; i < num_bytes; ++i) {
-            uint8_t bitwise_and = cur_codes[i] & bits[i];
-            plane_sum += __builtin_popcount(bitwise_and);
-        }
-
-        result += plane_sum << bit_pos;
+        result += sum << bit_pos;
     }
 
     return result;

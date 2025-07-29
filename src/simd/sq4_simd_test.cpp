@@ -147,7 +147,7 @@ TEST_CASE("SQ4 SIMD Compute Codes Benchmark", "[ut][simd][!benchmark]") {
     int64_t dim = 256;
     uint32_t code_size = (dim + 1) / 2;
 
-    auto codes1 =  fixtures::generate_int4_codes(count, dim);
+    auto codes1 = fixtures::generate_int4_codes(count, dim);
     std::vector<uint8_t> codes2 = fixtures::generate_int4_codes(count, dim);
     auto lb = fixtures::generate_vectors(1, dim, true, 180);
     auto diff = fixtures::generate_vectors(1, dim, true, 6217);
