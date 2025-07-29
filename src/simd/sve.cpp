@@ -22,6 +22,7 @@
 #include <cstring>
 #include <memory>
 
+#include "simd.h"
 constexpr auto
 generate_bit_lookup_table() {
     std::array<std::array<uint8_t, 8>, 256> table{};
@@ -34,14 +35,6 @@ generate_bit_lookup_table() {
 }
 
 static constexpr auto g_bit_lookup_table = generate_bit_lookup_table();
-#include "simd.h"
-
-#if defined(ENABLE_SVE)
-#include <arm_bf16.h>
-#endif
-#if defined(ENABLE_SVE)
-#include <arm_fp16.h>
-#endif
 
 #define PORTABLE_ALIGN32 __attribute__((aligned(32)))
 #define PORTABLE_ALIGN64 __attribute__((aligned(64)))
@@ -690,9 +683,10 @@ SQ4ComputeIP(const float* RESTRICT query,
     svfloat32_t z_result_vec = svdup_f32(0.0f);
     const svfloat32_t z_inv_15 = svdup_f32(1.0f / 15.0f);
     const uint64_t step = svcntw();
+    uint64_t i = 0;
     const svbool_t pg = svwhilelt_b32(i, dim);
 
-    uint64_t i = 0;
+    
     for (; i + 2 * step <= dim; i += 2 * step) {
         svfloat32x2_t z_query = svld2_f32(pg, &query[i]);
         svfloat32x2_t z_lower = svld2_f32(pg, &lower_bound[i]);
