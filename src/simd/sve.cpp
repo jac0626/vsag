@@ -33,7 +33,6 @@ generate_bit_lookup_table() {
     return table;
 }
 
-
 static constexpr auto g_bit_lookup_table = generate_bit_lookup_table();
 #include "simd.h"
 
@@ -402,27 +401,27 @@ FP32ReduceAdd(const float* x, uint64_t dim) {
 float
 BF16ComputeIP(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, uint64_t dim) {
 #if defined(ENABLE_SVE)
-    const bfloat16_t* query_bf16 = (const bfloat16_t*)query;
-    const bfloat16_t* codes_bf16 = (const bfloat16_t*)codes;
+    auto* query_bf16 = reinterpret_cast<const uint16_t*>(query);
+    auto* codes_bf16 = reinterpret_cast<const uint16_t*>(codes);
 
-    svfloat32_t sum_vec = svdup_f32(0.0f);
+    svfloat32_t sum_vec = svdup_n_f32(0.0f);
     uint64_t i = 0;
-
-    const uint64_t step = svcnth();
-
-    svbool_t pg = svwhilelt_b16(i, dim);
+    uint64_t vl_f32 = svcntw();
+    svbool_t pg = svwhilelt_b32(i, dim);
     do {
-        svprfw(svptrue_b16(), query_bf16 + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b16(), codes_bf16 + i + step, SV_PLDL1KEEP);
+        svuint32_t query_u32 = svld1uh_u32(pg, &query_bf16[i]);
+        svuint32_t codes_u32 = svld1uh_u32(pg, &codes_bf16[i]);
 
-        svbfloat16_t q_vec = svld1_bf16(pg, query_bf16 + i);
-        svbfloat16_t c_vec = svld1_bf16(pg, codes_bf16 + i);
+        query_u32 = svlsl_n_u32_x(pg, query_u32, 16);
+        codes_u32 = svlsl_n_u32_x(pg, codes_u32, 16);
 
-        sum_vec =svbfdot_f32(sum_vec,q_vec,c_vec);
+        svfloat32_t query_f32 = svreinterpret_f32_u32(query_u32);
+        svfloat32_t codes_f32 = svreinterpret_f32_u32(codes_u32);
 
-        i += step;
-        pg = svwhilelt_b16(i, dim);
-    } while (svptest_first(svptrue_b16(), pg));
+        sum_vec = svmla_f32_x(pg, sum_vec, query_f32, codes_f32);
+        i += vl_f32;
+        pg = svwhilelt_b32(i, dim);
+    } while (svptest_first(svptrue_b32(), pg));
 
     return svaddv_f32(svptrue_b32(), sum_vec);
 #else
@@ -433,28 +432,28 @@ BF16ComputeIP(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, uint
 float
 BF16ComputeL2Sqr(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, uint64_t dim) {
 #if defined(ENABLE_SVE)
-    const bfloat16_t* query_bf16 = (const bfloat16_t*)query;
-    const bfloat16_t* codes_bf16 = (const bfloat16_t*)codes;
-    svfloat32_t sum_vec = svdup_f32(0.0f);
+    auto* query_bf16 = reinterpret_cast<const uint16_t*>(query);
+    auto* codes_bf16 = reinterpret_cast<const uint16_t*>(codes);
+
+    svfloat32_t sum_vec = svdup_n_f32(0.0f);
     uint64_t i = 0;
-    const uint64_t step = svcnth();
-
-    svbool_t pg = svwhilelt_b16(i, dim);
+    uint64_t vl_f32 = svcntw();
+    svbool_t pg = svwhilelt_b32(i, dim);
     do {
-        svprfw(svptrue_b16(), query_bf16 + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b16(), codes_bf16 + i + step, SV_PLDL1KEEP);
+        svuint32_t query_u32 = svld1uh_u32(pg, &query_bf16[i]);
+        svuint32_t codes_u32 = svld1uh_u32(pg, &codes_bf16[i]);
 
-        svbfloat16_t q_vec = svld1_bf16(pg, query_bf16 + i);
-        svbfloat16_t c_vec = svld1_bf16(pg, codes_bf16 + i);
+        query_u32 = svlsl_n_u32_x(pg, query_u32, 16);
+        codes_u32 = svlsl_n_u32_x(pg, codes_u32, 16);
 
-        svbfloat16_t diff = svsub_bf16_z(pg, q_vec, c_vec);
+        svfloat32_t query_f32 = svreinterpret_f32_u32(query_u32);
+        svfloat32_t codes_f32 = svreinterpret_f32_u32(codes_u32);
 
-
-        sum_vec = svbfmlalb_f32(sum_vec, diff, diff);
-
-        i += step;
-        pg = svwhilelt_b16(i, dim);
-    } while (svptest_first(svptrue_b16(), pg));
+        svfloat32_t diff = svsub_f32_x(pg, query_f32, codes_f32);
+        sum_vec = svmla_f32_x(pg, sum_vec, diff, diff);
+        i += vl_f32;
+        pg = svwhilelt_b32(i, dim);
+    } while (svptest_first(svptrue_b32(), pg));
 
     return svaddv_f32(svptrue_b32(), sum_vec);
 #else
@@ -465,27 +464,37 @@ BF16ComputeL2Sqr(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, u
 float
 FP16ComputeIP(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, uint64_t dim) {
 #if defined(ENABLE_SVE)
-    const _Float16* query_f16 = (const _Float16*)query;
-    const _Float16* codes_f16 = (const _Float16*)codes;
+    auto* query_fp16 = reinterpret_cast<const __fp16*>(query);
+    auto* codes_fp16 = reinterpret_cast<const __fp16*>(codes);
 
-    svfloat32_t sum_vec = svdup_f32(0.0f);
+    svfloat32_t sum_vec = svdup_n_f32(0.0f);
     uint64_t i = 0;
-
-    const uint64_t step = svcnth();
-
+    uint64_t vl_f16 = svcnth();
     svbool_t pg = svwhilelt_b16(i, dim);
     do {
-        svprfw(svptrue_b16(), query_f16 + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b16(), codes_f16 + i + step, SV_PLDL1KEEP);
+        // Load FP16 values directly
+        svfloat16_t query_f16 = svld1_f16(pg, &query_fp16[i]);
+        svfloat16_t codes_f16 = svld1_f16(pg, &codes_fp16[i]);
 
-        svfloat16_t q_vec = svld1_f16(pg, query_f16 + i);
-        svfloat16_t c_vec = svld1_f16(pg, codes_f16 + i);
+        // Convert first half to FP32
+        svbool_t pg_half = svptrue_pat_b16(SV_POW2);
+        svfloat32_t query_f32_lo = svcvt_f32_f16_x(pg_half, query_f16);
+        svfloat32_t codes_f32_lo = svcvt_f32_f16_x(pg_half, codes_f16);
 
-        sum_vec = svmla_f32_m(pg, sum_vec, svcvt_f32_f16_z(pg, q_vec), svcvt_f32_f16_z(pg, c_vec));
+        // Convert second half to FP32
+        svfloat16_t query_f16_hi = svreinterpret_f16_u32(
+            svlsr_n_u32_x(svptrue_b32(), svreinterpret_u32_f16(query_f16), 16));
+        svfloat16_t codes_f16_hi = svreinterpret_f16_u32(
+            svlsr_n_u32_x(svptrue_b32(), svreinterpret_u32_f16(codes_f16), 16));
+        svfloat32_t query_f32_hi = svcvt_f32_f16_x(pg_half, query_f16_hi);
+        svfloat32_t codes_f32_hi = svcvt_f32_f16_x(pg_half, codes_f16_hi);
 
-        i += step;
+        // Accumulate
+        sum_vec = svmla_f32_x(svptrue_b32(), sum_vec, query_f32_lo, codes_f32_lo);
+        sum_vec = svmla_f32_x(svptrue_b32(), sum_vec, query_f32_hi, codes_f32_hi);
+        i += vl_f16;
         pg = svwhilelt_b16(i, dim);
-    } while (svptest_first(svptrue_b16(), pg));
+    } while (svptest_first(svptrue_b32(), pg));
 
     return svaddv_f32(svptrue_b32(), sum_vec);
 #else
@@ -497,27 +506,40 @@ float
 FP16ComputeL2Sqr(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, uint64_t dim) {
 #if defined(ENABLE_SVE)
     const _Float16* query_f16 = (const _Float16*)query;
-    const _Float16* codes_f16 = (const _Float16*)codes;
-    svfloat32_t sum_vec = svdup_f32(0.0f);
-    uint64_t i = 0;
-    const uint64_t step = svcnth();
+    auto* query_fp16 = reinterpret_cast<const __fp16*>(query);
+    auto* codes_fp16 = reinterpret_cast<const __fp16*>(codes);
 
+    svfloat32_t sum_vec = svdup_n_f32(0.0f);
+    uint64_t i = 0;
+    uint64_t vl_f16 = svcnth();
     svbool_t pg = svwhilelt_b16(i, dim);
     do {
-        svprfw(svptrue_b16(), query_f16 + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b16(), codes_f16 + i + step, SV_PLDL1KEEP);
+        // Load FP16 values directly
+        svfloat16_t query_f16 = svld1_f16(pg, &query_fp16[i]);
+        svfloat16_t codes_f16 = svld1_f16(pg, &codes_fp16[i]);
 
-        svfloat16_t q_vec = svld1_f16(pg, query_f16 + i);
-        svfloat16_t c_vec = svld1_f16(pg, codes_f16 + i);
+        // Convert first half to FP32
+        svbool_t pg_half = svptrue_pat_b16(SV_POW2);
+        svfloat32_t query_f32_lo = svcvt_f32_f16_x(pg_half, query_f16);
+        svfloat32_t codes_f32_lo = svcvt_f32_f16_x(pg_half, codes_f16);
 
-        svfloat16_t diff = svsub_f16_z(pg, q_vec, c_vec);
-        svfloat32_t diff_f32 = svcvt_f32_f16_z(pg, diff);
+        // Convert second half to FP32
+        svfloat16_t query_f16_hi = svreinterpret_f16_u32(
+            svlsr_n_u32_x(svptrue_b32(), svreinterpret_u32_f16(query_f16), 16));
+        svfloat16_t codes_f16_hi = svreinterpret_f16_u32(
+            svlsr_n_u32_x(svptrue_b32(), svreinterpret_u32_f16(codes_f16), 16));
+        svfloat32_t query_f32_hi = svcvt_f32_f16_x(pg_half, query_f16_hi);
+        svfloat32_t codes_f32_hi = svcvt_f32_f16_x(pg_half, codes_f16_hi);
 
-        sum_vec = svmla_f32_m(pg, sum_vec, diff_f32, diff_f32);
+        // Compute differences and accumulate
+        svfloat32_t diff_lo = svsub_f32_x(svptrue_b32(), query_f32_lo, codes_f32_lo);
+        svfloat32_t diff_hi = svsub_f32_x(svptrue_b32(), query_f32_hi, codes_f32_hi);
 
-        i += step;
+        sum_vec = svmla_f32_x(svptrue_b32(), sum_vec, diff_lo, diff_lo);
+        sum_vec = svmla_f32_x(svptrue_b32(), sum_vec, diff_hi, diff_hi);
+        i += vl_f16;
         pg = svwhilelt_b16(i, dim);
-    } while (svptest_first(svptrue_b16(), pg));
+    } while (svptest_first(svptrue_b32(), pg));
 
     return svaddv_f32(svptrue_b32(), sum_vec);
 #else
