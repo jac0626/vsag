@@ -691,7 +691,7 @@ SQ4ComputeIP(const float* RESTRICT query,
     const svfloat32_t z_inv_15 = svdup_f32(1.0f / 15.0f);
     const uint64_t step = svcntw();
     uint64_t i = 0;
-    svbool_t pg_ld2=svwhilelt_b(i, dim*2);
+    svbool_t pg_ld2=svwhilelt_b8(i, dim*2);
     svbool_t pg=svwhilelt_b32(i, dim);
     
     do {
@@ -724,7 +724,7 @@ SQ4ComputeIP(const float* RESTRICT query,
         z_result_vec = svmla_f32_x(pg, z_result_vec, z_query_even, z_y_even);
         z_result_vec = svmla_f32_x(pg, z_result_vec, z_query_odd, z_y_odd);
         i += 2 * step;
-        pg_ld2=svwhilelt_b(i, dim*2);
+        pg_ld2=svwhilelt_b8(i, dim*2);
         pg=svwhilelt_b32(i, dim);
     }(svptest_first(svptrue_b32(), pg));
 
