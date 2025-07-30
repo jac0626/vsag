@@ -21,29 +21,7 @@ SIFT-sq4:
     range: 0.5
     delete_index_after_search: true
 
-DeepImage-sq4:
-    datapath: "/tmp/data/deep-image-96-angular.hdf5"
-    type: "build,search"
-    index_name: "hgraph"
-    create_params: '{"dim":96,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"sq4","max_degree":80,"ef_construction":400,"precise_quantization_type":"fp32","use_reorder":true}}'
-    search_params: '{"hgraph":{"ef_search":88}}'
-    index_path: "/tmp/deep-image-96-angular/index/hgraph_index"
-    topk: 10
-    search_mode: "knn"
-    range: 0.5
-    delete_index_after_search: true
 
-GIST-sq4:
-    datapath: "/tmp/data/gist-960-euclidean.hdf5"
-    type: "build,search"
-    index_name: "hgraph"
-    create_params: '{"dim":960,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"sq4","max_degree":112,"ef_construction":400,"precise_quantization_type":"fp32","use_reorder":true}}'
-    search_params: '{"hgraph":{"ef_search":180}}'
-    index_path: "/tmp/gist-960-euclidean/index/hgraph_index"
-    topk: 10
-    search_mode: "knn"
-    range: 0.5
-    delete_index_after_search: true
 
 GloVe-sq4:
     datapath: "/tmp/data/glove-100-angular.hdf5"

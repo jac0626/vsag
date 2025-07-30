@@ -21,29 +21,7 @@ SIFT-sq4_uniform:
     range: 0.5
     delete_index_after_search: true
 
-DeepImage-sq4_uniform:
-    datapath: "/tmp/data/deep-image-96-angular.hdf5"
-    type: "build,search"
-    index_name: "hgraph"
-    create_params: '{"dim":96,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"sq4_uniform","max_degree":80,"ef_construction":400,"precise_quantization_type":"fp32","use_reorder":true}}'
-    search_params: '{"hgraph":{"ef_search":88}}'
-    index_path: "/tmp/deep-image-96-angular/index/hgraph_index"
-    topk: 10
-    search_mode: "knn"
-    range: 0.5
-    delete_index_after_search: true
 
-GIST-sq4_uniform:
-    datapath: "/tmp/data/gist-960-euclidean.hdf5"
-    type: "build,search"
-    index_name: "hgraph"
-    create_params: '{"dim":960,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"sq4_uniform","max_degree":112,"ef_construction":400,"precise_quantization_type":"fp32","use_reorder":true}}'
-    search_params: '{"hgraph":{"ef_search":180}}'
-    index_path: "/tmp/gist-960-euclidean/index/hgraph_index"
-    topk: 10
-    search_mode: "knn"
-    range: 0.5
-    delete_index_after_search: true
 
 GloVe-sq4_uniform:
     datapath: "/tmp/data/glove-100-angular.hdf5"
