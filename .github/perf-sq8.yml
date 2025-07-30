@@ -1,0 +1,70 @@
+# SQ8 Performance Test Configuration
+
+global:
+  exporters:
+    e1:
+      format: "text"
+      to: "stdout"
+    e2:
+      format: "json"
+      to: "file://tmp/github-perf.json"
+
+SIFT-sq8:
+    datapath: "/tmp/data/sift-128-euclidean.hdf5"
+    type: "build,search"
+    index_name: "hgraph"
+    create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"sq8","max_degree":32,"ef_construction":400}}'
+    search_params: '{"hgraph":{"ef_search":44}}'
+    index_path: "/tmp/sift-128-euclidean/index/hgraph_index"
+    topk: 10
+    search_mode: "knn"
+    range: 0.5
+    delete_index_after_search: true
+
+DeepImage-sq8:
+    datapath: "/tmp/data/deep-image-96-angular.hdf5"
+    type: "build,search"
+    index_name: "hgraph"
+    create_params: '{"dim":96,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"sq8","max_degree":64,"ef_construction":400}}'
+    search_params: '{"hgraph":{"ef_search":60}}'
+    index_path: "/tmp/deep-image-96-angular/index/hgraph_index"
+    topk: 10
+    search_mode: "knn"
+    range: 0.5
+    delete_index_after_search: true
+
+GIST-sq8:
+    datapath: "/tmp/data/gist-960-euclidean.hdf5"
+    type: "build,search"
+    index_name: "hgraph"
+    create_params: '{"dim":960,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"sq8","max_degree":96,"ef_construction":400}}'
+    search_params: '{"hgraph":{"ef_search":120}}'
+    index_path: "/tmp/gist-960-euclidean/index/hgraph_index"
+    topk: 10
+    search_mode: "knn"
+    range: 0.5
+    delete_index_after_search: true
+
+GloVe-sq8:
+    datapath: "/tmp/data/glove-100-angular.hdf5"
+    type: "build,search"
+    index_name: "hgraph"
+    create_params: '{"dim":100,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"sq8","max_degree":96,"ef_construction":400}}'
+    search_params: '{"hgraph":{"ef_search":200}}'
+    index_path: "/tmp/glove-100-angular/index/hgraph_index"
+    topk: 10
+    search_mode: "knn"
+    range: 0.5
+    delete_index_after_search: true
+
+NYTimes-sq8:
+    datapath: "/tmp/data/nytimes-256-angular.hdf5"
+    type: "build,search"
+    index_name: "hgraph"
+    create_params: '{"dim":256,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"sq8","max_degree":96,"ef_construction":300}}'
+    search_params: '{"hgraph":{"ef_search":120}}'
+    index_path: "/tmp/nytimes-256-angular/index/hgraph_index"
+    topk: 10
+    search_mode: "knn"
+    range: 0.5
+    delete_index_after_search: true
