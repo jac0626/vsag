@@ -22,6 +22,7 @@
 #include <cstring>
 #include <memory>
 
+#include "simd.h"
 constexpr auto
 generate_bit_lookup_table() {
     std::array<std::array<uint8_t, 8>, 256> table{};
@@ -33,16 +34,7 @@ generate_bit_lookup_table() {
     return table;
 }
 
-// 在编译时生成并初始化全局查找表，无任何运行时开销
 static constexpr auto g_bit_lookup_table = generate_bit_lookup_table();
-#include "simd.h"
-
-#if defined(__ARM_FEATURE_SVE_BF16)
-#include <arm_bf16.h>
-#endif
-#if defined(__ARM_FEATURE_SVE_FP16)
-#include <arm_fp16.h>
-#endif
 
 #define PORTABLE_ALIGN32 __attribute__((aligned(32)))
 #define PORTABLE_ALIGN64 __attribute__((aligned(64)))
@@ -77,20 +69,20 @@ INT8InnerProduct(const void* pVect1v, const void* pVect2v, const void* qty_ptr) 
     auto* pVect2 = (const int8_t*)pVect2v;
     auto qty = *((size_t*)qty_ptr);
 
-    svint32_t sum_vec = svdup_s32(0);
+    svint32_t sum = svdup_s32(0);
     uint64_t i = 0;
     const uint64_t step = svcntb();
 
-    svbool_t pg = svwhilelt_b8(i, qty);
+    svbool_t predicate = svwhilelt_b8(i, qty);
     do {
-        svint8_t v1 = svld1_s8(pg, pVect1 + i);
-        svint8_t v2 = svld1_s8(pg, pVect2 + i);
-        sum_vec = svdot_s32(sum_vec, v1, v2);
+        svint8_t vec1 = svld1_s8(predicate, pVect1 + i);
+        svint8_t vec2 = svld1_s8(predicate, pVect2 + i);
+        sum = svdot_s32(sum, vec1, vec2);
         i += step;
-        pg = svwhilelt_b8(i, qty);
-    } while (svptest_first(svptrue_b8(), pg));
+        predicate = svwhilelt_b8(i, qty);
+    } while (svptest_first(svptrue_b8(), predicate));
 
-    return static_cast<float>(svaddv_s32(svptrue_b32(), sum_vec));
+    return static_cast<float>(svaddv_s32(svptrue_b32(), sum));
 #else
     return neon::INT8InnerProduct(pVect1v, pVect2v, qty_ptr);
 #endif
@@ -107,15 +99,15 @@ PQDistanceFloat256(const void* single_dim_centers, float single_dim_val, void* r
     const auto* float_centers = (const float*)single_dim_centers;
     auto* float_result = (float*)result;
     uint64_t num_floats_per_vector = svcntw();
-    svfloat32_t val_vec = svdup_f32(single_dim_val);
+    svfloat32_t value = svdup_f32(single_dim_val);
     int i = 0;
     do {
-        svbool_t pg = svwhilelt_b32(i, 256);
-        svfloat32_t centers_vec = svld1_f32(pg, float_centers + i);
-        svfloat32_t result_vec = svld1_f32(pg, float_result + i);
-        svfloat32_t diff_vec = svsub_f32_m(pg, centers_vec, val_vec);
-        result_vec = svmad_f32_m(pg, diff_vec, diff_vec, result_vec);
-        svst1_f32(pg, float_result + i, result_vec);
+        svbool_t predicate = svwhilelt_b32(i, 256);
+        svfloat32_t centers = svld1_f32(predicate, float_centers + i);
+        svfloat32_t results = svld1_f32(predicate, float_result + i);
+        svfloat32_t diff = svsub_f32_m(predicate, centers, value);
+        results = svmad_f32_m(predicate, diff, diff, results);
+        svst1_f32(predicate, float_result + i, results);
         i += num_floats_per_vector;
     } while (i < 256);
 #else
@@ -126,26 +118,23 @@ PQDistanceFloat256(const void* single_dim_centers, float single_dim_val, void* r
 float
 FP32ComputeIP(const float* RESTRICT query, const float* RESTRICT codes, uint64_t dim) {
 #if defined(ENABLE_SVE)
-    svfloat32_t sum_vec = svdup_f32(0.0f);
+    svfloat32_t sum = svdup_f32(0.0f);
     uint64_t i = 0;
 
     const uint64_t step = svcntw();
 
-    svbool_t pg = svwhilelt_b32(i, dim);
+    svbool_t predicate = svwhilelt_b32(i, dim);
     do {
-        svprfw(svptrue_b32(), query + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b32(), codes + i + step, SV_PLDL1KEEP);
+        svfloat32_t query_vec = svld1_f32(predicate, query + i);
+        svfloat32_t codes_vec = svld1_f32(predicate, codes + i);
 
-        svfloat32_t q_vec = svld1_f32(pg, query + i);
-        svfloat32_t c_vec = svld1_f32(pg, codes + i);
-
-        sum_vec = svmla_f32_m(pg, sum_vec, q_vec, c_vec);
+        sum = svmla_f32_m(predicate, sum, query_vec, codes_vec);
 
         i += step;
-        pg = svwhilelt_b32(i, dim);
-    } while (svptest_first(svptrue_b32(), pg));
+        predicate = svwhilelt_b32(i, dim);
+    } while (svptest_first(svptrue_b32(), predicate));
 
-    return svaddv_f32(svptrue_b32(), sum_vec);
+    return svaddv_f32(svptrue_b32(), sum);
 #else
     return neon::FP32ComputeIP(query, codes, dim);
 #endif
@@ -154,27 +143,24 @@ FP32ComputeIP(const float* RESTRICT query, const float* RESTRICT codes, uint64_t
 float
 FP32ComputeL2Sqr(const float* RESTRICT query, const float* RESTRICT codes, uint64_t dim) {
 #if defined(ENABLE_SVE)
-    svfloat32_t sum_vec = svdup_f32(0.0f);
+    svfloat32_t sum = svdup_f32(0.0f);
     uint64_t i = 0;
     const uint64_t step = svcntw();
 
-    svbool_t pg = svwhilelt_b32(i, dim);
+    svbool_t predicate = svwhilelt_b32(i, dim);
     do {
-        svprfw(svptrue_b32(), query + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b32(), codes + i + step, SV_PLDL1KEEP);
+        svfloat32_t query_vec = svld1_f32(predicate, query + i);
+        svfloat32_t codes_vec = svld1_f32(predicate, codes + i);
 
-        svfloat32_t q_vec = svld1_f32(pg, query + i);
-        svfloat32_t c_vec = svld1_f32(pg, codes + i);
+        svfloat32_t diff = svsub_f32_z(predicate, query_vec, codes_vec);
 
-        svfloat32_t diff = svsub_f32_z(pg, q_vec, c_vec);
-
-        sum_vec = svmla_f32_m(pg, sum_vec, diff, diff);
+        sum = svmla_f32_m(predicate, sum, diff, diff);
 
         i += step;
-        pg = svwhilelt_b32(i, dim);
-    } while (svptest_first(svptrue_b32(), pg));
+        predicate = svwhilelt_b32(i, dim);
+    } while (svptest_first(svptrue_b32(), predicate));
 
-    return svaddv_f32(svptrue_b32(), sum_vec);
+    return svaddv_f32(svptrue_b32(), sum);
 #else
     return neon::FP32ComputeL2Sqr(query, codes, dim);
 #endif
@@ -193,44 +179,38 @@ FP32ComputeIPBatch4(const float* RESTRICT query,
                     float& result4) {
 #if defined(ENABLE_SVE)
 
-    svfloat32_t res1_vec = svdup_f32(0.0f);
-    svfloat32_t res2_vec = svdup_f32(0.0f);
-    svfloat32_t res3_vec = svdup_f32(0.0f);
-    svfloat32_t res4_vec = svdup_f32(0.0f);
+    svfloat32_t sum1 = svdup_f32(0.0f);
+    svfloat32_t sum2 = svdup_f32(0.0f);
+    svfloat32_t sum3 = svdup_f32(0.0f);
+    svfloat32_t sum4 = svdup_f32(0.0f);
 
     uint64_t i = 0;
     const uint64_t step = svcntw();
 
-    svbool_t pg = svwhilelt_b32(i, dim);
+    svbool_t predicate = svwhilelt_b32(i, dim);
     do {
-        svprfw(svptrue_b32(), query + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b32(), codes1 + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b32(), codes2 + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b32(), codes3 + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b32(), codes4 + i + step, SV_PLDL1KEEP);
+        svfloat32_t query_vec = svld1_f32(predicate, query + i);
 
-        svfloat32_t q_vec = svld1_f32(pg, query + i);
+        svfloat32_t codes1_vec = svld1_f32(predicate, codes1 + i);
+        sum1 = svmla_f32_m(predicate, sum1, query_vec, codes1_vec);
 
-        svfloat32_t c1_vec = svld1_f32(pg, codes1 + i);
-        res1_vec = svmla_f32_m(pg, res1_vec, q_vec, c1_vec);
+        svfloat32_t codes2_vec = svld1_f32(predicate, codes2 + i);
+        sum2 = svmla_f32_m(predicate, sum2, query_vec, codes2_vec);
 
-        svfloat32_t c2_vec = svld1_f32(pg, codes2 + i);
-        res2_vec = svmla_f32_m(pg, res2_vec, q_vec, c2_vec);
+        svfloat32_t codes3_vec = svld1_f32(predicate, codes3 + i);
+        sum3 = svmla_f32_m(predicate, sum3, query_vec, codes3_vec);
 
-        svfloat32_t c3_vec = svld1_f32(pg, codes3 + i);
-        res3_vec = svmla_f32_m(pg, res3_vec, q_vec, c3_vec);
-
-        svfloat32_t c4_vec = svld1_f32(pg, codes4 + i);
-        res4_vec = svmla_f32_m(pg, res4_vec, q_vec, c4_vec);
+        svfloat32_t codes4_vec = svld1_f32(predicate, codes4 + i);
+        sum4 = svmla_f32_m(predicate, sum4, query_vec, codes4_vec);
 
         i += step;
-        pg = svwhilelt_b32(i, dim);
-    } while (svptest_first(svptrue_b32(), pg));
+        predicate = svwhilelt_b32(i, dim);
+    } while (svptest_first(svptrue_b32(), predicate));
 
-    result1 = svaddv_f32(svptrue_b32(), res1_vec);
-    result2 = svaddv_f32(svptrue_b32(), res2_vec);
-    result3 = svaddv_f32(svptrue_b32(), res3_vec);
-    result4 = svaddv_f32(svptrue_b32(), res4_vec);
+    result1 = svaddv_f32(svptrue_b32(), sum1);
+    result2 = svaddv_f32(svptrue_b32(), sum2);
+    result3 = svaddv_f32(svptrue_b32(), sum3);
+    result4 = svaddv_f32(svptrue_b32(), sum4);
 #else
     neon::FP32ComputeIPBatch4(
         query, dim, codes1, codes2, codes3, codes4, result1, result2, result3, result4);
@@ -249,48 +229,42 @@ FP32ComputeL2SqrBatch4(const float* RESTRICT query,
                        float& result3,
                        float& result4) {
 #if defined(ENABLE_SVE)
-    svfloat32_t res1_vec = svdup_f32(0.0f);
-    svfloat32_t res2_vec = svdup_f32(0.0f);
-    svfloat32_t res3_vec = svdup_f32(0.0f);
-    svfloat32_t res4_vec = svdup_f32(0.0f);
+    svfloat32_t sum1 = svdup_f32(0.0f);
+    svfloat32_t sum2 = svdup_f32(0.0f);
+    svfloat32_t sum3 = svdup_f32(0.0f);
+    svfloat32_t sum4 = svdup_f32(0.0f);
 
     uint64_t i = 0;
     const uint64_t step = svcntw();
 
-    svbool_t pg = svwhilelt_b32(i, dim);
+    svbool_t predicate = svwhilelt_b32(i, dim);
     do {
-        svprfw(svptrue_b32(), query + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b32(), codes1 + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b32(), codes2 + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b32(), codes3 + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b32(), codes4 + i + step, SV_PLDL1KEEP);
+        svfloat32_t query_vec = svld1_f32(predicate, query + i);
 
-        svfloat32_t q_vec = svld1_f32(pg, query + i);
+        svfloat32_t codes1_vec = svld1_f32(predicate, codes1 + i);
+        svfloat32_t diff1 = svsub_f32_z(predicate, query_vec, codes1_vec);
+        sum1 = svmla_f32_m(predicate, sum1, diff1, diff1);
 
-        svfloat32_t c1_vec = svld1_f32(pg, codes1 + i);
-        svfloat32_t d1_vec = svsub_f32_z(pg, q_vec, c1_vec);
-        res1_vec = svmla_f32_m(pg, res1_vec, d1_vec, d1_vec);
+        svfloat32_t codes2_vec = svld1_f32(predicate, codes2 + i);
+        svfloat32_t diff2 = svsub_f32_z(predicate, query_vec, codes2_vec);
+        sum2 = svmla_f32_m(predicate, sum2, diff2, diff2);
 
-        svfloat32_t c2_vec = svld1_f32(pg, codes2 + i);
-        svfloat32_t d2_vec = svsub_f32_z(pg, q_vec, c2_vec);
-        res2_vec = svmla_f32_m(pg, res2_vec, d2_vec, d2_vec);
+        svfloat32_t codes3_vec = svld1_f32(predicate, codes3 + i);
+        svfloat32_t diff3 = svsub_f32_z(predicate, query_vec, codes3_vec);
+        sum3 = svmla_f32_m(predicate, sum3, diff3, diff3);
 
-        svfloat32_t c3_vec = svld1_f32(pg, codes3 + i);
-        svfloat32_t d3_vec = svsub_f32_z(pg, q_vec, c3_vec);
-        res3_vec = svmla_f32_m(pg, res3_vec, d3_vec, d3_vec);
-
-        svfloat32_t c4_vec = svld1_f32(pg, codes4 + i);
-        svfloat32_t d4_vec = svsub_f32_z(pg, q_vec, c4_vec);
-        res4_vec = svmla_f32_m(pg, res4_vec, d4_vec, d4_vec);
+        svfloat32_t codes4_vec = svld1_f32(predicate, codes4 + i);
+        svfloat32_t diff4 = svsub_f32_z(predicate, query_vec, codes4_vec);
+        sum4 = svmla_f32_m(predicate, sum4, diff4, diff4);
 
         i += step;
-        pg = svwhilelt_b32(i, dim);
-    } while (svptest_first(svptrue_b32(), pg));
+        predicate = svwhilelt_b32(i, dim);
+    } while (svptest_first(svptrue_b32(), predicate));
 
-    result1 = svaddv_f32(svptrue_b32(), res1_vec);
-    result2 = svaddv_f32(svptrue_b32(), res2_vec);
-    result3 = svaddv_f32(svptrue_b32(), res3_vec);
-    result4 = svaddv_f32(svptrue_b32(), res4_vec);
+    result1 = svaddv_f32(svptrue_b32(), sum1);
+    result2 = svaddv_f32(svptrue_b32(), sum2);
+    result3 = svaddv_f32(svptrue_b32(), sum3);
+    result4 = svaddv_f32(svptrue_b32(), sum4);
 #else
     neon::FP32ComputeL2SqrBatch4(
         query, dim, codes1, codes2, codes3, codes4, result1, result2, result3, result4);
@@ -302,16 +276,16 @@ FP32Sub(const float* x, const float* y, float* z, uint64_t dim) {
 #if defined(ENABLE_SVE)
     uint64_t i = 0;
     const uint64_t step = svcntw();
-    svbool_t pg = svwhilelt_b32(i, dim);
+    svbool_t predicate = svwhilelt_b32(i, dim);
     do {
-        svfloat32_t x_vec = svld1_f32(pg, x + i);
-        svfloat32_t y_vec = svld1_f32(pg, y + i);
-        svfloat32_t z_vec = svsub_f32_z(pg, x_vec, y_vec);
-        svst1_f32(pg, z + i, z_vec);
+        svfloat32_t x_vec = svld1_f32(predicate, x + i);
+        svfloat32_t y_vec = svld1_f32(predicate, y + i);
+        svfloat32_t result = svsub_f32_z(predicate, x_vec, y_vec);
+        svst1_f32(predicate, z + i, result);
 
         i += step;
-        pg = svwhilelt_b32(i, dim);
-    } while (svptest_first(svptrue_b32(), pg));
+        predicate = svwhilelt_b32(i, dim);
+    } while (svptest_first(svptrue_b32(), predicate));
 #else
     neon::FP32Sub(x, y, z, dim);
 #endif
@@ -322,16 +296,16 @@ FP32Add(const float* x, const float* y, float* z, uint64_t dim) {
 #if defined(ENABLE_SVE)
     uint64_t i = 0;
     const uint64_t step = svcntw();
-    svbool_t pg = svwhilelt_b32(i, dim);
+    svbool_t predicate = svwhilelt_b32(i, dim);
     do {
-        svfloat32_t x_vec = svld1_f32(pg, x + i);
-        svfloat32_t y_vec = svld1_f32(pg, y + i);
-        svfloat32_t z_vec = svadd_f32_z(pg, x_vec, y_vec);
-        svst1_f32(pg, z + i, z_vec);
+        svfloat32_t x_vec = svld1_f32(predicate, x + i);
+        svfloat32_t y_vec = svld1_f32(predicate, y + i);
+        svfloat32_t result = svadd_f32_z(predicate, x_vec, y_vec);
+        svst1_f32(predicate, z + i, result);
 
         i += step;
-        pg = svwhilelt_b32(i, dim);
-    } while (svptest_first(svptrue_b32(), pg));
+        predicate = svwhilelt_b32(i, dim);
+    } while (svptest_first(svptrue_b32(), predicate));
 #else
     neon::FP32Add(x, y, z, dim);
 #endif
@@ -342,16 +316,16 @@ FP32Mul(const float* x, const float* y, float* z, uint64_t dim) {
 #if defined(ENABLE_SVE)
     uint64_t i = 0;
     const uint64_t step = svcntw();
-    svbool_t pg = svwhilelt_b32(i, dim);
+    svbool_t predicate = svwhilelt_b32(i, dim);
     do {
-        svfloat32_t x_vec = svld1_f32(pg, x + i);
-        svfloat32_t y_vec = svld1_f32(pg, y + i);
-        svfloat32_t z_vec = svmul_f32_z(pg, x_vec, y_vec);
-        svst1_f32(pg, z + i, z_vec);
+        svfloat32_t x_vec = svld1_f32(predicate, x + i);
+        svfloat32_t y_vec = svld1_f32(predicate, y + i);
+        svfloat32_t result = svmul_f32_z(predicate, x_vec, y_vec);
+        svst1_f32(predicate, z + i, result);
 
         i += step;
-        pg = svwhilelt_b32(i, dim);
-    } while (svptest_first(svptrue_b32(), pg));
+        predicate = svwhilelt_b32(i, dim);
+    } while (svptest_first(svptrue_b32(), predicate));
 #else
     neon::FP32Mul(x, y, z, dim);
 #endif
@@ -362,16 +336,16 @@ FP32Div(const float* x, const float* y, float* z, uint64_t dim) {
 #if defined(ENABLE_SVE)
     uint64_t i = 0;
     const uint64_t step = svcntw();
-    svbool_t pg = svwhilelt_b32(i, dim);
+    svbool_t predicate = svwhilelt_b32(i, dim);
     do {
-        svfloat32_t x_vec = svld1_f32(pg, x + i);
-        svfloat32_t y_vec = svld1_f32(pg, y + i);
-        svfloat32_t z_vec = svdiv_f32_z(pg, x_vec, y_vec);
-        svst1_f32(pg, z + i, z_vec);
+        svfloat32_t x_vec = svld1_f32(predicate, x + i);
+        svfloat32_t y_vec = svld1_f32(predicate, y + i);
+        svfloat32_t result = svdiv_f32_z(predicate, x_vec, y_vec);
+        svst1_f32(predicate, z + i, result);
 
         i += step;
-        pg = svwhilelt_b32(i, dim);
-    } while (svptest_first(svptrue_b32(), pg));
+        predicate = svwhilelt_b32(i, dim);
+    } while (svptest_first(svptrue_b32(), predicate));
 #else
     neon::FP32Div(x, y, z, dim);
 #endif
@@ -380,20 +354,20 @@ FP32Div(const float* x, const float* y, float* z, uint64_t dim) {
 float
 FP32ReduceAdd(const float* x, uint64_t dim) {
 #if defined(ENABLE_SVE)
-    svfloat32_t sum_vec = svdup_f32(0.0f);
+    svfloat32_t sum = svdup_f32(0.0f);
     uint64_t i = 0;
     const uint64_t step = svcntw();
-    svbool_t pg = svwhilelt_b32(i, dim);
+    svbool_t predicate = svwhilelt_b32(i, dim);
     do {
-        svfloat32_t x_vec = svld1_f32(pg, x + i);
+        svfloat32_t x_vec = svld1_f32(predicate, x + i);
 
-        sum_vec = svadd_f32_m(pg, sum_vec, x_vec);
+        sum = svadd_f32_m(predicate, sum, x_vec);
 
         i += step;
-        pg = svwhilelt_b32(i, dim);
-    } while (svptest_first(svptrue_b32(), pg));
+        predicate = svwhilelt_b32(i, dim);
+    } while (svptest_first(svptrue_b32(), predicate));
 
-    return svaddv_f32(svptrue_b32(), sum_vec);
+    return svaddv_f32(svptrue_b32(), sum);
 #else
     return neon::FP32ReduceAdd(x, dim);
 #endif
@@ -401,31 +375,30 @@ FP32ReduceAdd(const float* x, uint64_t dim) {
 
 float
 BF16ComputeIP(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, uint64_t dim) {
-#if defined(__ARM_FEATURE_SVE_BF16)
-    const bfloat16_t* query_bf16 = (const bfloat16_t*)query;
-    const bfloat16_t* codes_bf16 = (const bfloat16_t*)codes;
+#if defined(ENABLE_SVE)
+    auto* query_bf16 = reinterpret_cast<const uint16_t*>(query);
+    auto* codes_bf16 = reinterpret_cast<const uint16_t*>(codes);
 
-    svfloat32_t sum_vec = svdup_f32(0.0f);
+    svfloat32_t sum = svdup_n_f32(0.0f);
     uint64_t i = 0;
-
-    const uint64_t step = svcnth();
-
-    svbool_t pg = svwhilelt_b16(i, dim);
+    uint64_t step = svcntw();
+    svbool_t predicate = svwhilelt_b32(i, dim);
     do {
-        svprfw(svptrue_b16(), query_bf16 + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b16(), codes_bf16 + i + step, SV_PLDL1KEEP);
+        svuint32_t query_u32 = svld1uh_u32(predicate, &query_bf16[i]);
+        svuint32_t codes_u32 = svld1uh_u32(predicate, &codes_bf16[i]);
 
-        svbfloat16_t q_vec = svld1_bf16(pg, query_bf16 + i);
-        svbfloat16_t c_vec = svld1_bf16(pg, codes_bf16 + i);
+        query_u32 = svlsl_n_u32_x(predicate, query_u32, 16);
+        codes_u32 = svlsl_n_u32_x(predicate, codes_u32, 16);
 
-        sum_vec =
-            svmla_f32_m(pg, sum_vec, svcvt_f32_bf16_z(pg, q_vec), svcvt_f32_bf16_z(pg, c_vec));
+        svfloat32_t query_f32 = svreinterpret_f32_u32(query_u32);
+        svfloat32_t codes_f32 = svreinterpret_f32_u32(codes_u32);
 
+        sum = svmla_f32_x(predicate, sum, query_f32, codes_f32);
         i += step;
-        pg = svwhilelt_b16(i, dim);
-    } while (svptest_first(svptrue_b16(), pg));
+        predicate = svwhilelt_b32(i, dim);
+    } while (svptest_first(svptrue_b32(), predicate));
 
-    return svaddv_f32(svptrue_b32(), sum_vec);
+    return svaddv_f32(svptrue_b32(), sum);
 #else
     return neon::BF16ComputeIP(query, codes, dim);
 #endif
@@ -433,31 +406,31 @@ BF16ComputeIP(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, uint
 
 float
 BF16ComputeL2Sqr(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, uint64_t dim) {
-#if defined(__ARM_FEATURE_SVE_BF16)
-    const bfloat16_t* query_bf16 = (const bfloat16_t*)query;
-    const bfloat16_t* codes_bf16 = (const bfloat16_t*)codes;
-    svfloat32_t sum_vec = svdup_f32(0.0f);
+#if defined(ENABLE_SVE)
+    auto* query_bf16 = reinterpret_cast<const uint16_t*>(query);
+    auto* codes_bf16 = reinterpret_cast<const uint16_t*>(codes);
+
+    svfloat32_t sum = svdup_n_f32(0.0f);
     uint64_t i = 0;
-    const uint64_t step = svcnth();
-
-    svbool_t pg = svwhilelt_b16(i, dim);
+    uint64_t step = svcntw();
+    svbool_t predicate = svwhilelt_b32(i, dim);
     do {
-        svprfw(svptrue_b16(), query_bf16 + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b16(), codes_bf16 + i + step, SV_PLDL1KEEP);
+        svuint32_t query_u32 = svld1uh_u32(predicate, &query_bf16[i]);
+        svuint32_t codes_u32 = svld1uh_u32(predicate, &codes_bf16[i]);
 
-        svbfloat16_t q_vec = svld1_bf16(pg, query_bf16 + i);
-        svbfloat16_t c_vec = svld1_bf16(pg, codes_bf16 + i);
+        query_u32 = svlsl_n_u32_x(predicate, query_u32, 16);
+        codes_u32 = svlsl_n_u32_x(predicate, codes_u32, 16);
 
-        svbfloat16_t diff = svsub_bf16_z(pg, q_vec, c_vec);
-        svfloat32_t diff_f32 = svcvt_f32_bf16_z(pg, diff);
+        svfloat32_t query_f32 = svreinterpret_f32_u32(query_u32);
+        svfloat32_t codes_f32 = svreinterpret_f32_u32(codes_u32);
 
-        sum_vec = svmla_f32_m(pg, sum_vec, diff_f32, diff_f32);
-
+        svfloat32_t diff = svsub_f32_x(predicate, query_f32, codes_f32);
+        sum = svmla_f32_x(predicate, sum, diff, diff);
         i += step;
-        pg = svwhilelt_b16(i, dim);
-    } while (svptest_first(svptrue_b16(), pg));
+        predicate = svwhilelt_b32(i, dim);
+    } while (svptest_first(svptrue_b32(), predicate));
 
-    return svaddv_f32(svptrue_b32(), sum_vec);
+    return svaddv_f32(svptrue_b32(), sum);
 #else
     return neon::BF16ComputeL2Sqr(query, codes, dim);
 #endif
@@ -465,30 +438,36 @@ BF16ComputeL2Sqr(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, u
 
 float
 FP16ComputeIP(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, uint64_t dim) {
-#if defined(__ARM_FEATURE_SVE_FP16)
-    const _Float16* query_f16 = (const _Float16*)query;
-    const _Float16* codes_f16 = (const _Float16*)codes;
+#if defined(ENABLE_SVE)
+    auto* query_fp16 = reinterpret_cast<const __fp16*>(query);
+    auto* codes_fp16 = reinterpret_cast<const __fp16*>(codes);
 
-    svfloat32_t sum_vec = svdup_f32(0.0f);
+    svfloat32_t sum = svdup_n_f32(0.0f);
     uint64_t i = 0;
-
-    const uint64_t step = svcnth();
-
-    svbool_t pg = svwhilelt_b16(i, dim);
+    uint64_t step = svcnth();
+    svbool_t predicate = svwhilelt_b16(i, dim);
     do {
-        svprfw(svptrue_b16(), query_f16 + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b16(), codes_f16 + i + step, SV_PLDL1KEEP);
+        svfloat16_t query_f16 = svld1_f16(predicate, &query_fp16[i]);
+        svfloat16_t codes_f16 = svld1_f16(predicate, &codes_fp16[i]);
 
-        svfloat16_t q_vec = svld1_f16(pg, query_f16 + i);
-        svfloat16_t c_vec = svld1_f16(pg, codes_f16 + i);
+        svbool_t half_predicate = svptrue_pat_b16(SV_POW2);
+        svfloat32_t query_f32_low = svcvt_f32_f16_x(half_predicate, query_f16);
+        svfloat32_t codes_f32_low = svcvt_f32_f16_x(half_predicate, codes_f16);
 
-        sum_vec = svmla_f32_m(pg, sum_vec, svcvt_f32_f16_z(pg, q_vec), svcvt_f32_f16_z(pg, c_vec));
+        svfloat16_t query_f16_high = svreinterpret_f16_u32(
+            svlsr_n_u32_x(svptrue_b32(), svreinterpret_u32_f16(query_f16), 16));
+        svfloat16_t codes_f16_high = svreinterpret_f16_u32(
+            svlsr_n_u32_x(svptrue_b32(), svreinterpret_u32_f16(codes_f16), 16));
+        svfloat32_t query_f32_high = svcvt_f32_f16_x(half_predicate, query_f16_high);
+        svfloat32_t codes_f32_high = svcvt_f32_f16_x(half_predicate, codes_f16_high);
 
+        sum = svmla_f32_x(svptrue_b32(), sum, query_f32_low, codes_f32_low);
+        sum = svmla_f32_x(svptrue_b32(), sum, query_f32_high, codes_f32_high);
         i += step;
-        pg = svwhilelt_b16(i, dim);
-    } while (svptest_first(svptrue_b16(), pg));
+        predicate = svwhilelt_b16(i, dim);
+    } while (svptest_first(svptrue_b32(), predicate));
 
-    return svaddv_f32(svptrue_b32(), sum_vec);
+    return svaddv_f32(svptrue_b32(), sum);
 #else
     return neon::FP16ComputeIP(query, codes, dim);
 #endif
@@ -496,31 +475,40 @@ FP16ComputeIP(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, uint
 
 float
 FP16ComputeL2Sqr(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, uint64_t dim) {
-#if defined(__ARM_FEATURE_SVE_FP16)
-    const _Float16* query_f16 = (const _Float16*)query;
-    const _Float16* codes_f16 = (const _Float16*)codes;
-    svfloat32_t sum_vec = svdup_f32(0.0f);
+#if defined(ENABLE_SVE)
+
+    auto* query_fp16 = reinterpret_cast<const __fp16*>(query);
+    auto* codes_fp16 = reinterpret_cast<const __fp16*>(codes);
+
+    svfloat32_t sum = svdup_n_f32(0.0f);
     uint64_t i = 0;
-    const uint64_t step = svcnth();
-
-    svbool_t pg = svwhilelt_b16(i, dim);
+    uint64_t step = svcnth();
+    svbool_t predicate = svwhilelt_b16(i, dim);
     do {
-        svprfw(svptrue_b16(), query_f16 + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b16(), codes_f16 + i + step, SV_PLDL1KEEP);
+        svfloat16_t query_f16 = svld1_f16(predicate, &query_fp16[i]);
+        svfloat16_t codes_f16 = svld1_f16(predicate, &codes_fp16[i]);
 
-        svfloat16_t q_vec = svld1_f16(pg, query_f16 + i);
-        svfloat16_t c_vec = svld1_f16(pg, codes_f16 + i);
+        svbool_t half_predicate = svptrue_pat_b16(SV_POW2);
+        svfloat32_t query_f32_low = svcvt_f32_f16_x(half_predicate, query_f16);
+        svfloat32_t codes_f32_low = svcvt_f32_f16_x(half_predicate, codes_f16);
 
-        svfloat16_t diff = svsub_f16_z(pg, q_vec, c_vec);
-        svfloat32_t diff_f32 = svcvt_f32_f16_z(pg, diff);
+        svfloat16_t query_f16_high = svreinterpret_f16_u32(
+            svlsr_n_u32_x(svptrue_b32(), svreinterpret_u32_f16(query_f16), 16));
+        svfloat16_t codes_f16_high = svreinterpret_f16_u32(
+            svlsr_n_u32_x(svptrue_b32(), svreinterpret_u32_f16(codes_f16), 16));
+        svfloat32_t query_f32_high = svcvt_f32_f16_x(half_predicate, query_f16_high);
+        svfloat32_t codes_f32_high = svcvt_f32_f16_x(half_predicate, codes_f16_high);
 
-        sum_vec = svmla_f32_m(pg, sum_vec, diff_f32, diff_f32);
+        svfloat32_t diff_low = svsub_f32_x(svptrue_b32(), query_f32_low, codes_f32_low);
+        svfloat32_t diff_high = svsub_f32_x(svptrue_b32(), query_f32_high, codes_f32_high);
 
+        sum = svmla_f32_x(svptrue_b32(), sum, diff_low, diff_low);
+        sum = svmla_f32_x(svptrue_b32(), sum, diff_high, diff_high);
         i += step;
-        pg = svwhilelt_b16(i, dim);
-    } while (svptest_first(svptrue_b16(), pg));
+        predicate = svwhilelt_b16(i, dim);
+    } while (svptest_first(svptrue_b32(), predicate));
 
-    return svaddv_f32(svptrue_b32(), sum_vec);
+    return svaddv_f32(svptrue_b32(), sum);
 #else
     return neon::FP16ComputeL2Sqr(query, codes, dim);
 #endif
@@ -533,35 +521,30 @@ SQ8ComputeIP(const float* RESTRICT query,
              const float* RESTRICT diff,
              uint64_t dim) {
 #if defined(ENABLE_SVE)
-    svfloat32_t sum_vec = svdup_f32(0.0f);
-    svfloat32_t inv_255_vec = svdup_f32(1.0f / 255.0f);
+    svfloat32_t sum = svdup_f32(0.0f);
+    const svfloat32_t scale_factor = svdup_f32(1.0f / 255.0f);
     uint64_t i = 0;
     const uint64_t step = svcntw();
 
-    svbool_t pg = svwhilelt_b32(i, dim);
+    svbool_t predicate = svwhilelt_b32(i, dim);
     do {
-        svprfw(svptrue_b32(), query + i + step, SV_PLDL1KEEP);
-        svprfb(svptrue_b8(), codes + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b32(), lower_bound + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b32(), diff + i + step, SV_PLDL1KEEP);
+        svuint32_t codes_u32 = svld1ub_u32(predicate, codes + i);
+        svfloat32_t codes_f32 = svcvt_f32_u32_z(predicate, codes_u32);
 
-        svuint32_t c_u32_vec = svld1ub_u32(pg, codes + i);
-        svfloat32_t c_f32_vec = svcvt_f32_u32_z(pg, c_u32_vec);
+        svfloat32_t query_vec = svld1_f32(predicate, query + i);
+        svfloat32_t lower_bound_vec = svld1_f32(predicate, lower_bound + i);
+        svfloat32_t diff_vec = svld1_f32(predicate, diff + i);
 
-        svfloat32_t q_vec = svld1_f32(pg, query + i);
-        svfloat32_t lb_vec = svld1_f32(pg, lower_bound + i);
-        svfloat32_t d_vec = svld1_f32(pg, diff + i);
+        svfloat32_t dequantized = svmla_f32_m(
+            predicate, lower_bound_vec, svmul_f32_m(predicate, codes_f32, scale_factor), diff_vec);
 
-        svfloat32_t dequant_vec =
-            svmla_f32_m(pg, lb_vec, svmul_f32_m(pg, c_f32_vec, inv_255_vec), d_vec);
-
-        sum_vec = svmla_f32_m(pg, sum_vec, q_vec, dequant_vec);
+        sum = svmla_f32_m(predicate, sum, query_vec, dequantized);
 
         i += step;
-        pg = svwhilelt_b32(i, dim);
-    } while (svptest_first(svptrue_b32(), pg));
+        predicate = svwhilelt_b32(i, dim);
+    } while (svptest_first(svptrue_b32(), predicate));
 
-    return svaddv_f32(svptrue_b32(), sum_vec);
+    return svaddv_f32(svptrue_b32(), sum);
 #else
     return neon::SQ8ComputeIP(query, codes, lower_bound, diff, dim);
 #endif
@@ -574,35 +557,30 @@ SQ8ComputeL2Sqr(const float* RESTRICT query,
                 const float* RESTRICT diff,
                 uint64_t dim) {
 #if defined(ENABLE_SVE)
-    svfloat32_t sum_vec = svdup_f32(0.0f);
-    svfloat32_t inv_255_vec = svdup_f32(1.0f / 255.0f);
+    svfloat32_t sum = svdup_f32(0.0f);
+    const svfloat32_t scale_factor = svdup_f32(1.0f / 255.0f);
     uint64_t i = 0;
     const uint64_t step = svcntw();
 
-    svbool_t pg = svwhilelt_b32(i, dim);
+    svbool_t predicate = svwhilelt_b32(i, dim);
     do {
-        svprfw(svptrue_b32(), query + i + step, SV_PLDL1KEEP);
-        svprfb(svptrue_b8(), codes + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b32(), lower_bound + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b32(), diff + i + step, SV_PLDL1KEEP);
+        svuint32_t codes_u32 = svld1ub_u32(predicate, codes + i);
+        svfloat32_t codes_f32 = svcvt_f32_u32_z(predicate, codes_u32);
 
-        svuint32_t c_u32_vec = svld1ub_u32(pg, codes + i);
-        svfloat32_t c_f32_vec = svcvt_f32_u32_z(pg, c_u32_vec);
+        svfloat32_t query_vec = svld1_f32(predicate, query + i);
+        svfloat32_t lower_bound_vec = svld1_f32(predicate, lower_bound + i);
+        svfloat32_t diff_vec = svld1_f32(predicate, diff + i);
 
-        svfloat32_t q_vec = svld1_f32(pg, query + i);
-        svfloat32_t lb_vec = svld1_f32(pg, lower_bound + i);
-        svfloat32_t d_vec = svld1_f32(pg, diff + i);
-
-        svfloat32_t dequant_vec =
-            svmla_f32_m(pg, lb_vec, svmul_f32_m(pg, c_f32_vec, inv_255_vec), d_vec);
-        svfloat32_t diff_vec = svsub_f32_z(pg, q_vec, dequant_vec);
-        sum_vec = svmla_f32_m(pg, sum_vec, diff_vec, diff_vec);
+        svfloat32_t dequantized = svmla_f32_m(
+            predicate, lower_bound_vec, svmul_f32_m(predicate, codes_f32, scale_factor), diff_vec);
+        svfloat32_t delta = svsub_f32_z(predicate, query_vec, dequantized);
+        sum = svmla_f32_m(predicate, sum, delta, delta);
 
         i += step;
-        pg = svwhilelt_b32(i, dim);
-    } while (svptest_first(svptrue_b32(), pg));
+        predicate = svwhilelt_b32(i, dim);
+    } while (svptest_first(svptrue_b32(), predicate));
 
-    return svaddv_f32(svptrue_b32(), sum_vec);
+    return svaddv_f32(svptrue_b32(), sum);
 #else
     return neon::SQ8ComputeL2Sqr(query, codes, lower_bound, diff, dim);
 #endif
@@ -615,38 +593,33 @@ SQ8ComputeCodesIP(const uint8_t* RESTRICT codes1,
                   const float* RESTRICT diff,
                   uint64_t dim) {
 #if defined(ENABLE_SVE)
-    svfloat32_t sum_vec = svdup_f32(0.0f);
-    svfloat32_t inv_255_vec = svdup_f32(1.0f / 255.0f);
+    svfloat32_t sum = svdup_f32(0.0f);
+    const svfloat32_t scale_factor = svdup_f32(1.0f / 255.0f);
     uint64_t i = 0;
     const uint64_t step = svcntw();
 
-    svbool_t pg = svwhilelt_b32(i, dim);
+    svbool_t predicate = svwhilelt_b32(i, dim);
     do {
-        svprfb(svptrue_b8(), codes1 + i + step, SV_PLDL1KEEP);
-        svprfb(svptrue_b8(), codes2 + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b32(), lower_bound + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b32(), diff + i + step, SV_PLDL1KEEP);
+        svuint32_t codes1_u32 = svld1ub_u32(predicate, codes1 + i);
+        svfloat32_t codes1_f32 = svcvt_f32_u32_z(predicate, codes1_u32);
+        svuint32_t codes2_u32 = svld1ub_u32(predicate, codes2 + i);
+        svfloat32_t codes2_f32 = svcvt_f32_u32_z(predicate, codes2_u32);
 
-        svuint32_t c1_u32_vec = svld1ub_u32(pg, codes1 + i);
-        svfloat32_t c1_f32_vec = svcvt_f32_u32_z(pg, c1_u32_vec);
-        svuint32_t c2_u32_vec = svld1ub_u32(pg, codes2 + i);
-        svfloat32_t c2_f32_vec = svcvt_f32_u32_z(pg, c2_u32_vec);
+        svfloat32_t lower_bound_vec = svld1_f32(predicate, lower_bound + i);
+        svfloat32_t diff_vec = svld1_f32(predicate, diff + i);
 
-        svfloat32_t lb_vec = svld1_f32(pg, lower_bound + i);
-        svfloat32_t d_vec = svld1_f32(pg, diff + i);
+        svfloat32_t dequantized1 = svmla_f32_m(
+            predicate, lower_bound_vec, svmul_f32_m(predicate, codes1_f32, scale_factor), diff_vec);
+        svfloat32_t dequantized2 = svmla_f32_m(
+            predicate, lower_bound_vec, svmul_f32_m(predicate, codes2_f32, scale_factor), diff_vec);
 
-        svfloat32_t dequant1_vec =
-            svmla_f32_m(pg, lb_vec, svmul_f32_m(pg, c1_f32_vec, inv_255_vec), d_vec);
-        svfloat32_t dequant2_vec =
-            svmla_f32_m(pg, lb_vec, svmul_f32_m(pg, c2_f32_vec, inv_255_vec), d_vec);
-
-        sum_vec = svmla_f32_m(pg, sum_vec, dequant1_vec, dequant2_vec);
+        sum = svmla_f32_m(predicate, sum, dequantized1, dequantized2);
 
         i += step;
-        pg = svwhilelt_b32(i, dim);
-    } while (svptest_first(svptrue_b32(), pg));
+        predicate = svwhilelt_b32(i, dim);
+    } while (svptest_first(svptrue_b32(), predicate));
 
-    return svaddv_f32(svptrue_b32(), sum_vec);
+    return svaddv_f32(svptrue_b32(), sum);
 #else
     return neon::SQ8ComputeCodesIP(codes1, codes2, lower_bound, diff, dim);
 #endif
@@ -659,39 +632,34 @@ SQ8ComputeCodesL2Sqr(const uint8_t* RESTRICT codes1,
                      const float* RESTRICT diff,
                      uint64_t dim) {
 #if defined(ENABLE_SVE)
-    svfloat32_t sum_vec = svdup_f32(0.0f);
-    svfloat32_t inv_255_vec = svdup_f32(1.0f / 255.0f);
+    svfloat32_t sum = svdup_f32(0.0f);
+    const svfloat32_t scale_factor = svdup_f32(1.0f / 255.0f);
     uint64_t i = 0;
     const uint64_t step = svcntw();
 
-    svbool_t pg = svwhilelt_b32(i, dim);
+    svbool_t predicate = svwhilelt_b32(i, dim);
     do {
-        svprfb(svptrue_b8(), codes1 + i + step, SV_PLDL1KEEP);
-        svprfb(svptrue_b8(), codes2 + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b32(), lower_bound + i + step, SV_PLDL1KEEP);
-        svprfw(svptrue_b32(), diff + i + step, SV_PLDL1KEEP);
+        svuint32_t codes1_u32 = svld1ub_u32(predicate, codes1 + i);
+        svfloat32_t codes1_f32 = svcvt_f32_u32_z(predicate, codes1_u32);
+        svuint32_t codes2_u32 = svld1ub_u32(predicate, codes2 + i);
+        svfloat32_t codes2_f32 = svcvt_f32_u32_z(predicate, codes2_u32);
 
-        svuint32_t c1_u32_vec = svld1ub_u32(pg, codes1 + i);
-        svfloat32_t c1_f32_vec = svcvt_f32_u32_z(pg, c1_u32_vec);
-        svuint32_t c2_u32_vec = svld1ub_u32(pg, codes2 + i);
-        svfloat32_t c2_f32_vec = svcvt_f32_u32_z(pg, c2_u32_vec);
+        svfloat32_t lower_bound_vec = svld1_f32(predicate, lower_bound + i);
+        svfloat32_t diff_vec = svld1_f32(predicate, diff + i);
 
-        svfloat32_t lb_vec = svld1_f32(pg, lower_bound + i);
-        svfloat32_t d_vec = svld1_f32(pg, diff + i);
+        svfloat32_t dequantized1 = svmla_f32_m(
+            predicate, lower_bound_vec, svmul_f32_m(predicate, codes1_f32, scale_factor), diff_vec);
+        svfloat32_t dequantized2 = svmla_f32_m(
+            predicate, lower_bound_vec, svmul_f32_m(predicate, codes2_f32, scale_factor), diff_vec);
 
-        svfloat32_t dequant1_vec =
-            svmla_f32_m(pg, lb_vec, svmul_f32_m(pg, c1_f32_vec, inv_255_vec), d_vec);
-        svfloat32_t dequant2_vec =
-            svmla_f32_m(pg, lb_vec, svmul_f32_m(pg, c2_f32_vec, inv_255_vec), d_vec);
-
-        svfloat32_t diff_vec = svsub_f32_z(pg, dequant1_vec, dequant2_vec);
-        sum_vec = svmla_f32_m(pg, sum_vec, diff_vec, diff_vec);
+        svfloat32_t delta = svsub_f32_z(predicate, dequantized1, dequantized2);
+        sum = svmla_f32_m(predicate, sum, delta, delta);
 
         i += step;
-        pg = svwhilelt_b32(i, dim);
-    } while (svptest_first(svptrue_b32(), pg));
+        predicate = svwhilelt_b32(i, dim);
+    } while (svptest_first(svptrue_b32(), predicate));
 
-    return svaddv_f32(svptrue_b32(), sum_vec);
+    return svaddv_f32(svptrue_b32(), sum);
 #else
     return neon::SQ8ComputeCodesL2Sqr(codes1, codes2, lower_bound, diff, dim);
 #endif
@@ -704,57 +672,51 @@ SQ4ComputeIP(const float* RESTRICT query,
              const float* RESTRICT diff,
              uint64_t dim) {
 #if defined(ENABLE_SVE)
-    svfloat32_t z_result_vec = svdup_f32(0.0f);
-    const svfloat32_t z_inv_15 = svdup_f32(1.0f / 15.0f);
-    const uint64_t vl = svcntw();
-    const svbool_t pg_all = svptrue_b32();
+    svfloat32_t sum = svdup_f32(0.0f);
+    const svfloat32_t scale_factor = svdup_f32(1.0f / 15.0f);
+    const uint64_t step = svcntw();
+    uint64_t i = 0;
+    const svbool_t predicate = svwhilelt_b32(i, dim);
 
-    const svuint32_t z_base_indices = svindex_u32(0, 1);
-    const svuint32_t z_even_elem_indices = svmul_n_u32_x(pg_all, z_base_indices, 2);
-    const svuint32_t z_even_byte_offsets =
-        svmul_n_u32_x(pg_all, z_even_elem_indices, sizeof(float));
-    const svuint32_t z_odd_elem_indices = svadd_n_u32_x(pg_all, z_even_elem_indices, 1);
-    const svuint32_t z_odd_byte_offsets = svmul_n_u32_x(pg_all, z_odd_elem_indices, sizeof(float));
+    for (; i + 2 * step <= dim; i += 2 * step) {
+        svfloat32x2_t query_pair = svld2_f32(predicate, &query[i]);
+        svfloat32x2_t lower_bound_pair = svld2_f32(predicate, &lower_bound[i]);
+        svfloat32x2_t diff_pair = svld2_f32(predicate, &diff[i]);
 
-    uint64_t d = 0;
-    for (; d + 2 * vl <= dim; d += 2 * vl) {
-        const svfloat32_t z_query_even =
-            svld1_gather_u32offset_f32(pg_all, &query[d], z_even_byte_offsets);
-        const svfloat32_t z_query_odd =
-            svld1_gather_u32offset_f32(pg_all, &query[d], z_odd_byte_offsets);
-        const svfloat32_t z_lower_even =
-            svld1_gather_u32offset_f32(pg_all, &lower_bound[d], z_even_byte_offsets);
-        const svfloat32_t z_lower_odd =
-            svld1_gather_u32offset_f32(pg_all, &lower_bound[d], z_odd_byte_offsets);
-        const svfloat32_t z_diff_even =
-            svld1_gather_u32offset_f32(pg_all, &diff[d], z_even_byte_offsets);
+        svfloat32_t query_even = svget2_f32(query_pair, 0);
+        svfloat32_t query_odd = svget2_f32(query_pair, 1);
+        svfloat32_t lower_bound_even = svget2_f32(lower_bound_pair, 0);
+        svfloat32_t lower_bound_odd = svget2_f32(lower_bound_pair, 1);
+        svfloat32_t diff_even = svget2_f32(diff_pair, 0);
+        svfloat32_t diff_odd = svget2_f32(diff_pair, 1);
 
-        const svfloat32_t z_diff_odd =
-            svld1_gather_u32offset_f32(pg_all, &diff[d], z_odd_byte_offsets);
+        svuint32_t packed_codes = svld1ub_u32(predicate, &codes[i / 2]);
+        svuint32_t codes_even_u32 = svand_n_u32_x(predicate, packed_codes, 0x0F);
+        svuint32_t codes_odd_u32 = svlsr_n_u32_x(predicate, packed_codes, 4);
+        svfloat32_t codes_even_f32 = svcvt_f32_u32_x(predicate, codes_even_u32);
+        svfloat32_t codes_odd_f32 = svcvt_f32_u32_x(predicate, codes_odd_u32);
 
-        const svuint32_t z_packed_u32 = svld1ub_u32(pg_all, &codes[d / 2]);
+        svfloat32_t dequantized_even =
+            svmla_f32_x(predicate,
+                        lower_bound_even,
+                        svmul_f32_x(predicate, codes_even_f32, scale_factor),
+                        diff_even);
+        svfloat32_t dequantized_odd =
+            svmla_f32_x(predicate,
+                        lower_bound_odd,
+                        svmul_f32_x(predicate, codes_odd_f32, scale_factor),
+                        diff_odd);
 
-        const svuint32_t z_codes_even_u32 = svand_n_u32_x(pg_all, z_packed_u32, 0x0F);
-        const svuint32_t z_codes_odd_u32 = svlsr_n_u32_x(pg_all, z_packed_u32, 4);
-
-        const svfloat32_t z_codes_even_f32 = svcvt_f32_u32_x(pg_all, z_codes_even_u32);
-        const svfloat32_t z_codes_odd_f32 = svcvt_f32_u32_x(pg_all, z_codes_odd_u32);
-
-        svfloat32_t z_y_even = svmla_f32_x(
-            pg_all, z_lower_even, svmul_f32_x(pg_all, z_codes_even_f32, z_inv_15), z_diff_even);
-        svfloat32_t z_y_odd = svmla_f32_x(
-            pg_all, z_lower_odd, svmul_f32_x(pg_all, z_codes_odd_f32, z_inv_15), z_diff_odd);
-
-        z_result_vec = svmla_f32_x(pg_all, z_result_vec, z_query_even, z_y_even);
-        z_result_vec = svmla_f32_x(pg_all, z_result_vec, z_query_odd, z_y_odd);
+        sum = svmla_f32_x(predicate, sum, query_even, dequantized_even);
+        sum = svmla_f32_x(predicate, sum, query_odd, dequantized_odd);
     }
 
-    if (d < dim) {
-        return svaddv_f32(pg_all, z_result_vec) +
-               neon::SQ4ComputeIP(&query[d], &codes[d / 2], &lower_bound[d], &diff[d], dim - d);
+    if (i < dim) {
+        return svaddv_f32(predicate, sum) +
+               neon::SQ4ComputeIP(&query[i], &codes[i / 2], &lower_bound[i], &diff[i], dim - i);
     }
 
-    return svaddv_f32(pg_all, z_result_vec);
+    return svaddv_f32(predicate, sum);
 #else
     return neon::SQ4ComputeIP(query, codes, lower_bound, diff, dim);
 #endif
@@ -767,61 +729,54 @@ SQ4ComputeL2Sqr(const float* RESTRICT query,
                 const float* RESTRICT diff,
                 uint64_t dim) {
 #if defined(ENABLE_SVE)
-    svfloat32_t z_result_vec = svdup_f32(0.0f);
-    const svfloat32_t z_inv_15 = svdup_f32(1.0f / 15.0f);
-    const uint64_t vl = svcntw();
-    const svbool_t pg_all = svptrue_b32();
+    svfloat32_t sum = svdup_f32(0.0f);
+    const svfloat32_t scale_factor = svdup_f32(1.0f / 15.0f);
+    const uint64_t step = svcntw();
+    const svbool_t predicate = svptrue_b32();
 
-    const svuint32_t z_base_indices = svindex_u32(0, 1);
-    const svuint32_t z_even_elem_indices = svmul_n_u32_x(pg_all, z_base_indices, 2);
-    const svuint32_t z_even_byte_offsets =
-        svmul_n_u32_x(pg_all, z_even_elem_indices, sizeof(float));
-    const svuint32_t z_odd_elem_indices = svadd_n_u32_x(pg_all, z_even_elem_indices, 1);
-    const svuint32_t z_odd_byte_offsets = svmul_n_u32_x(pg_all, z_odd_elem_indices, sizeof(float));
+    uint64_t i = 0;
+    for (; i + 2 * step <= dim; i += 2 * step) {
+        svfloat32x2_t query_pair = svld2_f32(predicate, &query[i]);
+        svfloat32x2_t lower_bound_pair = svld2_f32(predicate, &lower_bound[i]);
+        svfloat32x2_t diff_pair = svld2_f32(predicate, &diff[i]);
 
-    uint64_t d = 0;
-    for (; d + 2 * vl <= dim; d += 2 * vl) {
-        const svfloat32_t z_query_even =
-            svld1_gather_u32offset_f32(pg_all, &query[d], z_even_byte_offsets);
-        const svfloat32_t z_query_odd =
-            svld1_gather_u32offset_f32(pg_all, &query[d], z_odd_byte_offsets);
-        const svfloat32_t z_lower_even =
-            svld1_gather_u32offset_f32(pg_all, &lower_bound[d], z_even_byte_offsets);
-        const svfloat32_t z_lower_odd =
-            svld1_gather_u32offset_f32(pg_all, &lower_bound[d], z_odd_byte_offsets);
-        const svfloat32_t z_diff_even_param =
-            svld1_gather_u32offset_f32(pg_all, &diff[d], z_even_byte_offsets);
-        const svfloat32_t z_diff_odd_param =
-            svld1_gather_u32offset_f32(pg_all, &diff[d], z_odd_byte_offsets);
+        svfloat32_t query_even = svget2_f32(query_pair, 0);
+        svfloat32_t query_odd = svget2_f32(query_pair, 1);
+        svfloat32_t lower_bound_even = svget2_f32(lower_bound_pair, 0);
+        svfloat32_t lower_bound_odd = svget2_f32(lower_bound_pair, 1);
+        svfloat32_t diff_even = svget2_f32(diff_pair, 0);
+        svfloat32_t diff_odd = svget2_f32(diff_pair, 1);
 
-        const svuint32_t z_packed_u32 = svld1ub_u32(pg_all, &codes[d / 2]);
+        svuint32_t packed_codes = svld1ub_u32(predicate, &codes[i / 2]);
+        svuint32_t codes_even_u32 = svand_n_u32_x(predicate, packed_codes, 0x0F);
+        svuint32_t codes_odd_u32 = svlsr_n_u32_x(predicate, packed_codes, 4);
+        svfloat32_t codes_even_f32 = svcvt_f32_u32_x(predicate, codes_even_u32);
+        svfloat32_t codes_odd_f32 = svcvt_f32_u32_x(predicate, codes_odd_u32);
 
-        const svuint32_t z_codes_even_u32 = svand_n_u32_x(pg_all, z_packed_u32, 0x0F);
-        const svuint32_t z_codes_odd_u32 = svlsr_n_u32_x(pg_all, z_packed_u32, 4);
+        svfloat32_t dequantized_even =
+            svmla_f32_x(predicate,
+                        lower_bound_even,
+                        svmul_f32_x(predicate, codes_even_f32, scale_factor),
+                        diff_even);
+        svfloat32_t dequantized_odd =
+            svmla_f32_x(predicate,
+                        lower_bound_odd,
+                        svmul_f32_x(predicate, codes_odd_f32, scale_factor),
+                        diff_odd);
 
-        const svfloat32_t z_codes_even_f32 = svcvt_f32_u32_x(pg_all, z_codes_even_u32);
-        const svfloat32_t z_codes_odd_f32 = svcvt_f32_u32_x(pg_all, z_codes_odd_u32);
+        svfloat32_t delta_even = svsub_f32_x(predicate, query_even, dequantized_even);
+        svfloat32_t delta_odd = svsub_f32_x(predicate, query_odd, dequantized_odd);
 
-        svfloat32_t z_y_even = svmla_f32_x(pg_all,
-                                           z_lower_even,
-                                           svmul_f32_x(pg_all, z_codes_even_f32, z_inv_15),
-                                           z_diff_even_param);
-        svfloat32_t z_y_odd = svmla_f32_x(
-            pg_all, z_lower_odd, svmul_f32_x(pg_all, z_codes_odd_f32, z_inv_15), z_diff_odd_param);
-
-        svfloat32_t z_diff_even = svsub_f32_x(pg_all, z_query_even, z_y_even);
-        svfloat32_t z_diff_odd = svsub_f32_x(pg_all, z_query_odd, z_y_odd);
-
-        z_result_vec = svmla_f32_x(pg_all, z_result_vec, z_diff_even, z_diff_even);
-        z_result_vec = svmla_f32_x(pg_all, z_result_vec, z_diff_odd, z_diff_odd);
+        sum = svmla_f32_x(predicate, sum, delta_even, delta_even);
+        sum = svmla_f32_x(predicate, sum, delta_odd, delta_odd);
     }
 
-    if (d < dim) {
-        return svaddv_f32(pg_all, z_result_vec) +
-               neon::SQ4ComputeL2Sqr(&query[d], &codes[d / 2], &lower_bound[d], &diff[d], dim - d);
+    if (i < dim) {
+        return svaddv_f32(predicate, sum) +
+               neon::SQ4ComputeL2Sqr(&query[i], &codes[i / 2], &lower_bound[i], &diff[i], dim - i);
     }
 
-    return svaddv_f32(pg_all, z_result_vec);
+    return svaddv_f32(predicate, sum);
 #else
     return neon::SQ4ComputeL2Sqr(query, codes, lower_bound, diff, dim);
 #endif
@@ -834,62 +789,66 @@ SQ4ComputeCodesIP(const uint8_t* RESTRICT codes1,
                   const float* RESTRICT diff,
                   uint64_t dim) {
 #if defined(ENABLE_SVE)
-    svfloat32_t z_result_vec = svdup_f32(0.0f);
-    const svfloat32_t z_inv_15 = svdup_f32(1.0f / 15.0f);
-    const uint64_t vl = svcntw();
-    const svbool_t pg_all = svptrue_b32();
+    svfloat32_t sum = svdup_f32(0.0f);
+    const svfloat32_t scale_factor = svdup_f32(1.0f / 15.0f);
+    const uint64_t step = svcntw();
+    const svbool_t predicate = svptrue_b32();
 
-    const svuint32_t z_base_indices = svindex_u32(0, 1);
-    const svuint32_t z_even_elem_indices = svmul_n_u32_x(pg_all, z_base_indices, 2);
-    const svuint32_t z_even_byte_offsets =
-        svmul_n_u32_x(pg_all, z_even_elem_indices, sizeof(float));
-    const svuint32_t z_odd_elem_indices = svadd_n_u32_x(pg_all, z_even_elem_indices, 1);
-    const svuint32_t z_odd_byte_offsets = svmul_n_u32_x(pg_all, z_odd_elem_indices, sizeof(float));
+    uint64_t i = 0;
+    for (; i + 2 * step <= dim; i += 2 * step) {
+        svfloat32x2_t lower_bound_pair = svld2_f32(predicate, &lower_bound[i]);
+        svfloat32x2_t diff_pair = svld2_f32(predicate, &diff[i]);
 
-    uint64_t d = 0;
-    for (; d + 2 * vl <= dim; d += 2 * vl) {
-        const svfloat32_t z_lower_even =
-            svld1_gather_u32offset_f32(pg_all, &lower_bound[d], z_even_byte_offsets);
-        const svfloat32_t z_lower_odd =
-            svld1_gather_u32offset_f32(pg_all, &lower_bound[d], z_odd_byte_offsets);
-        const svfloat32_t z_diff_even =
-            svld1_gather_u32offset_f32(pg_all, &diff[d], z_even_byte_offsets);
-        const svfloat32_t z_diff_odd =
-            svld1_gather_u32offset_f32(pg_all, &diff[d], z_odd_byte_offsets);
+        svfloat32_t lower_bound_even = svget2_f32(lower_bound_pair, 0);
+        svfloat32_t lower_bound_odd = svget2_f32(lower_bound_pair, 1);
+        svfloat32_t diff_even = svget2_f32(diff_pair, 0);
+        svfloat32_t diff_odd = svget2_f32(diff_pair, 1);
 
-        const svuint32_t z_packed1_u32 = svld1ub_u32(pg_all, &codes1[d / 2]);
-        const svuint32_t z_packed2_u32 = svld1ub_u32(pg_all, &codes2[d / 2]);
+        svuint32_t packed_codes1 = svld1ub_u32(predicate, &codes1[i / 2]);
+        svuint32_t packed_codes2 = svld1ub_u32(predicate, &codes2[i / 2]);
 
-        const svuint32_t z_codes1_even_u32 = svand_n_u32_x(pg_all, z_packed1_u32, 0x0F);
-        const svuint32_t z_codes1_odd_u32 = svlsr_n_u32_x(pg_all, z_packed1_u32, 4);
-        const svuint32_t z_codes2_even_u32 = svand_n_u32_x(pg_all, z_packed2_u32, 0x0F);
-        const svuint32_t z_codes2_odd_u32 = svlsr_n_u32_x(pg_all, z_packed2_u32, 4);
+        svuint32_t codes1_even_u32 = svand_n_u32_x(predicate, packed_codes1, 0x0F);
+        svuint32_t codes1_odd_u32 = svlsr_n_u32_x(predicate, packed_codes1, 4);
+        svuint32_t codes2_even_u32 = svand_n_u32_x(predicate, packed_codes2, 0x0F);
+        svuint32_t codes2_odd_u32 = svlsr_n_u32_x(predicate, packed_codes2, 4);
 
-        const svfloat32_t z_codes1_even_f32 = svcvt_f32_u32_x(pg_all, z_codes1_even_u32);
-        const svfloat32_t z_codes1_odd_f32 = svcvt_f32_u32_x(pg_all, z_codes1_odd_u32);
-        const svfloat32_t z_codes2_even_f32 = svcvt_f32_u32_x(pg_all, z_codes2_even_u32);
-        const svfloat32_t z_codes2_odd_f32 = svcvt_f32_u32_x(pg_all, z_codes2_odd_u32);
+        svfloat32_t codes1_even_f32 = svcvt_f32_u32_x(predicate, codes1_even_u32);
+        svfloat32_t codes1_odd_f32 = svcvt_f32_u32_x(predicate, codes1_odd_u32);
+        svfloat32_t codes2_even_f32 = svcvt_f32_u32_x(predicate, codes2_even_u32);
+        svfloat32_t codes2_odd_f32 = svcvt_f32_u32_x(predicate, codes2_odd_u32);
 
-        svfloat32_t z_y1_even = svmla_f32_x(
-            pg_all, z_lower_even, svmul_f32_x(pg_all, z_codes1_even_f32, z_inv_15), z_diff_even);
-        svfloat32_t z_y1_odd = svmla_f32_x(
-            pg_all, z_lower_odd, svmul_f32_x(pg_all, z_codes1_odd_f32, z_inv_15), z_diff_odd);
-        svfloat32_t z_y2_even = svmla_f32_x(
-            pg_all, z_lower_even, svmul_f32_x(pg_all, z_codes2_even_f32, z_inv_15), z_diff_even);
-        svfloat32_t z_y2_odd = svmla_f32_x(
-            pg_all, z_lower_odd, svmul_f32_x(pg_all, z_codes2_odd_f32, z_inv_15), z_diff_odd);
+        svfloat32_t dequantized1_even =
+            svmla_f32_x(predicate,
+                        lower_bound_even,
+                        svmul_f32_x(predicate, codes1_even_f32, scale_factor),
+                        diff_even);
+        svfloat32_t dequantized1_odd =
+            svmla_f32_x(predicate,
+                        lower_bound_odd,
+                        svmul_f32_x(predicate, codes1_odd_f32, scale_factor),
+                        diff_odd);
+        svfloat32_t dequantized2_even =
+            svmla_f32_x(predicate,
+                        lower_bound_even,
+                        svmul_f32_x(predicate, codes2_even_f32, scale_factor),
+                        diff_even);
+        svfloat32_t dequantized2_odd =
+            svmla_f32_x(predicate,
+                        lower_bound_odd,
+                        svmul_f32_x(predicate, codes2_odd_f32, scale_factor),
+                        diff_odd);
 
-        z_result_vec = svmla_f32_x(pg_all, z_result_vec, z_y1_even, z_y2_even);
-        z_result_vec = svmla_f32_x(pg_all, z_result_vec, z_y1_odd, z_y2_odd);
+        sum = svmla_f32_x(predicate, sum, dequantized1_even, dequantized2_even);
+        sum = svmla_f32_x(predicate, sum, dequantized1_odd, dequantized2_odd);
     }
 
-    if (d < dim) {
-        return svaddv_f32(pg_all, z_result_vec) +
+    if (i < dim) {
+        return svaddv_f32(predicate, sum) +
                neon::SQ4ComputeCodesIP(
-                   &codes1[d / 2], &codes2[d / 2], &lower_bound[d], &diff[d], dim - d);
+                   &codes1[i / 2], &codes2[i / 2], &lower_bound[i], &diff[i], dim - i);
     }
 
-    return svaddv_f32(pg_all, z_result_vec);
+    return svaddv_f32(predicate, sum);
 #else
     return neon::SQ4ComputeCodesIP(codes1, codes2, lower_bound, diff, dim);
 #endif
@@ -902,97 +861,99 @@ SQ4ComputeCodesL2Sqr(const uint8_t* RESTRICT codes1,
                      const float* RESTRICT diff,
                      uint64_t dim) {
 #if defined(ENABLE_SVE)
-    svfloat32_t z_result_vec = svdup_f32(0.0f);
-    const svfloat32_t z_inv_15 = svdup_f32(1.0f / 15.0f);
-    const uint64_t vl = svcntw();
-    const svbool_t pg_all = svptrue_b32();
+    svfloat32_t sum = svdup_f32(0.0f);
+    const svfloat32_t scale_factor = svdup_f32(1.0f / 15.0f);
+    const uint64_t step = svcntw();
+    const svbool_t predicate = svptrue_b32();
 
-    const svuint32_t z_base_indices = svindex_u32(0, 1);
-    const svuint32_t z_even_elem_indices = svmul_n_u32_x(pg_all, z_base_indices, 2);
-    const svuint32_t z_even_byte_offsets =
-        svmul_n_u32_x(pg_all, z_even_elem_indices, sizeof(float));
-    const svuint32_t z_odd_elem_indices = svadd_n_u32_x(pg_all, z_even_elem_indices, 1);
-    const svuint32_t z_odd_byte_offsets = svmul_n_u32_x(pg_all, z_odd_elem_indices, sizeof(float));
+    uint64_t i = 0;
+    for (; i + 2 * step <= dim; i += 2 * step) {
+        svfloat32x2_t lower_bound_pair = svld2_f32(predicate, &lower_bound[i]);
+        svfloat32x2_t diff_pair = svld2_f32(predicate, &diff[i]);
 
-    uint64_t d = 0;
-    for (; d + 2 * vl <= dim; d += 2 * vl) {
-        const svfloat32_t z_lower_even =
-            svld1_gather_u32offset_f32(pg_all, &lower_bound[d], z_even_byte_offsets);
-        const svfloat32_t z_lower_odd =
-            svld1_gather_u32offset_f32(pg_all, &lower_bound[d], z_odd_byte_offsets);
-        const svfloat32_t z_diff_even =
-            svld1_gather_u32offset_f32(pg_all, &diff[d], z_even_byte_offsets);
-        const svfloat32_t z_diff_odd =
-            svld1_gather_u32offset_f32(pg_all, &diff[d], z_odd_byte_offsets);
+        svfloat32_t lower_bound_even = svget2_f32(lower_bound_pair, 0);
+        svfloat32_t lower_bound_odd = svget2_f32(lower_bound_pair, 1);
+        svfloat32_t diff_even = svget2_f32(diff_pair, 0);
+        svfloat32_t diff_odd = svget2_f32(diff_pair, 1);
 
-        const svuint32_t z_packed1_u32 = svld1ub_u32(pg_all, &codes1[d / 2]);
-        const svuint32_t z_packed2_u32 = svld1ub_u32(pg_all, &codes2[d / 2]);
+        svuint32_t packed_codes1 = svld1ub_u32(predicate, &codes1[i / 2]);
+        svuint32_t packed_codes2 = svld1ub_u32(predicate, &codes2[i / 2]);
 
-        const svuint32_t z_codes1_even_u32 = svand_n_u32_x(pg_all, z_packed1_u32, 0x0F);
-        const svuint32_t z_codes1_odd_u32 = svlsr_n_u32_x(pg_all, z_packed1_u32, 4);
-        const svuint32_t z_codes2_even_u32 = svand_n_u32_x(pg_all, z_packed2_u32, 0x0F);
-        const svuint32_t z_codes2_odd_u32 = svlsr_n_u32_x(pg_all, z_packed2_u32, 4);
+        svuint32_t codes1_even_u32 = svand_n_u32_x(predicate, packed_codes1, 0x0F);
+        svuint32_t codes1_odd_u32 = svlsr_n_u32_x(predicate, packed_codes1, 4);
+        svuint32_t codes2_even_u32 = svand_n_u32_x(predicate, packed_codes2, 0x0F);
+        svuint32_t codes2_odd_u32 = svlsr_n_u32_x(predicate, packed_codes2, 4);
 
-        const svfloat32_t z_codes1_even_f32 = svcvt_f32_u32_x(pg_all, z_codes1_even_u32);
-        const svfloat32_t z_codes1_odd_f32 = svcvt_f32_u32_x(pg_all, z_codes1_odd_u32);
-        const svfloat32_t z_codes2_even_f32 = svcvt_f32_u32_x(pg_all, z_codes2_even_u32);
-        const svfloat32_t z_codes2_odd_f32 = svcvt_f32_u32_x(pg_all, z_codes2_odd_u32);
+        svfloat32_t codes1_even_f32 = svcvt_f32_u32_x(predicate, codes1_even_u32);
+        svfloat32_t codes1_odd_f32 = svcvt_f32_u32_x(predicate, codes1_odd_u32);
+        svfloat32_t codes2_even_f32 = svcvt_f32_u32_x(predicate, codes2_even_u32);
+        svfloat32_t codes2_odd_f32 = svcvt_f32_u32_x(predicate, codes2_odd_u32);
 
-        svfloat32_t z_y1_even = svmla_f32_x(
-            pg_all, z_lower_even, svmul_f32_x(pg_all, z_codes1_even_f32, z_inv_15), z_diff_even);
-        svfloat32_t z_y1_odd = svmla_f32_x(
-            pg_all, z_lower_odd, svmul_f32_x(pg_all, z_codes1_odd_f32, z_inv_15), z_diff_odd);
-        svfloat32_t z_y2_even = svmla_f32_x(
-            pg_all, z_lower_even, svmul_f32_x(pg_all, z_codes2_even_f32, z_inv_15), z_diff_even);
-        svfloat32_t z_y2_odd = svmla_f32_x(
-            pg_all, z_lower_odd, svmul_f32_x(pg_all, z_codes2_odd_f32, z_inv_15), z_diff_odd);
+        svfloat32_t dequantized1_even =
+            svmla_f32_x(predicate,
+                        lower_bound_even,
+                        svmul_f32_x(predicate, codes1_even_f32, scale_factor),
+                        diff_even);
+        svfloat32_t dequantized1_odd =
+            svmla_f32_x(predicate,
+                        lower_bound_odd,
+                        svmul_f32_x(predicate, codes1_odd_f32, scale_factor),
+                        diff_odd);
+        svfloat32_t dequantized2_even =
+            svmla_f32_x(predicate,
+                        lower_bound_even,
+                        svmul_f32_x(predicate, codes2_even_f32, scale_factor),
+                        diff_even);
+        svfloat32_t dequantized2_odd =
+            svmla_f32_x(predicate,
+                        lower_bound_odd,
+                        svmul_f32_x(predicate, codes2_odd_f32, scale_factor),
+                        diff_odd);
 
-        svfloat32_t z_diff_res_even = svsub_f32_x(pg_all, z_y1_even, z_y2_even);
-        svfloat32_t z_diff_res_odd = svsub_f32_x(pg_all, z_y1_odd, z_y2_odd);
+        svfloat32_t delta_even = svsub_f32_x(predicate, dequantized1_even, dequantized2_even);
+        svfloat32_t delta_odd = svsub_f32_x(predicate, dequantized1_odd, dequantized2_odd);
 
-        z_result_vec = svmla_f32_x(pg_all, z_result_vec, z_diff_res_even, z_diff_res_even);
-        z_result_vec = svmla_f32_x(pg_all, z_result_vec, z_diff_res_odd, z_diff_res_odd);
+        sum = svmla_f32_x(predicate, sum, delta_even, delta_even);
+        sum = svmla_f32_x(predicate, sum, delta_odd, delta_odd);
     }
 
-    if (d < dim) {
-        return svaddv_f32(pg_all, z_result_vec) +
+    if (i < dim) {
+        return svaddv_f32(predicate, sum) +
                neon::SQ4ComputeCodesL2Sqr(
-                   &codes1[d / 2], &codes2[d / 2], &lower_bound[d], &diff[d], dim - d);
+                   &codes1[i / 2], &codes2[i / 2], &lower_bound[i], &diff[i], dim - i);
     }
 
-    return svaddv_f32(pg_all, z_result_vec);
+    return svaddv_f32(predicate, sum);
 #else
     return neon::SQ4ComputeCodesL2Sqr(codes1, codes2, lower_bound, diff, dim);
 #endif
 }
-
 float
 SQ4UniformComputeCodesIP(const uint8_t* RESTRICT codes1,
                          const uint8_t* RESTRICT codes2,
                          uint64_t dim) {
 #if defined(ENABLE_SVE)
-    svuint32_t sum_vec = svdup_u32(0);
-    uint64_t d = 0;
-    const uint64_t step = svcntb() * 2;  // 修正：每次处理的字节数
+    svuint32_t sum = svdup_u32(0);
+    uint64_t i = 0;
+    const uint64_t step = svcntb() * 2;
+    svbool_t predicate = svwhilelt_b8(i / 2, (dim + 1) / 2);
+    do {
+        svuint8_t packed_codes1 = svld1_u8(predicate, codes1 + i / 2);
+        svuint8_t packed_codes2 = svld1_u8(predicate, codes2 + i / 2);
 
-    while (d < dim) {
-        svbool_t pg_bytes = svwhilelt_b8(d / 2, (dim + 1) / 2);
+        svuint8_t codes1_low = svand_u8_z(predicate, packed_codes1, svdup_u8(0x0F));
+        svuint8_t codes1_high = svlsr_n_u8_z(predicate, packed_codes1, 4);
+        svuint8_t codes2_low = svand_u8_z(predicate, packed_codes2, svdup_u8(0x0F));
+        svuint8_t codes2_high = svlsr_n_u8_z(predicate, packed_codes2, 4);
 
-        svuint8_t packed_codes1 = svld1_u8(pg_bytes, codes1 + d / 2);
-        svuint8_t packed_codes2 = svld1_u8(pg_bytes, codes2 + d / 2);
+        sum = svdot_u32(sum, codes1_low, codes2_low);
+        sum = svdot_u32(sum, codes1_high, codes2_high);
 
-        svuint8_t c1_low_u8 = svand_u8_z(pg_bytes, packed_codes1, svdup_u8(0x0F));
-        svuint8_t c1_high_u8 = svlsr_n_u8_z(pg_bytes, packed_codes1, 4);
-        svuint8_t c2_low_u8 = svand_u8_z(pg_bytes, packed_codes2, svdup_u8(0x0F));
-        svuint8_t c2_high_u8 = svlsr_n_u8_z(pg_bytes, packed_codes2, 4);
+        i += step;
+        predicate = svwhilelt_b8(i / 2, (dim + 1) / 2);
+    } while (svptest_first(svptrue_b8(), predicate));
 
-        sum_vec = svdot_u32(sum_vec, c1_low_u8, c2_low_u8);
-        sum_vec = svdot_u32(sum_vec, c1_high_u8, c2_high_u8);
-
-        d += step;
-    }
-
-    return static_cast<float>(svaddv_u32(svptrue_b32(), sum_vec));
+    return static_cast<float>(svaddv_u32(svptrue_b32(), sum));
 #else
     return neon::SQ4UniformComputeCodesIP(codes1, codes2, dim);
 #endif
@@ -1003,22 +964,22 @@ SQ8UniformComputeCodesIP(const uint8_t* RESTRICT codes1,
                          const uint8_t* RESTRICT codes2,
                          uint64_t dim) {
 #if defined(ENABLE_SVE)
-    svuint32_t sum_vec = svdup_u32(0);
+    svuint32_t sum = svdup_u32(0);
     uint64_t i = 0;
     const uint64_t step = svcntb();
 
-    svbool_t pg = svwhilelt_b8(i, dim);
+    svbool_t predicate = svwhilelt_b8(i, dim);
     do {
-        svuint8_t c1_u8_vec = svld1_u8(pg, codes1 + i);
-        svuint8_t c2_u8_vec = svld1_u8(pg, codes2 + i);
+        svuint8_t codes1_vec = svld1_u8(predicate, codes1 + i);
+        svuint8_t codes2_vec = svld1_u8(predicate, codes2 + i);
 
-        sum_vec = svdot_u32(sum_vec, c1_u8_vec, c2_u8_vec);
+        sum = svdot_u32(sum, codes1_vec, codes2_vec);
 
         i += step;
-        pg = svwhilelt_b8(i, dim);
-    } while (svptest_first(svptrue_b8(), pg));
+        predicate = svwhilelt_b8(i, dim);
+    } while (svptest_first(svptrue_b8(), predicate));
 
-    return static_cast<float>(svaddv_u32(svptrue_b32(), sum_vec));
+    return static_cast<float>(svaddv_u32(svptrue_b32(), sum));
 #else
     return neon::SQ8UniformComputeCodesIP(codes1, codes2, dim);
 #endif
@@ -1045,28 +1006,27 @@ RaBitQFloatBinaryIP(const float* vector, const uint8_t* bits, uint64_t dim, floa
                remaining_bits);
     }
 
-    uint64_t d = 0;
-    const uint64_t vl = svcntw();
-    svfloat32_t vec_sum = svdup_f32(0.0f);
+    uint64_t i = 0;
+    const uint64_t step = svcntw();
+    svfloat32_t sum = svdup_f32(0.0f);
 
-    const svfloat32_t v_inv = svdup_f32(inv_sqrt_d);
-    const svfloat32_t v_neg_inv = svdup_f32(-inv_sqrt_d);
+    const svfloat32_t positive_val = svdup_f32(inv_sqrt_d);
+    const svfloat32_t negative_val = svdup_f32(-inv_sqrt_d);
+    svbool_t predicate = svwhilelt_b32(i, dim);
+    do {
+        svuint32_t predicate_values = svld1ub_u32(predicate, &predicate_array[i]);
 
-    while (d < dim) {
-        const svbool_t pg = svwhilelt_b32(d, dim);
+        svbool_t bit_mask = svcmpne_n_u32(predicate, predicate_values, 0);
 
-        const svuint32_t v_preds_extended = svld1ub_u32(pg, &predicate_array[d]);
+        svfloat32_t binary_vec = svsel_f32(bit_mask, positive_val, negative_val);
+        svfloat32_t vector_values = svld1_f32(predicate, &vector[i]);
+        sum = svmla_f32_m(predicate, sum, vector_values, binary_vec);
 
-        const svbool_t bit_mask = svcmpne_n_u32(pg, v_preds_extended, 0);
+        i += step;
+        predicate = svwhilelt_b32(i, dim);
+    } while (svptest_first(svptrue_b32(), predicate));
 
-        const svfloat32_t vec_b = svsel_f32(bit_mask, v_inv, v_neg_inv);
-        const svfloat32_t vec_v = svld1_f32(pg, &vector[d]);
-        vec_sum = svmla_f32_m(pg, vec_sum, vec_v, vec_b);
-
-        d += vl;
-    }
-
-    return svaddv_f32(svptrue_b32(), vec_sum);
+    return svaddv_f32(svptrue_b32(), sum);
 #else
     return neon::RaBitQFloatBinaryIP(vector, bits, dim, inv_sqrt_d);
 #endif
@@ -1081,38 +1041,29 @@ RaBitQSQ4UBinaryIP(const uint8_t* codes, const uint8_t* bits, uint64_t dim) {
 
     uint32_t result = 0;
     size_t num_bytes = (dim + 7) / 8;
-    uint64_t num_u64_lanes = svcntd();
-
-    uint64_t chunk_size_bytes = num_u64_lanes * 8;
 
     for (uint64_t bit_pos = 0; bit_pos < 4; ++bit_pos) {
-        const uint8_t* cur_codes = codes + bit_pos * num_bytes;
-        uint64_t plane_sum = 0;
         size_t i = 0;
+        uint64_t sum = 0;
 
-        svuint64_t acc = svdup_u64(0);
+        const uint8_t* current_codes = codes + bit_pos * num_bytes;
 
-        for (; i + chunk_size_bytes <= num_bytes; i += chunk_size_bytes) {
-            svuint64_t vec_codes =
-                svld1_u64(svptrue_b64(), reinterpret_cast<const uint64_t*>(cur_codes + i));
-            svuint64_t vec_bits =
-                svld1_u64(svptrue_b64(), reinterpret_cast<const uint64_t*>(bits + i));
+        svbool_t predicate = svwhilelt_b8(i, num_bytes);
+        do {
+            svuint8_t codes_vec = svld1_u8(predicate, current_codes + i);
+            svuint8_t bits_vec = svld1_u8(predicate, bits + i);
 
-            svuint64_t and_result = svand_u64_z(svptrue_b64(), vec_codes, vec_bits);
+            svuint8_t and_result = svand_u8_x(predicate, codes_vec, bits_vec);
 
-            svuint64_t popcnt_result = svcnt_u64_z(svptrue_b64(), and_result);
+            svuint8_t popcount = svcnt_u8_x(predicate, and_result);
 
-            acc = svadd_u64_m(svptrue_b64(), acc, popcnt_result);
-        }
+            sum += svaddv_u8(predicate, popcount);
 
-        plane_sum += svaddv_u64(svptrue_b64(), acc);
+            i += svcntb();
+            predicate = svwhilelt_b8(i, num_bytes);
+        } while (svptest_first(svptrue_b8(), predicate));
 
-        for (; i < num_bytes; ++i) {
-            uint8_t bitwise_and = cur_codes[i] & bits[i];
-            plane_sum += __builtin_popcount(bitwise_and);
-        }
-
-        result += plane_sum << bit_pos;
+        result += sum << bit_pos;
     }
 
     return result;
@@ -1126,16 +1077,16 @@ BitAnd(const uint8_t* x, const uint8_t* y, const uint64_t num_byte, uint8_t* res
 #if defined(ENABLE_SVE)
     uint64_t i = 0;
     const uint64_t step = svcntb();
-    svbool_t pg = svwhilelt_b8(i, num_byte);
+    svbool_t predicate = svwhilelt_b8(i, num_byte);
     do {
-        svuint8_t x_vec = svld1_u8(pg, x + i);
-        svuint8_t y_vec = svld1_u8(pg, y + i);
-        svuint8_t res_vec = svand_u8_z(pg, x_vec, y_vec);
-        svst1_u8(pg, result + i, res_vec);
+        svuint8_t x_vec = svld1_u8(predicate, x + i);
+        svuint8_t y_vec = svld1_u8(predicate, y + i);
+        svuint8_t result_vec = svand_u8_z(predicate, x_vec, y_vec);
+        svst1_u8(predicate, result + i, result_vec);
 
         i += step;
-        pg = svwhilelt_b8(i, num_byte);
-    } while (svptest_first(svptrue_b8(), pg));
+        predicate = svwhilelt_b8(i, num_byte);
+    } while (svptest_first(svptrue_b8(), predicate));
 #else
     neon::BitAnd(x, y, num_byte, result);
 #endif
@@ -1146,16 +1097,16 @@ BitOr(const uint8_t* x, const uint8_t* y, const uint64_t num_byte, uint8_t* resu
 #if defined(ENABLE_SVE)
     uint64_t i = 0;
     const uint64_t step = svcntb();
-    svbool_t pg = svwhilelt_b8(i, num_byte);
+    svbool_t predicate = svwhilelt_b8(i, num_byte);
     do {
-        svuint8_t x_vec = svld1_u8(pg, x + i);
-        svuint8_t y_vec = svld1_u8(pg, y + i);
-        svuint8_t res_vec = svorr_u8_z(pg, x_vec, y_vec);
-        svst1_u8(pg, result + i, res_vec);
+        svuint8_t x_vec = svld1_u8(predicate, x + i);
+        svuint8_t y_vec = svld1_u8(predicate, y + i);
+        svuint8_t result_vec = svorr_u8_z(predicate, x_vec, y_vec);
+        svst1_u8(predicate, result + i, result_vec);
 
         i += step;
-        pg = svwhilelt_b8(i, num_byte);
-    } while (svptest_first(svptrue_b8(), pg));
+        predicate = svwhilelt_b8(i, num_byte);
+    } while (svptest_first(svptrue_b8(), predicate));
 #else
     neon::BitOr(x, y, num_byte, result);
 #endif
@@ -1166,16 +1117,16 @@ BitXor(const uint8_t* x, const uint8_t* y, const uint64_t num_byte, uint8_t* res
 #if defined(ENABLE_SVE)
     uint64_t i = 0;
     const uint64_t step = svcntb();
-    svbool_t pg = svwhilelt_b8(i, num_byte);
+    svbool_t predicate = svwhilelt_b8(i, num_byte);
     do {
-        svuint8_t x_vec = svld1_u8(pg, x + i);
-        svuint8_t y_vec = svld1_u8(pg, y + i);
-        svuint8_t res_vec = sveor_u8_z(pg, x_vec, y_vec);
-        svst1_u8(pg, result + i, res_vec);
+        svuint8_t x_vec = svld1_u8(predicate, x + i);
+        svuint8_t y_vec = svld1_u8(predicate, y + i);
+        svuint8_t result_vec = sveor_u8_z(predicate, x_vec, y_vec);
+        svst1_u8(predicate, result + i, result_vec);
 
         i += step;
-        pg = svwhilelt_b8(i, num_byte);
-    } while (svptest_first(svptrue_b8(), pg));
+        predicate = svwhilelt_b8(i, num_byte);
+    } while (svptest_first(svptrue_b8(), predicate));
 #else
     neon::BitXor(x, y, num_byte, result);
 #endif
@@ -1186,15 +1137,15 @@ BitNot(const uint8_t* x, const uint64_t num_byte, uint8_t* result) {
 #if defined(ENABLE_SVE)
     uint64_t i = 0;
     const uint64_t step = svcntb();
-    svbool_t pg = svwhilelt_b8(i, num_byte);
+    svbool_t predicate = svwhilelt_b8(i, num_byte);
     do {
-        svuint8_t x_vec = svld1_u8(pg, x + i);
-        svuint8_t res_vec = svnot_u8_z(pg, x_vec);
-        svst1_u8(pg, result + i, res_vec);
+        svuint8_t x_vec = svld1_u8(predicate, x + i);
+        svuint8_t result_vec = svnot_u8_z(predicate, x_vec);
+        svst1_u8(predicate, result + i, result_vec);
 
         i += step;
-        pg = svwhilelt_b8(i, num_byte);
-    } while (svptest_first(svptrue_b8(), pg));
+        predicate = svwhilelt_b8(i, num_byte);
+    } while (svptest_first(svptrue_b8(), predicate));
 #else
     neon::BitNot(x, num_byte, result);
 #endif
@@ -1202,11 +1153,6 @@ BitNot(const uint8_t* x, const uint64_t num_byte, uint8_t* result) {
 
 void
 Prefetch(const void* data) {
-#if defined(ENABLE_SVE)
-    svprfw(svptrue_b32(), data, SV_PLDL1KEEP);
-#else
-    neon::Prefetch(data);
-#endif
 }
 
 void
@@ -1218,17 +1164,17 @@ DivScalar(const float* from, float* to, uint64_t dim, float scalar) {
     if (scalar == 0) {
         scalar = 1.0f;
     }
-    svfloat32_t scalar_vec = svdup_f32(scalar);
+    svfloat32_t divisor = svdup_f32(scalar);
     uint64_t i = 0;
     const uint64_t step = svcntw();
-    svbool_t pg = svwhilelt_b32(i, dim);
+    svbool_t predicate = svwhilelt_b32(i, dim);
     do {
-        svfloat32_t from_vec = svld1_f32(pg, from + i);
-        svfloat32_t to_vec = svdiv_f32_z(pg, from_vec, scalar_vec);
-        svst1_f32(pg, to + i, to_vec);
+        svfloat32_t values = svld1_f32(predicate, from + i);
+        svfloat32_t result = svdiv_f32_z(predicate, values, divisor);
+        svst1_f32(predicate, to + i, result);
         i += step;
-        pg = svwhilelt_b32(i, dim);
-    } while (svptest_first(svptrue_b32(), pg));
+        predicate = svwhilelt_b32(i, dim);
+    } while (svptest_first(svptrue_b32(), predicate));
 #else
     neon::DivScalar(from, to, dim, scalar);
 #endif
@@ -1258,79 +1204,75 @@ PQFastScanLookUp32(const uint8_t* RESTRICT lookup_table,
     const uint64_t total_bytes = pq_dim * 16;
     auto step = svcntb();
 
-    const svuint8_t mask4 = svdup_u8(0x0F);
-    const svuint16_t mask8 = svdup_u16(0x00FF);
-    svuint16x4_t accumulators =
-        svcreate4_u16(svdup_u16(0), svdup_u16(0), svdup_u16(0), svdup_u16(0));
+    const svuint8_t mask_low = svdup_u8(0x0F);
+    const svuint16_t mask_low16 = svdup_u16(0x00FF);
+
+    svuint16_t accum0 = svdup_u16(0);
+    svuint16_t accum1 = svdup_u16(0);
+    svuint16_t accum2 = svdup_u16(0);
+    svuint16_t accum3 = svdup_u16(0);
 
     uint8_t offsets_data[svcntb()];
     for (uint64_t c = 0; c < svcntb() / 16; ++c) std::memset(offsets_data + c * 16, c * 16, 16);
+
     const svuint8_t index_offsets = svld1_u8(svptrue_b8(), offsets_data);
 
-    while (i < total_bytes) {
-        svbool_t pg_bytes = svwhilelt_b8(i, total_bytes);
+    svbool_t predicate = svwhilelt_b8(i, total_bytes);
+    do {
+        svuint8_t table_data = svld1_u8(predicate, lookup_table + i);
+        svuint8_t code_data = svld1_u8(predicate, codes + i);
 
-        svuint8_t super_table = svld1_u8(pg_bytes, lookup_table + i);
-        svuint8_t super_codes = svld1_u8(pg_bytes, codes + i);
+        svuint8_t low_nibbles = svand_u8_z(predicate, code_data, mask_low);
+        svuint8_t high_nibbles = svlsr_n_u8_z(predicate, code_data, 4);
 
-        svuint8_t low_nibbles = svand_u8_z(pg_bytes, super_codes, mask4);
-        svuint8_t high_nibbles = svlsr_n_u8_z(pg_bytes, super_codes, 4);
+        svuint8_t adjusted_low_indices = svadd_u8_z(predicate, low_nibbles, index_offsets);
+        svuint8_t adjusted_high_indices = svadd_u8_z(predicate, high_nibbles, index_offsets);
 
-        svuint8_t adjusted_low_indices = svadd_u8_z(pg_bytes, low_nibbles, index_offsets);
-        svuint8_t adjusted_high_indices = svadd_u8_z(pg_bytes, high_nibbles, index_offsets);
+        svuint8_t low_values = svtbl_u8(table_data, adjusted_low_indices);
+        svuint8_t high_values = svtbl_u8(table_data, adjusted_high_indices);
 
-        svuint8_t low_vals = svtbl_u8(super_table, adjusted_low_indices);
-        svuint8_t high_vals = svtbl_u8(super_table, adjusted_high_indices);
+        svbool_t predicate_u16 = svwhilelt_b16(i / 2, total_bytes / 2);
 
-        svbool_t pg_u16 = svwhilelt_b16(i / 2, total_bytes / 2);
-
-        svuint16_t acc0 = svget4_u16(accumulators, 0);
-        svuint16_t acc1 = svget4_u16(accumulators, 1);
-        svuint16_t acc2 = svget4_u16(accumulators, 2);
-        svuint16_t acc3 = svget4_u16(accumulators, 3);
-
-        acc0 =
-            svadd_u16_m(pg_u16, acc0, svand_u16_z(pg_u16, svreinterpret_u16_u8(low_vals), mask8));
-        acc1 = svadd_u16_m(pg_u16, acc1, svlsr_n_u16_z(pg_u16, svreinterpret_u16_u8(low_vals), 8));
-        acc2 =
-            svadd_u16_m(pg_u16, acc2, svand_u16_z(pg_u16, svreinterpret_u16_u8(high_vals), mask8));
-        acc3 = svadd_u16_m(pg_u16, acc3, svlsr_n_u16_z(pg_u16, svreinterpret_u16_u8(high_vals), 8));
-
-        accumulators = svset4_u16(accumulators, 0, acc0);
-        accumulators = svset4_u16(accumulators, 1, acc1);
-        accumulators = svset4_u16(accumulators, 2, acc2);
-        accumulators = svset4_u16(accumulators, 3, acc3);
+        accum0 =
+            svadd_u16_m(predicate_u16,
+                        accum0,
+                        svand_u16_z(predicate_u16, svreinterpret_u16_u8(low_values), mask_low16));
+        accum1 = svadd_u16_m(predicate_u16,
+                             accum1,
+                             svlsr_n_u16_z(predicate_u16, svreinterpret_u16_u8(low_values), 8));
+        accum2 =
+            svadd_u16_m(predicate_u16,
+                        accum2,
+                        svand_u16_z(predicate_u16, svreinterpret_u16_u8(high_values), mask_low16));
+        accum3 = svadd_u16_m(predicate_u16,
+                             accum3,
+                             svlsr_n_u16_z(predicate_u16, svreinterpret_u16_u8(high_values), 8));
 
         i += step;
-    }
+        predicate = svwhilelt_b8(i, total_bytes);
+    } while (svptest_first(svptrue_b8(), predicate));
 
     uint16_t temp[svcntb() / 2];
-    {
-        // Segment 0
 
-        svst1_u16(svptrue_b16(), temp, svget4_u16(accumulators, 0));
-        for (int j = 0; j < 8; ++j)
-            for (int k = 0; k < svcntb() / 16; k++) result[0 * 8 + j] += temp[j + 8 * (k)];
+    // Segment 0
+    svst1_u16(svptrue_b16(), temp, accum0);
+    for (int j = 0; j < 8; ++j)
+        for (int k = 0; k < svcntb() / 16; k++) result[0 * 8 + j] += temp[j + 8 * (k)];
 
-        // Segment 1
+    // Segment 1
+    svst1_u16(svptrue_b16(), temp, accum1);
+    for (int j = 0; j < 8; ++j)
+        for (int k = 0; k < svcntb() / 16; k++) result[1 * 8 + j] += temp[j + 8 * k];
 
-        svst1_u16(svptrue_b16(), temp, svget4_u16(accumulators, 1));
-        for (int j = 0; j < 8; ++j)
-            for (int k = 0; k < svcntb() / 16; k++) result[1 * 8 + j] += temp[j + 8 * k];
+    // Segment 2
+    svst1_u16(svptrue_b16(), temp, accum2);
+    for (int j = 0; j < 8; ++j)
+        for (int k = 0; k < svcntb() / 16; k++) result[2 * 8 + j] += temp[j + 8 * k];
 
-        // Segment 2
-
-        svst1_u16(svptrue_b16(), temp, svget4_u16(accumulators, 2));
-        for (int j = 0; j < 8; ++j)
-            for (int k = 0; k < svcntb() / 16; k++) result[2 * 8 + j] += temp[j + 8 * k];
-
-        // Segment 3
-
-        svst1_u16(svptrue_b16(), temp, svget4_u16(accumulators, 3));
-        for (int j = 0; j < 8; ++j)
-            for (int k = 0; k < svcntb() / 16; k++) result[3 * 8 + j] += temp[j + 8 * k];
-        ;
-    }
+    // Segment 3
+    svst1_u16(svptrue_b16(), temp, accum3);
+    for (int j = 0; j < 8; ++j)
+        for (int k = 0; k < svcntb() / 16; k++) result[3 * 8 + j] += temp[j + 8 * k];
 
 #else
     neon::PQFastScanLookUp32(lookup_table, codes, pq_dim, result);
@@ -1344,17 +1286,17 @@ KacsWalk(float* data, size_t len) {
     size_t offset = (len % 2) + n;
     uint64_t i = 0;
     const uint64_t step = svcntw();
-    svbool_t pg = svwhilelt_b32(i, n);
+    svbool_t predicate = svwhilelt_b32(i, n);
     do {
-        svfloat32_t v1 = svld1_f32(pg, data + i);
-        svfloat32_t v2 = svld1_f32(pg, data + i + offset);
-        svfloat32_t add = svadd_f32_z(pg, v1, v2);
-        svfloat32_t sub = svsub_f32_z(pg, v1, v2);
-        svst1_f32(pg, data + i, add);
-        svst1_f32(pg, data + i + offset, sub);
+        svfloat32_t vec1 = svld1_f32(predicate, data + i);
+        svfloat32_t vec2 = svld1_f32(predicate, data + i + offset);
+        svfloat32_t sum_vec = svadd_f32_z(predicate, vec1, vec2);
+        svfloat32_t diff_vec = svsub_f32_z(predicate, vec1, vec2);
+        svst1_f32(predicate, data + i, sum_vec);
+        svst1_f32(predicate, data + i + offset, diff_vec);
         i += step;
-        pg = svwhilelt_b32(i, n);
-    } while (svptest_first(svptrue_b32(), pg));
+        predicate = svwhilelt_b32(i, n);
+    } while (svptest_first(svptrue_b32(), predicate));
 
     if (len % 2 != 0) {
         data[n] *= std::sqrt(2.0F);
@@ -1379,19 +1321,20 @@ FlipSign(const uint8_t* flip, float* data, size_t dim) {
                remaining_bits);
     }
 
-    uint64_t d = 0;
-    const uint64_t vl = svcntw();
-    while (d < dim) {
-        const svbool_t pg = svwhilelt_b32(d, dim);
-        const svuint32_t v_preds_extended = svld1ub_u32(pg, &predicate_array[d]);
-        const svbool_t bit_mask = svcmpne_n_u32(pg, v_preds_extended, 0);
+    uint64_t i = 0;
+    const uint64_t step = svcntw();
+    svbool_t predicate = svwhilelt_b32(i, dim);
+    do {
+        svuint32_t predicate_values = svld1ub_u32(predicate, &predicate_array[i]);
+        svbool_t bit_mask = svcmpne_n_u32(predicate, predicate_values, 0);
 
-        svfloat32_t data_vec = svld1_f32(pg, data + d);
+        svfloat32_t data_vec = svld1_f32(predicate, data + i);
         svfloat32_t result_vec = svneg_f32_m(data_vec, bit_mask, data_vec);
-        svst1_f32(pg, data + d, result_vec);
+        svst1_f32(predicate, data + i, result_vec);
 
-        d += vl;
-    }
+        i += step;
+        predicate = svwhilelt_b32(i, dim);
+    } while (svptest_first(svptrue_b32(), predicate));
 #else
     neon::FlipSign(flip, data, dim);
 #endif
@@ -1400,17 +1343,17 @@ FlipSign(const uint8_t* flip, float* data, size_t dim) {
 void
 VecRescale(float* data, size_t dim, float val) {
 #if defined(ENABLE_SVE)
-    svfloat32_t val_vec = svdup_f32(val);
+    svfloat32_t scale = svdup_f32(val);
     uint64_t i = 0;
     const uint64_t step = svcntw();
-    svbool_t pg = svwhilelt_b32(i, dim);
+    svbool_t predicate = svwhilelt_b32(i, dim);
     do {
-        svfloat32_t data_vec = svld1_f32(pg, data + i);
-        svfloat32_t res_vec = svmul_f32_z(pg, data_vec, val_vec);
-        svst1_f32(pg, data + i, res_vec);
+        svfloat32_t data_vec = svld1_f32(predicate, data + i);
+        svfloat32_t result = svmul_f32_z(predicate, data_vec, scale);
+        svst1_f32(predicate, data + i, result);
         i += step;
-        pg = svwhilelt_b32(i, dim);
-    } while (svptest_first(svptrue_b32(), pg));
+        predicate = svwhilelt_b32(i, dim);
+    } while (svptest_first(svptrue_b32(), predicate));
 #else
     neon::VecRescale(data, dim, val);
 #endif
@@ -1422,15 +1365,15 @@ RotateOp(float* data, int idx, int dim_, int step) {
     for (int i = idx; i < dim_; i += 2 * step) {
         uint64_t j = 0;
         const uint64_t sve_step = svcntw();
-        svbool_t pg = svwhilelt_b32(j, (uint64_t)step);
+        svbool_t predicate = svwhilelt_b32(j, (uint64_t)step);
         do {
-            svfloat32_t x = svld1_f32(pg, data + i + j);
-            svfloat32_t y = svld1_f32(pg, data + i + j + step);
-            svst1_f32(pg, data + i + j, svadd_f32_z(pg, x, y));
-            svst1_f32(pg, data + i + j + step, svsub_f32_z(pg, x, y));
+            svfloat32_t x = svld1_f32(predicate, data + i + j);
+            svfloat32_t y = svld1_f32(predicate, data + i + j + step);
+            svst1_f32(predicate, data + i + j, svadd_f32_z(predicate, x, y));
+            svst1_f32(predicate, data + i + j + step, svsub_f32_z(predicate, x, y));
             j += sve_step;
-            pg = svwhilelt_b32(j, (uint64_t)step);
-        } while (svptest_first(svptrue_b32(), pg));
+            predicate = svwhilelt_b32(j, (uint64_t)step);
+        } while (svptest_first(svptrue_b32(), predicate));
     }
 #else
     neon::RotateOp(data, idx, dim_, step);

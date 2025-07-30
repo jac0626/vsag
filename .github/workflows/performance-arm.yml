@@ -24,36 +24,7 @@ jobs:
       - name: Build test executables
         run: cmake -B build -S .  -DENABLE_TOOLS=ON -DDISABLE_NEON_FORCE=ON -DCMAKE_BUILD_TYPE=Release &&cmake --build build -j6
 
-      - name: Run Perf - SIFT-fp32
+      - name: Run Perf
         continue-on-error: true
-        run: ./build/tools/eval/eval_performance .github/perf-mini-sift-fp32.yml
-      - name: Run Perf - SIFT-fp16
-        continue-on-error: true
-        run: ./build/tools/eval/eval_performance .github/perf-mini-sift-fp16.yml
-      - name: Run Perf - SIFT-bf16
-        continue-on-error: true
-        run: ./build/tools/eval/eval_performance .github/perf-mini-sift-bf16.yml
-      - name: Run Perf - SIFT-sq8
-        continue-on-error: true
-        run: ./build/tools/eval/eval_performance .github/perf-mini-sift-sq8.yml
-      - name: Run Perf - SIFT-sq8_uniform
-        continue-on-error: true
-        run: ./build/tools/eval/eval_performance .github/perf-mini-sift-sq8_uniform.yml
-      - name: Run Perf - SIFT-sq4
-        continue-on-error: true
-        run: ./build/tools/eval/eval_performance .github/perf-mini-sift-sq4.yml
-      - name: Run Perf - SIFT-sq4_uniform
-        continue-on-error: true
-        run: ./build/tools/eval/eval_performance .github/perf-mini-sift-sq4_uniform.yml
-      - name: Run Perf - SIFT-pq
-        continue-on-error: true
-        run: ./build/tools/eval/eval_performance .github/perf-mini-sift-pq.yml
-      - name: Run Perf - SIFT-pqfs
-        continue-on-error: true
-        run: ./build/tools/eval/eval_performance .github/perf-mini-sift-pqfs.yml
-      - name: Run Perf - SIFT-rabitq
-        continue-on-error: true
-        run: ./build/tools/eval/eval_performance .github/perf-mini-sift-rabitq.yml
-      - name: Send Report
-        run:  |
-          python3 scripts/perf_reports/dingding.py /tmp/github-perf.json || echo "send report to dingding failed"
+        run: ./build/tools/eval/eval_performance .github/perf-mini.yml
+     

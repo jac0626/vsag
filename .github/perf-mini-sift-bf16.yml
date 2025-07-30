@@ -21,3 +21,14 @@ SIFT-bf16:
     search_mode: "knn" # ["knn", "range", "knn_filter", "range_filter"]
     range: 0.5
     delete_index_after_search: true
+GIST-bf16:
+    datapath: "/tmp/data/gist-960-euclidean.hdf5"
+    type: "build,search" # build, search
+    index_name: "hgraph"
+    create_params: '{"dim":960,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"bf16","max_degree":96,"ef_construction":400}'
+    search_params: '{"hgraph":{"ef_search":400}}'
+    index_path: "/tmp/gist-960-euclidean/index/hgraph_index"
+    topk: 10
+    search_mode: "knn" # ["knn", "range", "knn_filter", "range_filter"]
+    range: 0.5
+    delete_index_after_search: false

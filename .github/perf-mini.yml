@@ -10,123 +10,443 @@ global:
       format: "json"
       to: "file://tmp/github-perf.json"
 
+# SIFT-128-euclidean configurations
 SIFT-fp32:
     datapath: "/tmp/data/sift-128-euclidean.hdf5"
-    type: "build,search" # build, search
+    type: "build,search"
     index_name: "hgraph"
     create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"fp32","max_degree":32,"ef_construction":400}}'
-    search_params: '{"hgraph":{"ef_search":29}}'
+    search_params: '{"hgraph":{"ef_search":40}}'
     index_path: "/tmp/sift-128-euclidean/index/hgraph_index"
     topk: 10
-    search_mode: "knn" # ["knn", "range", "knn_filter", "range_filter"]
+    search_mode: "knn"
     range: 0.5
     delete_index_after_search: true
 
 SIFT-fp16:
     datapath: "/tmp/data/sift-128-euclidean.hdf5"
-    type: "build,search" # build, search
+    type: "build,search"
     index_name: "hgraph"
     create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"fp16","max_degree":32,"ef_construction":400}}'
-    search_params: '{"hgraph":{"ef_search":29}}'
+    search_params: '{"hgraph":{"ef_search":48}}'
     index_path: "/tmp/sift-128-euclidean/index/hgraph_index"
     topk: 10
-    search_mode: "knn" # ["knn", "range", "knn_filter", "range_filter"]
+    search_mode: "knn"
     range: 0.5
     delete_index_after_search: true
   
 SIFT-bf16:
     datapath: "/tmp/data/sift-128-euclidean.hdf5"
-    type: "build,search" # build, search
+    type: "build,search"
     index_name: "hgraph"
     create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"bf16","max_degree":32,"ef_construction":400}}'
-    search_params: '{"hgraph":{"ef_search":29}}'
+    search_params: '{"hgraph":{"ef_search":48}}'
     index_path: "/tmp/sift-128-euclidean/index/hgraph_index"
     topk: 10
-    search_mode: "knn" # ["knn", "range", "knn_filter", "range_filter"]
+    search_mode: "knn"
     range: 0.5
     delete_index_after_search: true
 
 SIFT-sq8:
     datapath: "/tmp/data/sift-128-euclidean.hdf5"
-    type: "build,search" # build, search
+    type: "build,search"
     index_name: "hgraph"
     create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"sq8","max_degree":32,"ef_construction":400}}'
-    search_params: '{"hgraph":{"ef_search":29}}'
+    search_params: '{"hgraph":{"ef_search":44}}'
     index_path: "/tmp/sift-128-euclidean/index/hgraph_index"
     topk: 10
-    search_mode: "knn" # ["knn", "range", "knn_filter", "range_filter"]
+    search_mode: "knn"
     range: 0.5
     delete_index_after_search: true
 
 SIFT-sq8_uniform:
     datapath: "/tmp/data/sift-128-euclidean.hdf5"
-    type: "build,search" # build, search
+    type: "build,search"
     index_name: "hgraph"
     create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"sq8_uniform","max_degree":32,"ef_construction":400}}'
-    search_params: '{"hgraph":{"ef_search":29}}'
+    search_params: '{"hgraph":{"ef_search":44}}'
     index_path: "/tmp/sift-128-euclidean/index/hgraph_index"
     topk: 10
-    search_mode: "knn" # ["knn", "range", "knn_filter", "range_filter"]
+    search_mode: "knn"
     range: 0.5
     delete_index_after_search: true
 
 SIFT-sq4:
     datapath: "/tmp/data/sift-128-euclidean.hdf5"
-    type: "build,search" # build, search
+    type: "build,search"
     index_name: "hgraph"
-    create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"sq4","max_degree":32,"ef_construction":400}}'
-    search_params: '{"hgraph":{"ef_search":29}}'
+    create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"sq4","max_degree":48,"ef_construction":400,"precise_quantization_type":"fp32","use_reorder":true}}'
+    search_params: '{"hgraph":{"ef_search":66}}'
     index_path: "/tmp/sift-128-euclidean/index/hgraph_index"
     topk: 10
-    search_mode: "knn" # ["knn", "range", "knn_filter", "range_filter"]
+    search_mode: "knn"
     range: 0.5
     delete_index_after_search: true
 
 SIFT-sq4_uniform:
     datapath: "/tmp/data/sift-128-euclidean.hdf5"
-    type: "build,search" # build, search
+    type: "build,search"
     index_name: "hgraph"
-    create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"sq4_uniform","max_degree":32,"ef_construction":400}}'
-    search_params: '{"hgraph":{"ef_search":29}}'
+    create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"sq4_uniform","max_degree":48,"ef_construction":400,"precise_quantization_type":"fp32","use_reorder":true}}'
+    search_params: '{"hgraph":{"ef_search":66}}'
     index_path: "/tmp/sift-128-euclidean/index/hgraph_index"
     topk: 10
-    search_mode: "knn" # ["knn", "range", "knn_filter", "range_filter"]
+    search_mode: "knn"
     range: 0.5
     delete_index_after_search: true
 
 SIFT-pq:
     datapath: "/tmp/data/sift-128-euclidean.hdf5"
-    type: "build,search" # build, search
+    type: "build,search"
     index_name: "hgraph"
-    create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"pq","max_degree":32,"ef_construction":400,"base_pq_dim": 32}}'
-    search_params: '{"hgraph":{"ef_search":29}}'
+    create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"pq","max_degree":40,"ef_construction":400,"base_pq_dim": 32,"precise_quantization_type":"fp32","use_reorder":true}}'
+    search_params: '{"hgraph":{"ef_search":57}}'
     index_path: "/tmp/sift-128-euclidean/index/hgraph_index"
     topk: 10
-    search_mode: "knn" # ["knn", "range", "knn_filter", "range_filter"]
+    search_mode: "knn"
     range: 0.5
     delete_index_after_search: true
 
-SIFT-pqfs:
-    datapath: "/tmp/data/sift-128-euclidean.hdf5"
-    type: "build,search" # build, search
-    index_name: "hgraph"
-    create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"pqfs","max_degree":32,"ef_construction":400,"base_pq_dim": 32}}'
-    search_params: '{"hgraph":{"ef_search":29}}'
-    index_path: "/tmp/sift-128-euclidean/index/hgraph_index"
-    topk: 10
-    search_mode: "knn" # ["knn", "range", "knn_filter", "range_filter"]
-    range: 0.5
-    delete_index_after_search: true
+
 
 SIFT-rabitq:
     datapath: "/tmp/data/sift-128-euclidean.hdf5"
-    type: "build,search" # build, search
+    type: "build,search"
     index_name: "hgraph"
-    create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"rabitq","max_degree":32,"ef_construction":400}}'
-    search_params: '{"hgraph":{"ef_search":29}}'
+    create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"rabitq","max_degree":32,"ef_construction":400,"precise_quantization_type":"fp32","use_reorder":true}}'
+    search_params: '{"hgraph":{"ef_search":48}}'
     index_path: "/tmp/sift-128-euclidean/index/hgraph_index"
     topk: 10
-    search_mode: "knn" # ["knn", "range", "knn_filter", "range_filter"]
+    search_mode: "knn"
     range: 0.5
     delete_index_after_search: true
 
+# Deep-Image-96-angular configurations
+DeepImage-fp32:
+    datapath: "/tmp/data/deep-image-96-angular.hdf5"
+    type: "build,search"
+    index_name: "hgraph"
+    create_params: '{"dim":96,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"fp32","max_degree":64,"ef_construction":400}}'
+    search_params: '{"hgraph":{"ef_search":55}}'
+    index_path: "/tmp/deep-image-96-angular/index/hgraph_index"
+    topk: 10
+    search_mode: "knn"
+    range: 0.5
+    delete_index_after_search: true
+
+DeepImage-fp16:
+    datapath: "/tmp/data/deep-image-96-angular.hdf5"
+    type: "build,search"
+    index_name: "hgraph"
+    create_params: '{"dim":96,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"fp16","max_degree":64,"ef_construction":400}}'
+    search_params: '{"hgraph":{"ef_search":66}}'
+    index_path: "/tmp/deep-image-96-angular/index/hgraph_index"
+    topk: 10
+    search_mode: "knn"
+    range: 0.5
+    delete_index_after_search: true
+
+DeepImage-sq8:
+    datapath: "/tmp/data/deep-image-96-angular.hdf5"
+    type: "build,search"
+    index_name: "hgraph"
+    create_params: '{"dim":96,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"sq8","max_degree":64,"ef_construction":400}}'
+    search_params: '{"hgraph":{"ef_search":60}}'
+    index_path: "/tmp/deep-image-96-angular/index/hgraph_index"
+    topk: 10
+    search_mode: "knn"
+    range: 0.5
+    delete_index_after_search: true
+
+DeepImage-sq4:
+    datapath: "/tmp/data/deep-image-96-angular.hdf5"
+    type: "build,search"
+    index_name: "hgraph"
+    create_params: '{"dim":96,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"sq4","max_degree":80,"ef_construction":400,"precise_quantization_type":"fp32","use_reorder":true}}'
+    search_params: '{"hgraph":{"ef_search":88}}'
+    index_path: "/tmp/deep-image-96-angular/index/hgraph_index"
+    topk: 10
+    search_mode: "knn"
+    range: 0.5
+    delete_index_after_search: true
+
+DeepImage-pq:
+    datapath: "/tmp/data/deep-image-96-angular.hdf5"
+    type: "build,search"
+    index_name: "hgraph"
+    create_params: '{"dim":96,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"pq","max_degree":72,"ef_construction":400,"base_pq_dim": 24,"precise_quantization_type":"fp32","use_reorder":true}}'
+    search_params: '{"hgraph":{"ef_search":77}}'
+    index_path: "/tmp/deep-image-96-angular/index/hgraph_index"
+    topk: 10
+    search_mode: "knn"
+    range: 0.5
+    delete_index_after_search: true
+
+# GIST-960-euclidean configurations (using reduced parameters due to high dimensionality)
+GIST-fp32:
+    datapath: "/tmp/data/gist-960-euclidean.hdf5"
+    type: "build,search"
+    index_name: "hgraph"
+    create_params: '{"dim":960,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"fp32","max_degree":80,"ef_construction":400}}'
+    search_params: '{"hgraph":{"ef_search":100}}'
+    index_path: "/tmp/gist-960-euclidean/index/hgraph_index"
+    topk: 10
+    search_mode: "knn"
+    range: 0.5
+    delete_index_after_search: true
+
+GIST-fp16:
+    datapath: "/tmp/data/gist-960-euclidean.hdf5"
+    type: "build,search"
+    index_name: "hgraph"
+    create_params: '{"dim":960,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"fp16","max_degree":80,"ef_construction":400}}'
+    search_params: '{"hgraph":{"ef_search":132}}'
+    index_path: "/tmp/gist-960-euclidean/index/hgraph_index"
+    topk: 10
+    search_mode: "knn"
+    range: 0.5
+    delete_index_after_search: true
+
+GIST-sq8:
+    datapath: "/tmp/data/gist-960-euclidean.hdf5"
+    type: "build,search"
+    index_name: "hgraph"
+    create_params: '{"dim":960,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"sq8","max_degree":96,"ef_construction":400}}'
+    search_params: '{"hgraph":{"ef_search":120}}'
+    index_path: "/tmp/gist-960-euclidean/index/hgraph_index"
+    topk: 10
+    search_mode: "knn"
+    range: 0.5
+    delete_index_after_search: true
+
+GIST-sq8_uniform:
+    datapath: "/tmp/data/gist-960-euclidean.hdf5"
+    type: "build,search"
+    index_name: "hgraph"
+    create_params: '{"dim":960,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"sq8_uniform","max_degree":96,"ef_construction":400}}'
+    search_params: '{"hgraph":{"ef_search":120}}'
+    index_path: "/tmp/gist-960-euclidean/index/hgraph_index"
+    topk: 10
+    search_mode: "knn"
+    range: 0.5
+    delete_index_after_search: true
+
+GIST-sq4:
+    datapath: "/tmp/data/gist-960-euclidean.hdf5"
+    type: "build,search"
+    index_name: "hgraph"
+    create_params: '{"dim":960,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"sq4","max_degree":112,"ef_construction":400,"precise_quantization_type":"fp32","use_reorder":true}}'
+    search_params: '{"hgraph":{"ef_search":180}}'
+    index_path: "/tmp/gist-960-euclidean/index/hgraph_index"
+    topk: 10
+    search_mode: "knn"
+    range: 0.5
+    delete_index_after_search: true
+
+GIST-pq:
+    datapath: "/tmp/data/gist-960-euclidean.hdf5"
+    type: "build,search"
+    index_name: "hgraph"
+    create_params: '{"dim":960,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"pq","max_degree":104,"ef_construction":400,"base_pq_dim": 48,"precise_quantization_type":"fp32","use_reorder":true}}'
+    search_params: '{"hgraph":{"ef_search":156}}'
+    index_path: "/tmp/gist-960-euclidean/index/hgraph_index"
+    topk: 10
+    search_mode: "knn"
+    range: 0.5
+    delete_index_after_search: true
+
+# GloVe-100-angular configurations
+GloVe-fp32:
+    datapath: "/tmp/data/glove-100-angular.hdf5"
+    type: "build,search"
+    index_name: "hgraph"
+    create_params: '{"dim":100,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"fp32","max_degree":80,"ef_construction":400}}'
+    search_params: '{"hgraph":{"ef_search":160}}'
+    index_path: "/tmp/glove-100-angular/index/hgraph_index"
+    topk: 10
+    search_mode: "knn"
+    range: 0.5
+    delete_index_after_search: true
+
+GloVe-fp16:
+    datapath: "/tmp/data/glove-100-angular.hdf5"
+    type: "build,search"
+    index_name: "hgraph"
+    create_params: '{"dim":100,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"fp16","max_degree":80,"ef_construction":400}}'
+    search_params: '{"hgraph":{"ef_search":220}}'
+    index_path: "/tmp/glove-100-angular/index/hgraph_index"
+    topk: 10
+    search_mode: "knn"
+    range: 0.5
+    delete_index_after_search: true
+
+GloVe-bf16:
+    datapath: "/tmp/data/glove-100-angular.hdf5"
+    type: "build,search"
+    index_name: "hgraph"
+    create_params: '{"dim":100,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"bf16","max_degree":80,"ef_construction":400}}'
+    search_params: '{"hgraph":{"ef_search":220}}'
+    index_path: "/tmp/glove-100-angular/index/hgraph_index"
+    topk: 10
+    search_mode: "knn"
+    range: 0.5
+    delete_index_after_search: true
+
+GloVe-sq8:
+    datapath: "/tmp/data/glove-100-angular.hdf5"
+    type: "build,search"
+    index_name: "hgraph"
+    create_params: '{"dim":100,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"sq8","max_degree":96,"ef_construction":400}}'
+    search_params: '{"hgraph":{"ef_search":200}}'
+    index_path: "/tmp/glove-100-angular/index/hgraph_index"
+    topk: 10
+    search_mode: "knn"
+    range: 0.5
+    delete_index_after_search: true
+
+GloVe-sq8_uniform:
+    datapath: "/tmp/data/glove-100-angular.hdf5"
+    type: "build,search"
+    index_name: "hgraph"
+    create_params: '{"dim":100,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"sq8_uniform","max_degree":96,"ef_construction":400}}'
+    search_params: '{"hgraph":{"ef_search":200}}'
+    index_path: "/tmp/glove-100-angular/index/hgraph_index"
+    topk: 10
+    search_mode: "knn"
+    range: 0.5
+    delete_index_after_search: true
+
+GloVe-sq4:
+    datapath: "/tmp/data/glove-100-angular.hdf5"
+    type: "build,search"
+    index_name: "hgraph"
+    create_params: '{"dim":100,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"sq4","max_degree":112,"ef_construction":400,"precise_quantization_type":"fp32","use_reorder":true}}'
+    search_params: '{"hgraph":{"ef_search":300}}'
+    index_path: "/tmp/glove-100-angular/index/hgraph_index"
+    topk: 10
+    search_mode: "knn"
+    range: 0.5
+    delete_index_after_search: true
+
+GloVe-sq4_uniform:
+    datapath: "/tmp/data/glove-100-angular.hdf5"
+    type: "build,search"
+    index_name: "hgraph"
+    create_params: '{"dim":100,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"sq4_uniform","max_degree":112,"ef_construction":400,"precise_quantization_type":"fp32","use_reorder":true}}'
+    search_params: '{"hgraph":{"ef_search":300}}'
+    index_path: "/tmp/glove-100-angular/index/hgraph_index"
+    topk: 10
+    search_mode: "knn"
+    range: 0.5
+    delete_index_after_search: true
+
+GloVe-pq:
+    datapath: "/tmp/data/glove-100-angular.hdf5"
+    type: "build,search"
+    index_name: "hgraph"
+    create_params: '{"dim":100,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"pq","max_degree":104,"ef_construction":400,"base_pq_dim": 25,"precise_quantization_type":"fp32","use_reorder":true}}'
+    search_params: '{"hgraph":{"ef_search":260}}'
+    index_path: "/tmp/glove-100-angular/index/hgraph_index"
+    topk: 10
+    search_mode: "knn"
+    range: 0.5
+    delete_index_after_search: true
+
+
+
+GloVe-rabitq:
+    datapath: "/tmp/data/glove-100-angular.hdf5"
+    type: "build,search"
+    index_name: "hgraph"
+    create_params: '{"dim":100,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"rabitq","max_degree":96,"ef_construction":400,"precise_quantization_type":"fp32","use_reorder":true}}'
+    search_params: '{"hgraph":{"ef_search":220}}'
+    index_path: "/tmp/glove-100-angular/index/hgraph_index"
+    topk: 10
+    search_mode: "knn"
+    range: 0.5
+    delete_index_after_search: true
+
+# NYTimes-256-angular configurations
+NYTimes-fp32:
+    datapath: "/tmp/data/nytimes-256-angular.hdf5"
+    type: "build,search"
+    index_name: "hgraph"
+    create_params: '{"dim":256,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"fp32","max_degree":80,"ef_construction":300}}'
+    search_params: '{"hgraph":{"ef_search":96}}'
+    index_path: "/tmp/nytimes-256-angular/index/hgraph_index"
+    topk: 10
+    search_mode: "knn"
+    range: 0.5
+    delete_index_after_search: true
+
+NYTimes-fp16:
+    datapath: "/tmp/data/nytimes-256-angular.hdf5"
+    type: "build,search"
+    index_name: "hgraph"
+    create_params: '{"dim":256,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"fp16","max_degree":80,"ef_construction":300}}'
+    search_params: '{"hgraph":{"ef_search":132}}'
+    index_path: "/tmp/nytimes-256-angular/index/hgraph_index"
+    topk: 10
+    search_mode: "knn"
+    range: 0.5
+    delete_index_after_search: true
+
+NYTimes-sq8:
+    datapath: "/tmp/data/nytimes-256-angular.hdf5"
+    type: "build,search"
+    index_name: "hgraph"
+    create_params: '{"dim":256,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"sq8","max_degree":96,"ef_construction":300}}'
+    search_params: '{"hgraph":{"ef_search":120}}'
+    index_path: "/tmp/nytimes-256-angular/index/hgraph_index"
+    topk: 10
+    search_mode: "knn"
+    range: 0.5
+    delete_index_after_search: true
+
+NYTimes-sq8_uniform:
+    datapath: "/tmp/data/nytimes-256-angular.hdf5"
+    type: "build,search"
+    index_name: "hgraph"
+    create_params: '{"dim":256,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"sq8_uniform","max_degree":96,"ef_construction":300}}'
+    search_params: '{"hgraph":{"ef_search":120}}'
+    index_path: "/tmp/nytimes-256-angular/index/hgraph_index"
+    topk: 10
+    search_mode: "knn"
+    range: 0.5
+    delete_index_after_search: true
+
+NYTimes-sq4:
+    datapath: "/tmp/data/nytimes-256-angular.hdf5"
+    type: "build,search"
+    index_name: "hgraph"
+    create_params: '{"dim":256,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"sq4","max_degree":112,"ef_construction":300,"precise_quantization_type":"fp32","use_reorder":true}}'
+    search_params: '{"hgraph":{"ef_search":180}}'
+    index_path: "/tmp/nytimes-256-angular/index/hgraph_index"
+    topk: 10
+    search_mode: "knn"
+    range: 0.5
+    delete_index_after_search: true
+
+NYTimes-pq:
+    datapath: "/tmp/data/nytimes-256-angular.hdf5"
+    type: "build,search"
+    index_name: "hgraph"
+    create_params: '{"dim":256,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"pq","max_degree":104,"ef_construction":300,"base_pq_dim": 32,"precise_quantization_type":"fp32","use_reorder":true}}'
+    search_params: '{"hgraph":{"ef_search":156}}'
+    index_path: "/tmp/nytimes-256-angular/index/hgraph_index"
+    topk: 10
+    search_mode: "knn"
+    range: 0.5
+    delete_index_after_search: true
+
+NYTimes-rabitq:
+    datapath: "/tmp/data/nytimes-256-angular.hdf5"
+    type: "build,search"
+    index_name: "hgraph"
+    create_params: '{"dim":256,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"rabitq","max_degree":96,"ef_construction":300,"precise_quantization_type":"fp32","use_reorder":true}}'
+    search_params: '{"hgraph":{"ef_search":132}}'
+    index_path: "/tmp/nytimes-256-angular/index/hgraph_index"
+    topk: 10
+    search_mode: "knn"
+    range: 0.5
+    delete_index_after_search: true
