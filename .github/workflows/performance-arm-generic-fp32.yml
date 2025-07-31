@@ -1,0 +1,66 @@
+name: Performance-arm-generic-fp32
+
+on:
+  schedule:
+    - cron: "01 08 * * 1-5" # UTC 08:01 every weekday
+  workflow_dispatch: {}
+
+jobs:
+  performance:
+    name: Performance-arm-fp32
+    runs-on: ubuntu-22.04-arm
+  
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Install build dependencies
+        run: sudo apt-get update && sudo apt-get install -y build-essential
+      - name: Download Datasets
+        run: bash ./scripts/download_annbench_datasets.sh
+      - name: Install dependencies
+        run:  sudo bash ./scripts/deps/install_deps_ubuntu.sh
+
+      - name: Build test executables
+        run: cmake -B build-release -S . -DDISABLE_NEON_FORCE=ON -DDISABLE_SVE_FORCE=ON -DENABLE_TOOLS=ON -DCMAKE_BUILD_TYPE=Release &&cmake --build build-release -j6
+
+       # FP32 Tests
+      - name: Run Perf - FP32
+        id: test-fp32
+        continue-on-error: true
+        run: |
+          echo "::group::FP32 Performance Tests"
+          ./build-release/tools/eval/eval_performance .github/perf-fp32.yml 2>&1 | tee /tmp/perf-fp32.log
+          echo "::endgroup::"
+      
+      # Summary of test results
+      - name: Test Summary
+        if: always()
+        run: |
+          echo "## Test Results Summary"
+          echo "| Quantization Method | Status |"
+          echo "|---------------------|--------|"
+          echo "| FP32 | ${{ steps.test-fp32.outcome }} |"
+          
+          # Show any errors from log files
+          echo ""
+          echo "## Error Details"
+          for log in /tmp/perf-*.log; do
+            if [ -f "$log" ]; then
+              method=$(basename "$log" .log | sed 's/perf-//')
+              if grep -q "Error\|ERROR\|error\|Failed\|FAILED\|failed" "$log"; then
+                echo "### $method errors:"
+                grep -A 5 -B 5 -i "error\|failed" "$log" | tail -20
+                echo ""
+              fi
+            fi
+          done
+      
+      
+      # Upload logs as artifacts for debugging
+      - name: Upload Test Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-test-logs
+          path: /tmp/perf-*.log
+          retention-days: 7

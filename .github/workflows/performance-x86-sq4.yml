@@ -1,0 +1,73 @@
+name: Performance-x86-sq4
+
+on:
+  schedule:
+    - cron: "01 08 * * 1-5" # UTC 08:01 every weekday
+  workflow_dispatch: {}
+
+jobs:
+  performance:
+    name: Performance-x86-sq4
+    runs-on: ubuntu-latest
+    concurrency:
+      group: performance-${{ github.event.pull_request.number }}
+      cancel-in-progress: true
+    container:
+      image: vsaglib/vsag:ci-x86
+    env:
+      PERF_DINGDING_ACCESS_TOKEN: ${{ secrets.PERF_DINGDING_ACCESS_TOKEN }}
+      PERF_DINGDING_SERCRET: ${{ secrets.PERF_DINGDING_SERCRET }}
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Install Deps
+        run: pip3 install -r ./scripts/perf_reports/requirements.txt
+      
+      - name: Download Datasets
+        run: bash ./scripts/download_annbench_datasets.sh
+      
+      - name: Build Release
+        run: make release
+      
+      # SQ4 Tests
+      - name: Run Perf - SQ4
+        id: test-sq4
+        continue-on-error: true
+        run: |
+          echo "::group::SQ4 Performance Tests"
+          ./build-release/tools/eval/eval_performance .github/perf-sq4.yml 2>&1 | tee /tmp/perf-sq4.log
+          echo "::endgroup::"
+      
+      # Summary of test results
+      - name: Test Summary
+        if: always()
+        run: |
+          echo "## Test Results Summary"
+          echo "| Quantization Method | Status |"
+          echo "|---------------------|--------|"
+          echo "| SQ4 | ${{ steps.test-sq4.outcome }} |"
+          
+          # Show any errors from log files
+          echo ""
+          echo "## Error Details"
+          for log in /tmp/perf-*.log; do
+            if [ -f "$log" ]; then
+              method=$(basename "$log" .log | sed 's/perf-//')
+              if grep -q "Error\|ERROR\|error\|Failed\|FAILED\|failed" "$log"; then
+                echo "### $method errors:"
+                grep -A 5 -B 5 -i "error\|failed" "$log" | tail -20
+                echo ""
+              fi
+            fi
+          done
+      
+      
+      # Upload logs as artifacts for debugging
+      - name: Upload Test Logs
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-test-logs
+          path: /tmp/perf-*.log
+          retention-days: 7
