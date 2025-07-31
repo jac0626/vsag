@@ -21,17 +21,6 @@ SIFT-pq:
     range: 0.5
     delete_index_after_search: true
 
-DeepImage-pq:
-    datapath: "/tmp/data/deep-image-96-angular.hdf5"
-    type: "build,search"
-    index_name: "hgraph"
-    create_params: '{"dim":96,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"pq","max_degree":72,"ef_construction":400,"base_pq_dim": 24,"precise_quantization_type":"fp32","use_reorder":true}}'
-    search_params: '{"hgraph":{"ef_search":77}}'
-    index_path: "/tmp/deep-image-96-angular/index/hgraph_index"
-    topk: 10
-    search_mode: "knn"
-    range: 0.5
-    delete_index_after_search: true
 
 
 GloVe-pq:
