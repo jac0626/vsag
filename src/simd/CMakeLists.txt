@@ -13,6 +13,7 @@ set (SIMD_SRCS
         bit_simd.cpp
         fp32_simd.cpp
         fp16_simd.cpp
+        int8_simd.cpp
         bf16_simd.cpp
         pqfs_simd.cpp
         sq8_simd.cpp
@@ -67,7 +68,7 @@ set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fno-builtin-free")
 set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -fopenmp -fopenmp-simd")
 set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -funroll-loops")
 
-add_library (simd ${SIMD_SRCS})
+add_library (simd STATIC ${SIMD_SRCS})
 
 macro (simd_add_definitions flag1 flag2)
     if (${flag1})
@@ -84,5 +85,12 @@ simd_add_definitions (DIST_CONTAINS_NEON -DENABLE_NEON=1)
 simd_add_definitions (DIST_CONTAINS_SVE -DENABLE_SVE=1)
 
 
-target_link_libraries (simd INTERFACE cpuinfo )
+
+
+target_link_libraries (simd
+  PRIVATE cpuinfo
+  INTERFACE coverage_config
+  )
+add_dependencies (simd cpuinfo)
+
 install (TARGETS simd ARCHIVE DESTINATION lib)

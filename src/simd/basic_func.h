@@ -27,6 +27,8 @@ InnerProduct(const void* pVect1, const void* pVect2, const void* qty_ptr);
 float
 InnerProductDistance(const void* pVect1, const void* pVect2, const void* qty_ptr);
 float
+INT8L2Sqr(const void* pVect1v, const void* pVect2v, const void* qty_ptr);
+float
 INT8InnerProduct(const void* pVect1, const void* pVect2, const void* qty_ptr);
 float
 INT8InnerProductDistance(const void* pVect1, const void* pVect2, const void* qty_ptr);
@@ -43,6 +45,8 @@ float
 InnerProduct(const void* pVect1, const void* pVect2, const void* qty_ptr);
 float
 InnerProductDistance(const void* pVect1, const void* pVect2, const void* qty_ptr);
+float
+INT8L2Sqr(const void* pVect1v, const void* pVect2v, const void* qty_ptr);
 float
 INT8InnerProduct(const void* pVect1, const void* pVect2, const void* qty_ptr);
 float
@@ -61,6 +65,8 @@ InnerProduct(const void* pVect1, const void* pVect2, const void* qty_ptr);
 float
 InnerProductDistance(const void* pVect1, const void* pVect2, const void* qty_ptr);
 float
+INT8L2Sqr(const void* pVect1v, const void* pVect2v, const void* qty_ptr);
+float
 INT8InnerProduct(const void* pVect1, const void* pVect2, const void* qty_ptr);
 float
 INT8InnerProductDistance(const void* pVect1, const void* pVect2, const void* qty_ptr);
@@ -75,6 +81,8 @@ float
 InnerProduct(const void* pVect1, const void* pVect2, const void* qty_ptr);
 float
 InnerProductDistance(const void* pVect1, const void* pVect2, const void* qty_ptr);
+float
+INT8L2Sqr(const void* pVect1v, const void* pVect2v, const void* qty_ptr);
 float
 INT8InnerProduct(const void* pVect1, const void* pVect2, const void* qty_ptr);
 float
@@ -91,6 +99,8 @@ InnerProduct(const void* pVect1, const void* pVect2, const void* qty_ptr);
 float
 InnerProductDistance(const void* pVect1, const void* pVect2, const void* qty_ptr);
 float
+INT8L2Sqr(const void* pVect1v, const void* pVect2v, const void* qty_ptr);
+float
 INT8InnerProduct(const void* pVect1, const void* pVect2, const void* qty_ptr);
 float
 INT8InnerProductDistance(const void* pVect1, const void* pVect2, const void* qty_ptr);
@@ -105,6 +115,8 @@ float
 InnerProduct(const void* pVect1, const void* pVect2, const void* qty_ptr);
 float
 InnerProductDistance(const void* pVect1, const void* pVect2, const void* qty_ptr);
+float
+INT8L2Sqr(const void* pVect1v, const void* pVect2v, const void* qty_ptr);
 float
 INT8InnerProduct(const void* pVect1, const void* pVect2, const void* qty_ptr);
 float
@@ -136,6 +148,7 @@ using DistanceFuncType = float (*)(const void* query1, const void* query2, const
 extern DistanceFuncType L2Sqr;
 extern DistanceFuncType InnerProduct;
 extern DistanceFuncType InnerProductDistance;
+extern DistanceFuncType INT8L2Sqr;
 extern DistanceFuncType INT8InnerProduct;
 extern DistanceFuncType INT8InnerProductDistance;
 

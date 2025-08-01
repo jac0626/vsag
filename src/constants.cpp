@@ -24,7 +24,7 @@ const char* const INDEX_HNSW = "hnsw";
 const char* const INDEX_FRESH_HNSW = "fresh_hnsw";
 const char* const INDEX_PYRAMID = "pyramid";
 const char* const INDEX_SPARSE = "sparse_index";
-const char* const INDEX_SPARSE_TERM = "sindi";
+const char* const INDEX_SINDI = "sindi";
 const char* const INDEX_BRUTE_FORCE = "brute_force";
 const char* const INDEX_IVF = "ivf";
 const char* const INDEX_GNO_IMI = "gno_imi";
@@ -182,7 +182,7 @@ const char* const GNO_IMI_SECOND_ORDER_BUCKETS_COUNT = "second_order_buckets_cou
 const char* const IVF_PRECISE_QUANTIZATION_TYPE = "precise_quantization_type";
 const char* const IVF_PRECISE_IO_TYPE = "precise_io_type";
 const char* const IVF_PRECISE_FILE_PATH = "precise_file_path";
-const char* const IVF_USE_ATTRIBUTE_FILTER = "use_attribute_filter";
+const char* const USE_ATTRIBUTE_FILTER = "use_attribute_filter";
 const char* const IVF_THREAD_COUNT = "thread_count";
 
 const char* const SERIAL_MAGIC_BEGIN = "vsag0000";

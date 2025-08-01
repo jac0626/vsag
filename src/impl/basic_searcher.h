@@ -30,6 +30,8 @@ static constexpr uint32_t OPTIMIZE_SEARCHER_SAMPLE_SIZE = 10000;
 
 enum InnerSearchMode { KNN_SEARCH = 1, RANGE_SEARCH = 2 };
 
+enum InnerSearchType { PURE = 1, WITH_FILTER = 2 };
+
 class InnerSearchParam {
 public:
     int64_t topk{0};
@@ -47,7 +49,7 @@ public:
     float factor{2.0F};
     float first_order_scan_ratio{1.0F};
     Allocator* search_alloc{nullptr};
-    ExecutorPtr executor{nullptr};
+    std::vector<ExecutorPtr> executors;
     mutable int64_t duplicate_id{-1};
     bool consider_duplicate{false};
 

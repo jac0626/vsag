@@ -22,7 +22,7 @@ extern const char* const INDEX_HNSW;
 extern const char* const INDEX_FRESH_HNSW;
 extern const char* const INDEX_PYRAMID;
 extern const char* const INDEX_SPARSE;
-extern const char* const INDEX_SPARSE_TERM;
+extern const char* const INDEX_SINDI;
 extern const char* const INDEX_BRUTE_FORCE;
 extern const char* const INDEX_IVF;
 extern const char* const DIM;
@@ -175,7 +175,7 @@ extern const char* const IVF_BASE_FILE_PATH;
 extern const char* const IVF_PRECISE_QUANTIZATION_TYPE;
 extern const char* const IVF_PRECISE_IO_TYPE;
 extern const char* const IVF_PRECISE_FILE_PATH;
-extern const char* const IVF_USE_ATTRIBUTE_FILTER;
+extern const char* const USE_ATTRIBUTE_FILTER;
 extern const char* const IVF_THREAD_COUNT;
 
 extern const char* const GNO_IMI_FIRST_ORDER_BUCKETS_COUNT;

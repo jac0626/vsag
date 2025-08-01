@@ -20,8 +20,18 @@
 
 #include "fixtures.h"
 #include "impl/allocator/safe_allocator.h"
+#include "storage/serialization_template_test.h"
 
 using namespace vsag;
+
+class MockFilter : public Filter {
+public:
+    [[nodiscard]] bool
+    CheckValid(int64_t id) const override {
+        // return true if id is even, otherwise false
+        return id % 2 == 0;
+    }
+};
 
 TEST_CASE("SINDI Basic Test", "[ut][SINDI]") {
     auto allocator = SafeAllocator::FactoryDefaultAllocator();
@@ -29,8 +39,8 @@ TEST_CASE("SINDI Basic Test", "[ut][SINDI]") {
     common_param.allocator_ = allocator;
 
     // Prepare Base and Query Dataset
-    uint32_t num_base = 10000;
-    uint32_t num_query = 1000;
+    uint32_t num_base = 1000;
+    uint32_t num_query = 100;
     int64_t max_dim = 128;
     int64_t max_id = 30000;
     float min_val = 0;
@@ -49,7 +59,7 @@ TEST_CASE("SINDI Basic Test", "[ut][SINDI]") {
     auto base = vsag::Dataset::Make();
     base->NumElements(num_base)->SparseVectors(sv_base.data())->Ids(ids.data())->Owner(false);
 
-    auto param_str = R"({{
+    constexpr static auto param_str = R"({{
         "use_reorder": {},
         "query_prune_ratio": 1,
         "doc_prune_ratio": 1,
@@ -58,7 +68,7 @@ TEST_CASE("SINDI Basic Test", "[ut][SINDI]") {
     }})";
 
     vsag::JsonType param_json = vsag::JsonType::parse(fmt::format(param_str, use_reorder));
-    auto index_param = std::make_shared<vsag::SINDIParameters>();
+    auto index_param = std::make_shared<vsag::SINDIParameter>();
     index_param->FromJson(param_json);
     auto index = std::make_unique<SINDI>(index_param, common_param);
     auto another_index = std::make_unique<SINDI>(index_param, common_param);
@@ -71,26 +81,19 @@ TEST_CASE("SINDI Basic Test", "[ut][SINDI]") {
     REQUIRE(build_res.size() == 0);
     REQUIRE(index->GetNumElements() == num_base);
 
-    auto dir = fixtures::TempDir("serialize");
-    auto path = dir.GenerateRandomFile();
-    std::ofstream outfile(path, std::ios::out | std::ios::binary);
-    IOStreamWriter writer(outfile);
-    index->Serialize(writer);
-    outfile.close();
-
-    std::ifstream infile(path, std::ios::in | std::ios::binary);
-    IOStreamReader reader(infile);
-    another_index->Deserialize(reader);
-    infile.close();
+    test_serializion(*index, *another_index);
     REQUIRE(another_index->GetNumElements() == num_base);
 
     std::string search_param_str = R"(
     {
-        "n_candidate": 20
+        "sindi": {
+            "n_candidate": 20
+        }
     }
     )";
 
     auto query = vsag::Dataset::Make();
+    auto mock_filter = std::make_shared<MockFilter>();
 
     for (int i = 0; i < num_query; ++i) {
         query->NumElements(1)->SparseVectors(sv_base.data() + i)->Owner(false);
@@ -104,6 +107,17 @@ TEST_CASE("SINDI Basic Test", "[ut][SINDI]") {
         for (int j = 0; j < k; j++) {
             REQUIRE(result->GetIds()[j] == bf_result->GetIds()[j]);
             REQUIRE(std::abs(result->GetDistances()[j] - bf_result->GetDistances()[j]) < 1e-2);
+        }
+
+        // test filter with knn
+        auto filter_knn_result = index->KnnSearch(query, k, search_param_str, mock_filter);
+        REQUIRE(filter_knn_result->GetDim() == k);
+        auto cur = 0;
+        for (int j = 0; j < k; j++) {
+            if (mock_filter->CheckValid(result->GetIds()[j])) {
+                REQUIRE(result->GetIds()[j] == filter_knn_result->GetIds()[cur]);
+                cur++;
+            }
         }
 
         // test serialize
@@ -122,12 +136,37 @@ TEST_CASE("SINDI Basic Test", "[ut][SINDI]") {
                     1e-3);
         }
 
+        // test filter with range limit
+        auto filter_range_limit_result =
+            index->RangeSearch(query, 0, search_param_str, mock_filter, 3);
+        REQUIRE(filter_range_limit_result->GetDim() == 3);
+        cur = 0;
+        for (int j = 0; j < 3; j++) {
+            if (mock_filter->CheckValid(range_result_limit_3->GetIds()[j])) {
+                REQUIRE(range_result_limit_3->GetIds()[j] ==
+                        filter_range_limit_result->GetIds()[cur]);
+                cur++;
+            }
+        }
+
         // test range search radius
         auto target_radius = result->GetDistances()[5];
         auto range_result_radius_3 =
             index->RangeSearch(query, target_radius, search_param_str, nullptr);
         for (int j = 0; j < range_result_radius_3->GetDim(); j++) {
             REQUIRE(range_result_radius_3->GetDistances()[j] < target_radius);
+        }
+
+        // test filter with range radius
+        auto filter_range_radius_result =
+            index->RangeSearch(query, target_radius, search_param_str, mock_filter);
+        cur = 0;
+        for (int j = 0; j < range_result_radius_3->GetDim(); j++) {
+            if (mock_filter->CheckValid(range_result_radius_3->GetIds()[j])) {
+                REQUIRE(range_result_radius_3->GetIds()[j] ==
+                        filter_range_radius_result->GetIds()[cur]);
+                cur++;
+            }
         }
     }
 

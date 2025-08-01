@@ -15,29 +15,16 @@
 
 #pragma once
 
-#include <cmath>
-#include <cstdlib>
-#include <cstring>
+#include <sstream>
 
-#include "basic_func.h"
-#include "bf16_simd.h"
-#include "bit_simd.h"
-#include "fp16_simd.h"
-#include "fp32_simd.h"
-#include "int8_simd.h"
-#include "normalize.h"
-#include "pqfs_simd.h"
-#include "rabitq_simd.h"
-#include "simd_marco.h"
-#include "simd_status.h"
-#include "sq4_simd.h"
-#include "sq4_uniform_simd.h"
-#include "sq8_simd.h"
-#include "sq8_uniform_simd.h"
+#include "serialization.h"
 
-namespace vsag {
-
-SimdStatus
-setup_simd();
-
-}  // namespace vsag
+template <typename T>
+void
+test_serializion(T& old_instance, T& new_instance) {
+    std::stringstream ss;
+    IOStreamWriter writer(ss);
+    old_instance.Serialize(writer);
+    IOStreamReader reader(ss);
+    new_instance.Deserialize(reader);
+}

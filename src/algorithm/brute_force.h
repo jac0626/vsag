@@ -17,6 +17,7 @@
 
 #include "algorithm/inner_index_interface.h"
 #include "brute_force_parameter.h"
+#include "data_cell/attribute_inverted_interface.h"
 #include "data_cell/flatten_interface.h"
 #include "label_table.h"
 #include "typing.h"
@@ -102,6 +103,17 @@ public:
     void
     GetVectorByInnerId(InnerIdType inner_id, float* data) const override;
 
+    [[nodiscard]] virtual DatasetPtr
+    SearchWithRequest(const SearchRequest& request) const override;
+
+    void
+    UpdateAttribute(int64_t id, const AttributeSet& new_attrs) override;
+
+    void
+    UpdateAttribute(int64_t id,
+                    const AttributeSet& new_attrs,
+                    const AttributeSet& origin_attrs) override;
+
 private:
     void
     resize(uint64_t new_size);
@@ -124,5 +136,8 @@ private:
     std::atomic<InnerIdType> max_capacity_{0};
 
     static constexpr uint64_t DEFAULT_RESIZE_BIT = 10;
+
+    bool use_attribute_filter_{false};
+    AttrInvertedInterfacePtr attr_filter_index_{nullptr};
 };
 }  // namespace vsag
