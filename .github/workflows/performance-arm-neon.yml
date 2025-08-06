@@ -26,12 +26,12 @@ jobs:
        
       
       # PQ Tests
-      - name: Run Perf - PQ
+      - name: Run Perf - SQ4
         id: test-pq
         continue-on-error: true
         run: |
           echo "::group::PQ Performance Tests"
-          ./build-release/tools/eval/eval_performance .github/perf-pq.yml 2>&1 | tee /tmp/perf-pq.log
+          ./build-release/tools/eval/eval_performance .github/perf-sq4.yml 2>&1 | tee /tmp/perf-pq.log
           echo "::endgroup::"
       
     
@@ -52,7 +52,7 @@ jobs:
           echo "## Test Results Summary"
           echo "| Quantization Method | Status |"
           echo "|---------------------|--------|"
-          echo "| PQ | ${{ steps.test-pq.outcome }} |"
+          echo "| SQ4 | ${{ steps.test-pq.outcome }} |"
           echo "| RABITQ | ${{ steps.test-rabitq.outcome }} |"
           
           # Show any errors from log files
