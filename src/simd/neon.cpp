@@ -47,14 +47,7 @@ InnerProductDistance(const void* pVect1, const void* pVect2, const void* qty_ptr
     return 1.0f - neon::InnerProduct(pVect1, pVect2, qty_ptr);
 }
 
-float
-INT8L2Sqr(const void* pVect1v, const void* pVect2v, const void* qty_ptr) {
-    auto* pVect1 = (int8_t*)pVect1v;
-    auto* pVect2 = (int8_t*)pVect2v;
-    auto qty = *((size_t*)qty_ptr);
 
-    return neon::INT8ComputeL2Sqr(pVect1, pVect2, qty);
-}
 
 float
 INT8InnerProduct(const void* pVect1v, const void* pVect2v, const void* qty_ptr) {
