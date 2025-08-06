@@ -16,8 +16,8 @@
 #pragma once
 
 #include "fp32_quantizer.h"
-#include "product_quantization/product_quantizer.h"
 #include "product_quantization/pq_fastscan_quantizer.h"
+#include "product_quantization/product_quantizer.h"
 #include "quantizer.h"
 #include "rabitq_quantization/rabitq_quantizer.h"
 #include "scalar_quantization/sq_headers.h"
