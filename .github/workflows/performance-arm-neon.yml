@@ -25,13 +25,13 @@ jobs:
 
        
       
-      # PQ Tests
-      - name: Run Perf - SQ4
-        id: test-pq
+       # RABITQ Tests
+      - name: Run Perf - RABITQ
+        id: test-rabitq
         continue-on-error: true
         run: |
-          echo "::group::PQ Performance Tests"
-          ./build-release/tools/eval/eval_performance .github/perf-sq4.yml 2>&1 | tee /tmp/perf-pq.log
+          echo "::group::RABITQ Performance Tests"
+          ./build-release/tools/eval/eval_performance .github/perf-rabitq.yml 2>&1 | tee /tmp/perf-rabitq.log
           echo "::endgroup::"
       
     
