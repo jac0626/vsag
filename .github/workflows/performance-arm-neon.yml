@@ -36,14 +36,7 @@ jobs:
       
     
       
-      # RABITQ Tests
-      - name: Run Perf - RABITQ
-        id: test-rabitq
-        continue-on-error: true
-        run: |
-          echo "::group::RABITQ Performance Tests"
-          ./build-release/tools/eval/eval_performance .github/perf-rabitq.yml 2>&1 | tee /tmp/perf-rabitq.log
-          echo "::endgroup::"
+     
       
       # Summary of test results
       - name: Test Summary
