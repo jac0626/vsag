@@ -1,0 +1,35 @@
+name: ARM64 Performance Test
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+jobs:
+  performance:
+    name: Performance (ARM64)
+    runs-on: ubuntu-22.04-arm
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      
+      - name: Build Docker image locally
+        run: |
+          echo "=== Building ARM64 Docker image locally ==="
+          docker build -t vsag:ci-arm64 -f docker/Dockerfile.arm64 .
+          
+          # 验证镜像构建成功
+          docker images | grep vsag
+      
+      - name: Run performance tests in container
+        run: |
+          docker run --rm \
+            -v ${{ github.workspace }}:/workspace \
+            -w /workspace \
+            vsag:ci-arm64 bash -c "
+              bash ./scripts/download_annbench_datasets.sh
+              make release
+              ./build-release/tools/eval/eval_performance .github/perf-mini.yml
+            "
+  
