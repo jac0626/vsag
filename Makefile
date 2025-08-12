@@ -137,7 +137,8 @@ PARAM3 := "${RELEASE_BUILD_DIR}"
 
 .PHONY: pyvsag
 pyvsag:                  ## Build pyvsag wheel.
-	bash ./scripts/build_pyvsag_multiple_version.sh $(PARAM1) $(PARAM2) $(PARAM3)
+	
+	bash ./scripts/build_pyvsag_multiple_version_arm64.sh $(PARAM1) $(PARAM2) $(PARAM3)
 
 .PHONY: clean-release
 clean-release:           ## Clear build-release/ directory.

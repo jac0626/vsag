@@ -1,0 +1,29 @@
+name: arm-py
+
+on:
+  schedule:
+    - cron: "01 08 * * 1-5" # UTC 08:01 every weekday
+  workflow_dispatch: {}
+
+jobs:
+  performance:
+    name: arm py
+    runs-on: ubuntu-22.04-arm
+    
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+      - name: Setup Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.10'
+          architecture: 'arm64'
+      - name: Install dependencies
+        run: apt install patchelf
+        
+      - name: Build py
+        run: make pyvsag
+      
+      - name: install
+        run: cd python/dist && pip install pyvsag-*.whl     
+     
