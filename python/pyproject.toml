@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=61.0", "setuptools_scm[toml]>=6.2", "pep440"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "pyvsag_test_jc"
+description = "vsag is a vector indexing library used for similarity search"
+
+authors = [
+    {name = "the vsag project", email = "the.vsag.project@gmail.com"},
+]
+license = {text = "Apache-2.0"}
+keywords = ["search", "nearest", "neighbors"]
+classifiers = [
+    "License :: OSI Approved :: Apache Software License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.6",
+    "Programming Language :: Python :: 3.7",
+    "Programming Language :: Python :: 3.8",
+    "Programming Language :: Python :: 3.9",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+]
+dependencies = [
+    "packaging",
+]
+dynamic = ["version"]
+
+[project.urls]
+Homepage = "https://github.com/antgroup/vsag"
+
+[tool.setuptools]
+packages = ["pyvsag"]
+package-data = { "pyvsag" = ["*.so", "*.so.*"] }
+zip-safe = false
+
+[tool.setuptools_scm]
+version_scheme = "release-branch-semver"
+local_scheme = "no-local-version"
+write_to = "python/pyvsag/_version.py"
+root = ".."
+
+[tool.cibuildwheel]
+# Run this command before building the wheel
+before-build = "bash scripts/build_cpp_for_cibw.sh"
+
+# Tell cibuildwheel to run the build in the root of the repository, not in the python/ subdirectory
+package-dir = "python"
+
+# On Linux, run patchelf to repair the wheel
+[tool.cibuildwheel.linux]
+repair-wheel-command = "patchelf --set-rpath '$ORIGIN' {wheel}/pyvsag/_pyvsag.cpython*.so"
