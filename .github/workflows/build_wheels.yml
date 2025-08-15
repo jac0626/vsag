@@ -1,5 +1,4 @@
 name: Build Wheels
-
 on:
   push:
     branches:
@@ -19,12 +18,11 @@ jobs:
             runner: ubuntu-latest
           - arch: aarch64
             runner: ubuntu-22.04-arm
-
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0  # Required for setuptools_scm
-
+      
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.12.0
         with:
@@ -32,11 +30,15 @@ jobs:
         env:
           # Tell cibuildwheel to build for the specific architecture
           CIBW_ARCHS: ${{ matrix.arch }}
+          
           # Run this script inside the manylinux container to install dependencies
           CIBW_BEFORE_ALL: |
             set -euo pipefail
-            # Install development tools and other dependencies
-            yum install -y wget gcc-c++ cmake ninja-build ccache gfortran libaio-devel libcurl-devel
+            
+            # Update and install basic dependencies
+            yum update -y
+            yum install -y wget gnupg2 sudo
+            
             # Set up Intel MKL repository
             tee /etc/yum.repos.d/oneAPI.repo << EOF
             [oneAPI]
@@ -47,9 +49,36 @@ jobs:
             repo_gpgcheck=1
             gpgkey=https://yum.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
             EOF
+            
             # Install Intel MKL
-            yum install -y intel-oneapi-mkl-devel
-
+            yum install -y intel-oneapi-mkl intel-oneapi-mkl-devel
+            
+            # Fix soft links for MKL libraries
+            [ ! -f /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_def.so ] && \
+              ln -s /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_def.so.2 /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_def.so || true
+            [ ! -f /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_avx2.so ] && \
+              ln -s /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_avx2.so.2 /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_avx2.so || true
+            [ ! -f /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_mc3.so ] && \
+              ln -s /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_mc3.so.2 /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_mc3.so || true
+            
+            # Install build tools
+            yum install -y git gcc-c++ cmake ninja-build gdb ccache
+            yum install -y make automake kernel-devel lcov gcc-gfortran
+            
+            # Install clang and related tools
+            # Note: manylinux may not have clang-15 specifically, using available version
+            yum install -y clang || true
+            yum install -y llvm-toolset || true
+            
+            # Install VSAG dependencies
+            yum install -y python3-devel libaio-devel libcurl-devel openssl-devel
+            
+            # Try to install libomp if available
+            yum install -y libomp-devel || yum install -y libgomp || true
+            
+            # Set environment variables for Intel MKL if needed
+            source /opt/intel/oneapi/setvars.sh || true
+            
       - uses: actions/upload-artifact@v4
         with:
           path: ./wheelhouse/*.whl
