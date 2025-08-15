@@ -34,90 +34,25 @@ jobs:
           CIBW_ARCHS: ${{ matrix.arch }}
           
           # Specify which Python versions to build
-          CIBW_BUILD: "cp38-* cp39-* cp310-* cp311-* cp312-*"
+          CIBW_BUILD: "cp36-* cp37-* cp38-* cp39-* cp310-* cp311-* cp312-*"
           
           # Skip PyPy and musllinux builds
           CIBW_SKIP: "pp* *-musllinux*"
           
           # Run this script inside the manylinux container to install dependencies
           CIBW_BEFORE_ALL: |
-            set -eo pipefail  # Remove 'u' flag to avoid unbound variable errors
-            
-            # Fix CentOS 7 EOL repository issues - use vault
-            if [ -f /etc/centos-release ]; then
-              sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-* 2>/dev/null || true
-              sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-* 2>/dev/null || true
-            fi
-            
-            # Clean yum cache
-            yum clean all
-            
-            # Install basic dependencies
-            yum install -y wget gnupg2 sudo
-            
-            # Set up Intel MKL repository
-            tee /etc/yum.repos.d/oneAPI.repo << EOF
-            [oneAPI]
-            name=Intel oneAPI repository
-            baseurl=https://yum.repos.intel.com/oneapi
-            enabled=1
-            gpgcheck=1
-            repo_gpgcheck=1
-            gpgkey=https://yum.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS.PUB
-            EOF
-            
-            # Install Intel MKL
-            yum install -y intel-oneapi-mkl intel-oneapi-mkl-devel
-            
-            # Fix soft links for MKL libraries
-            MKL_LIB_DIR="/opt/intel/oneapi/mkl/latest/lib/intel64"
-            if [ -d "$MKL_LIB_DIR" ]; then
-              [ ! -f "$MKL_LIB_DIR/libmkl_def.so" ] && [ -f "$MKL_LIB_DIR/libmkl_def.so.2" ] && \
-                ln -s "$MKL_LIB_DIR/libmkl_def.so.2" "$MKL_LIB_DIR/libmkl_def.so" || true
-              [ ! -f "$MKL_LIB_DIR/libmkl_avx2.so" ] && [ -f "$MKL_LIB_DIR/libmkl_avx2.so.2" ] && \
-                ln -s "$MKL_LIB_DIR/libmkl_avx2.so.2" "$MKL_LIB_DIR/libmkl_avx2.so" || true
-              [ ! -f "$MKL_LIB_DIR/libmkl_mc3.so" ] && [ -f "$MKL_LIB_DIR/libmkl_mc3.so.2" ] && \
-                ln -s "$MKL_LIB_DIR/libmkl_mc3.so.2" "$MKL_LIB_DIR/libmkl_mc3.so" || true
-            fi
-            
-            # Install build tools
-            yum install -y git gcc-c++ cmake ninja-build gdb ccache
-            yum install -y make automake kernel-devel lcov gcc-gfortran
-            
-            # Install clang and related tools (optional)
-            yum install -y epel-release || true
-            yum install -y clang || true
-            
-            # Install OpenMP support
-            yum install -y libgomp
-            
-            # Install VSAG dependencies
-            yum install -y python3-devel libaio-devel libcurl-devel openssl-devel
-            
-            # Set environment variables for Intel MKL
-            # Use a subshell to avoid unbound variable errors from Intel scripts
-            (
-              set +u  # Disable unbound variable checking for Intel scripts
-              if [ -f /opt/intel/oneapi/setvars.sh ]; then
-                source /opt/intel/oneapi/setvars.sh intel64 || true
-              fi
-            )
-            
-            # Manually set the essential MKL environment variables
-            export MKLROOT=/opt/intel/oneapi/mkl/latest
-            export LD_LIBRARY_PATH=/opt/intel/oneapi/mkl/latest/lib/intel64:${LD_LIBRARY_PATH:-}
-            export LIBRARY_PATH=/opt/intel/oneapi/mkl/latest/lib/intel64:${LIBRARY_PATH:-}
-            export CPATH=/opt/intel/oneapi/mkl/latest/include:${CPATH:-}
-            export PKG_CONFIG_PATH=/opt/intel/oneapi/mkl/latest/lib/pkgconfig:${PKG_CONFIG_PATH:-}
-          
-          # Environment variables for the build
-          CIBW_ENVIRONMENT: |
-            MKLROOT=/opt/intel/oneapi/mkl/latest
-            LD_LIBRARY_PATH=/opt/intel/oneapi/mkl/latest/lib/intel64:$LD_LIBRARY_PATH
-            LIBRARY_PATH=/opt/intel/oneapi/mkl/latest/lib/intel64:$LIBRARY_PATH
-            CPATH=/opt/intel/oneapi/mkl/latest/include:$CPATH
-            PKG_CONFIG_PATH=/opt/intel/oneapi/mkl/latest/lib/pkgconfig:$PKG_CONFIG_PATH
-            OMP_NUM_THREADS=1
+           # install python3-devel
+            yum install -y gfortran python3-devel libaio-devel libcurl-devel
+
+            # install openmp for alibaba clang 11
+            yum install -b current -y libomp11-devel libomp11
+
+            # install Intel MKL
+            yum install -y ca-certificates
+            yum-config-manager --add-repo https://yum.repos.intel.com/mkl/setup/intel-mkl.repo
+            rpm --import https://yum.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS-2019.PUB
+            yum install -y intel-mkl-64bit-2020.0-088
+
       
       - uses: actions/upload-artifact@v4
         with:
