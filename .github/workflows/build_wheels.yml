@@ -41,7 +41,7 @@ jobs:
           
           # Run this script inside the manylinux container to install dependencies
           CIBW_BEFORE_ALL: |
-            set -euo pipefail
+            set -eo pipefail  # Remove 'u' flag to avoid unbound variable errors
             
             # Fix CentOS 7 EOL repository issues - use vault
             if [ -f /etc/centos-release ]; then
@@ -85,25 +85,38 @@ jobs:
             yum install -y make automake kernel-devel lcov gcc-gfortran
             
             # Install clang and related tools (optional)
-            # For CentOS 7, we might need to enable SCL or EPEL for newer clang versions
             yum install -y epel-release || true
             yum install -y clang || true
             
-            # Install OpenMP support - use libgomp (GCC's OpenMP) instead of libomp
+            # Install OpenMP support
             yum install -y libgomp
             
             # Install VSAG dependencies
             yum install -y python3-devel libaio-devel libcurl-devel openssl-devel
             
             # Set environment variables for Intel MKL
-            if [ -f /opt/intel/oneapi/setvars.sh ]; then
-              source /opt/intel/oneapi/setvars.sh || true
-            fi
+            # Use a subshell to avoid unbound variable errors from Intel scripts
+            (
+              set +u  # Disable unbound variable checking for Intel scripts
+              if [ -f /opt/intel/oneapi/setvars.sh ]; then
+                source /opt/intel/oneapi/setvars.sh intel64 || true
+              fi
+            )
+            
+            # Manually set the essential MKL environment variables
+            export MKLROOT=/opt/intel/oneapi/mkl/latest
+            export LD_LIBRARY_PATH=/opt/intel/oneapi/mkl/latest/lib/intel64:${LD_LIBRARY_PATH:-}
+            export LIBRARY_PATH=/opt/intel/oneapi/mkl/latest/lib/intel64:${LIBRARY_PATH:-}
+            export CPATH=/opt/intel/oneapi/mkl/latest/include:${CPATH:-}
+            export PKG_CONFIG_PATH=/opt/intel/oneapi/mkl/latest/lib/pkgconfig:${PKG_CONFIG_PATH:-}
           
           # Environment variables for the build
           CIBW_ENVIRONMENT: |
             MKLROOT=/opt/intel/oneapi/mkl/latest
             LD_LIBRARY_PATH=/opt/intel/oneapi/mkl/latest/lib/intel64:$LD_LIBRARY_PATH
+            LIBRARY_PATH=/opt/intel/oneapi/mkl/latest/lib/intel64:$LIBRARY_PATH
+            CPATH=/opt/intel/oneapi/mkl/latest/include:$CPATH
+            PKG_CONFIG_PATH=/opt/intel/oneapi/mkl/latest/lib/pkgconfig:$PKG_CONFIG_PATH
             OMP_NUM_THREADS=1
       
       - uses: actions/upload-artifact@v4
