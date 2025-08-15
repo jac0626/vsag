@@ -45,8 +45,7 @@ root = ".."
 # Run this command before building the wheel
 before-build = "bash scripts/build_cpp_for_cibw.sh"
 
-# Tell cibuildwheel to run the build in the root of the repository, not in the python/ subdirectory
-package-dir = "python"
+
 
 # On Linux, run patchelf to repair the wheel
 [tool.cibuildwheel.linux]
