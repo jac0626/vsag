@@ -19,12 +19,12 @@ jobs:
           - os: ubuntu-latest
             arch: x86_64
             runner: ubuntu-latest
-          - os: ubuntu-22.04
+          - os: ubuntu-latest
             arch: aarch64
-            runner: ubuntu-22.04-arm64
+            runner: ubuntu-22.04-arm
 
     steps:
-      - uses: actions/checkout@v3
+      - uses: actions/checkout@v4
         with:
           fetch-depth: 0  # Required for setuptools_scm
 
@@ -34,6 +34,6 @@ jobs:
           # Tell cibuildwheel to build for the specific architecture
           CIBW_ARCHS: ${{ matrix.arch }}
 
-      - uses: actions/upload-artifact@v3
+      - uses: actions/upload-artifact@v4
         with:
           path: ./wheelhouse/*.whl
