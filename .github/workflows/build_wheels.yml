@@ -1,4 +1,5 @@
 name: Build Wheels
+
 on:
   push:
     branches:
@@ -18,6 +19,7 @@ jobs:
             runner: ubuntu-latest
           - arch: aarch64
             runner: ubuntu-22.04-arm
+    
     steps:
       - uses: actions/checkout@v4
         with:
@@ -35,8 +37,11 @@ jobs:
           CIBW_BEFORE_ALL: |
             set -euo pipefail
             
-            # Update and install basic dependencies
-            yum update -y
+            # Fix CentOS 7 EOL repository issues - use vault
+            sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-* 2>/dev/null || true
+            sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-* 2>/dev/null || true
+            
+            # Install basic dependencies
             yum install -y wget gnupg2 sudo
             
             # Set up Intel MKL repository
@@ -65,8 +70,7 @@ jobs:
             yum install -y git gcc-c++ cmake ninja-build gdb ccache
             yum install -y make automake kernel-devel lcov gcc-gfortran
             
-            # Install clang and related tools
-            # Note: manylinux may not have clang-15 specifically, using available version
+            # Install clang and related tools (optional, may not be available in all manylinux versions)
             yum install -y clang || true
             yum install -y llvm-toolset || true
             
@@ -78,7 +82,8 @@ jobs:
             
             # Set environment variables for Intel MKL if needed
             source /opt/intel/oneapi/setvars.sh || true
-            
+      
       - uses: actions/upload-artifact@v4
         with:
+          name: wheels-${{ matrix.arch }}
           path: ./wheelhouse/*.whl
