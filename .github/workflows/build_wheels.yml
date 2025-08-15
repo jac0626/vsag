@@ -1,5 +1,4 @@
 name: Build Wheels
-
 on:
   push:
     branches:
@@ -19,12 +18,11 @@ jobs:
             runner: ubuntu-latest
           - arch: aarch64
             runner: ubuntu-22.04-arm
-    
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0  # Required for setuptools_scm
-      
+
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.12.0
         with:
@@ -34,26 +32,40 @@ jobs:
           CIBW_ARCHS: ${{ matrix.arch }}
           
           # Specify which Python versions to build
-          CIBW_BUILD: "cp36-* cp37-* cp38-* cp39-* cp310-* cp311-* cp312-*"
+          CIBW_BUILD: "cp38-* cp39-* cp310-* cp311-* cp312-*"
           
           # Skip PyPy and musllinux builds
           CIBW_SKIP: "pp* *-musllinux*"
           
+          # Use a newer manylinux image that doesn't rely on CentOS 7
+          CIBW_MANYLINUX_X86_64_IMAGE: manylinux2014
+          CIBW_MANYLINUX_AARCH64_IMAGE: manylinux2014
+          
           # Run this script inside the manylinux container to install dependencies
           CIBW_BEFORE_ALL: |
-           # install python3-devel
-            yum install -y gfortran python3-devel libaio-devel libcurl-devel
+            # Fix CentOS 7 repos by switching to vault
+            sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-*.repo
+            sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*.repo
+            
+            # Clean yum cache
+            yum clean all
+            
+            # Install development tools
+            yum install -y gcc gcc-c++ gcc-gfortran python3-devel
+            
+            # Install other dependencies
+            yum install -y libaio-devel libcurl-devel ca-certificates
+            
+            # Install Intel MKL (only for x86_64)
+            if [[ "$(uname -m)" == "x86_64" ]]; then
+              yum-config-manager --add-repo https://yum.repos.intel.com/mkl/setup/intel-mkl.repo
+              rpm --import https://yum.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS-2019.PUB
+              yum install -y intel-mkl-64bit-2020.0-088
+            fi
+            
+            # For OpenMP, use the standard package instead of alibaba-specific ones
+            yum install -y libgomp
 
-            # install openmp for alibaba clang 11
-            yum install -b current -y libomp11-devel libomp11
-
-            # install Intel MKL
-            yum install -y ca-certificates
-            yum-config-manager --add-repo https://yum.repos.intel.com/mkl/setup/intel-mkl.repo
-            rpm --import https://yum.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS-2019.PUB
-            yum install -y intel-mkl-64bit-2020.0-088
-
-      
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.arch }}
