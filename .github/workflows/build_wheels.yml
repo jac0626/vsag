@@ -33,13 +33,24 @@ jobs:
           # Tell cibuildwheel to build for the specific architecture
           CIBW_ARCHS: ${{ matrix.arch }}
           
+          # Specify which Python versions to build
+          CIBW_BUILD: "cp38-* cp39-* cp310-* cp311-* cp312-*"
+          
+          # Skip PyPy and musllinux builds
+          CIBW_SKIP: "pp* *-musllinux*"
+          
           # Run this script inside the manylinux container to install dependencies
           CIBW_BEFORE_ALL: |
             set -euo pipefail
             
             # Fix CentOS 7 EOL repository issues - use vault
-            sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-* 2>/dev/null || true
-            sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-* 2>/dev/null || true
+            if [ -f /etc/centos-release ]; then
+              sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-* 2>/dev/null || true
+              sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-* 2>/dev/null || true
+            fi
+            
+            # Clean yum cache
+            yum clean all
             
             # Install basic dependencies
             yum install -y wget gnupg2 sudo
@@ -59,31 +70,44 @@ jobs:
             yum install -y intel-oneapi-mkl intel-oneapi-mkl-devel
             
             # Fix soft links for MKL libraries
-            [ ! -f /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_def.so ] && \
-              ln -s /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_def.so.2 /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_def.so || true
-            [ ! -f /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_avx2.so ] && \
-              ln -s /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_avx2.so.2 /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_avx2.so || true
-            [ ! -f /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_mc3.so ] && \
-              ln -s /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_mc3.so.2 /opt/intel/oneapi/mkl/latest/lib/intel64/libmkl_mc3.so || true
+            MKL_LIB_DIR="/opt/intel/oneapi/mkl/latest/lib/intel64"
+            if [ -d "$MKL_LIB_DIR" ]; then
+              [ ! -f "$MKL_LIB_DIR/libmkl_def.so" ] && [ -f "$MKL_LIB_DIR/libmkl_def.so.2" ] && \
+                ln -s "$MKL_LIB_DIR/libmkl_def.so.2" "$MKL_LIB_DIR/libmkl_def.so" || true
+              [ ! -f "$MKL_LIB_DIR/libmkl_avx2.so" ] && [ -f "$MKL_LIB_DIR/libmkl_avx2.so.2" ] && \
+                ln -s "$MKL_LIB_DIR/libmkl_avx2.so.2" "$MKL_LIB_DIR/libmkl_avx2.so" || true
+              [ ! -f "$MKL_LIB_DIR/libmkl_mc3.so" ] && [ -f "$MKL_LIB_DIR/libmkl_mc3.so.2" ] && \
+                ln -s "$MKL_LIB_DIR/libmkl_mc3.so.2" "$MKL_LIB_DIR/libmkl_mc3.so" || true
+            fi
             
             # Install build tools
             yum install -y git gcc-c++ cmake ninja-build gdb ccache
             yum install -y make automake kernel-devel lcov gcc-gfortran
             
-            # Install clang and related tools (optional, may not be available in all manylinux versions)
+            # Install clang and related tools (optional)
+            # For CentOS 7, we might need to enable SCL or EPEL for newer clang versions
+            yum install -y epel-release || true
             yum install -y clang || true
-            yum install -y llvm-toolset || true
+            
+            # Install OpenMP support - use libgomp (GCC's OpenMP) instead of libomp
+            yum install -y libgomp
             
             # Install VSAG dependencies
             yum install -y python3-devel libaio-devel libcurl-devel openssl-devel
             
-            # Try to install libomp if available
-            yum install -y libomp-devel || yum install -y libgomp || true
-            
-            # Set environment variables for Intel MKL if needed
-            source /opt/intel/oneapi/setvars.sh || true
+            # Set environment variables for Intel MKL
+            if [ -f /opt/intel/oneapi/setvars.sh ]; then
+              source /opt/intel/oneapi/setvars.sh || true
+            fi
+          
+          # Environment variables for the build
+          CIBW_ENVIRONMENT: |
+            MKLROOT=/opt/intel/oneapi/mkl/latest
+            LD_LIBRARY_PATH=/opt/intel/oneapi/mkl/latest/lib/intel64:$LD_LIBRARY_PATH
+            OMP_NUM_THREADS=1
       
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.arch }}
           path: ./wheelhouse/*.whl
+          if-no-files-found: error
