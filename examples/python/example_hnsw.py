@@ -12,7 +12,7 @@
 #  See the License for the specific language governing permissions and
 #  limitations under the License.
 
-import pyvsag
+import pyvsag_test_jc
 import numpy as np
 import pickle
 import sys
@@ -48,7 +48,7 @@ def float32_hnsw_test():
             "ef_construction": 100
         }
     })
-    index = pyvsag.Index("hnsw", index_params)
+    index = pyvsag_test_jc.Index("hnsw", index_params)
 
     index.build(vectors=data,
                 ids=ids,
@@ -61,7 +61,7 @@ def float32_hnsw_test():
     filename = "./example_hnsw.index"
     file_sizes = index.save(filename)
     
-    index = pyvsag.Index("hnsw", index_params)
+    index = pyvsag_test_jc.Index("hnsw", index_params)
     index.load(filename)
     print("float32 recall:", cal_recall(index, ids, data, 11, search_params))
 
