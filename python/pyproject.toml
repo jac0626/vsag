@@ -13,8 +13,6 @@ keywords = ["search", "nearest", "neighbors"]
 classifiers = [
     "License :: OSI Approved :: Apache Software License",
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.6",
-    "Programming Language :: Python :: 3.7",
     "Programming Language :: Python :: 3.8",
     "Programming Language :: Python :: 3.9",
     "Programming Language :: Python :: 3.10",
@@ -31,8 +29,11 @@ Homepage = "https://github.com/antgroup/vsag"
 
 [tool.setuptools]
 packages = ["pyvsag"]
-package-data = { "pyvsag" = ["_pyvsag*.so"] }
+package-data = { "pyvsag" = ["_pyvsag*.so", "libvsag.so*", "__init__.py", "_version.py"] }
 zip-safe = false
+
+[tool.setuptools.exclude-package-data]
+"*" = ["example*.so", "_version.py.in", "*.pyc", "__pycache__"]
 
 [tool.setuptools_scm]
 version_scheme = "release-branch-semver"
@@ -41,14 +42,37 @@ write_to = "python/pyvsag/_version.py"
 root = ".."
 
 [tool.cibuildwheel]
-
 skip = ["*-musllinux*", "*i686*", "pp*"]
-before-build = "bash scripts/build_cpp_for_cibw.sh"
+before-build = [
+    "rm -f python/pyvsag/*.so",
+    "rm -f python/example*.so",
+    "bash scripts/build_cpp_for_cibw.sh"
+]
 
 [tool.cibuildwheel.linux]
-
-repair-wheel-command = "auditwheel repair -w {dest_dir} {wheel}"
-
+repair-wheel-command = """
+    auditwheel repair -w {dest_dir} {wheel} \
+        --exclude libstdc++.so.6 \
+        --exclude libgcc_s.so.1 \
+        --exclude libgomp.so.1 \
+        --exclude libgfortran.so.3 \
+        --exclude libgfortran.so.4 \
+        --exclude libgfortran.so.5 \
+    || cp {wheel} {dest_dir}/
+"""
 
 manylinux-x86_64-image = "manylinux2014"
 manylinux-aarch64-image = "manylinux2014"
+
+environment = { CXXFLAGS="-static-libstdc++ -static-libgcc", LDFLAGS="-static-libstdc++ -static-libgcc" }
+
+before-all = """
+    if [ -f /etc/centos-release ]; then
+        sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-*.repo
+        sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*.repo
+    fi
+    yum clean all
+    yum install -y gcc gcc-c++ cmake libgomp
+    rm -rf python/pyvsag/*.so
+    rm -rf python/example*.so
+"""
