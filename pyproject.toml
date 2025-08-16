@@ -42,12 +42,9 @@ write_to = "python/pyvsag/_version.py"
 root = ".."
 
 [tool.cibuildwheel]
-# Run this command before building the wheel
 before-build = "bash scripts/build_cpp_for_cibw.sh"
-
-# Tell cibuildwheel to run the build in the root of the repository, not in the python/ subdirectory
 package-dir = "python"
 
-# On Linux, run patchelf to repair the wheel
 [tool.cibuildwheel.linux]
-repair-wheel-command = "patchelf --set-rpath '$ORIGIN' {wheel}/pyvsag/_pyvsag.cpython*.so"
+# 使用 auditwheel 来修复 wheel，它会自动处理 RPATH 和依赖
+repair-wheel-command = "auditwheel repair -w {dest_dir} {wheel}"
