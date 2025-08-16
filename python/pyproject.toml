@@ -42,9 +42,8 @@ write_to = "python/pyvsag/_version.py"
 root = ".."
 
 [tool.cibuildwheel]
+# 注意：package-dir 必须在 GitHub Actions 中设置，不能在这里
 before-build = "bash scripts/build_cpp_for_cibw.sh"
-package-dir = "python"
 
 [tool.cibuildwheel.linux]
-# 使用 auditwheel 来修复 wheel，它会自动处理 RPATH 和依赖
 repair-wheel-command = "auditwheel repair -w {dest_dir} {wheel}"
