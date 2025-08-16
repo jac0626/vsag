@@ -8,69 +8,100 @@ on:
 
 jobs:
   build_wheels:
-    name: Build wheels for ${{ matrix.arch }}
+    name: Build wheels for ${{ matrix.python }}-${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - arch: x86_64
+          - python: cp38
+            arch: x86_64
             runner: ubuntu-latest
-          - arch: aarch64
+          - python: cp39
+            arch: x86_64
+            runner: ubuntu-latest
+          - python: cp310
+            arch: x86_64
+            runner: ubuntu-latest
+          - python: cp311
+            arch: x86_64
+            runner: ubuntu-latest
+          - python: cp312
+            arch: x86_64
+            runner: ubuntu-latest
+          - python: cp38
+            arch: aarch64
             runner: ubuntu-22.04-arm
+          - python: cp39
+            arch: aarch64
+            runner: ubuntu-22.04-arm
+          - python: cp310
+            arch: aarch64
+            runner: ubuntu-22.04-arm
+          - python: cp311
+            arch: aarch64
+            runner: ubuntu-22.04-arm
+          - python: cp312
+            arch: aarch64
+            runner: ubuntu-22.04-arm
+    
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Required for setuptools_scm
-
-      - name: Build wheels
+          fetch-depth: 0
+      
+      - name: Clean workspace
+        run: |
+          rm -rf python/pyvsag/*.so
+          rm -rf python/example*.so
+          rm -rf build*/
+          rm -rf wheelhouse/
+      
+      - name: Build wheel
         uses: pypa/cibuildwheel@v2.12.0
         with:
           package-dir: python
         env:
-          # Tell cibuildwheel to build for the specific architecture
+          CIBW_BUILD: "${{ matrix.python }}-*"
+          CIBW_SKIP: "*-musllinux*"
           CIBW_ARCHS: ${{ matrix.arch }}
-          
-          # Specify which Python versions to build
-          CIBW_BUILD: "cp38-* cp39-* cp310-* cp311-* cp312-*"
-          
-          # Skip PyPy and musllinux builds
-          CIBW_SKIP: "pp* *-musllinux*"
-          
-          # Use a newer manylinux image that doesn't rely on CentOS 7
           CIBW_MANYLINUX_X86_64_IMAGE: manylinux2014
           CIBW_MANYLINUX_AARCH64_IMAGE: manylinux2014
-
-          CIBW_BEFORE_ALL: |
-            # Fix CentOS 7 repos
-            sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-*.repo
-            sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*.repo
-  
-            # Fix aarch64 specific issues
-            if [[ "$(uname -m)" == "aarch64" ]]; then
-            rm -f /etc/yum.repos.d/CentOS-SCLo-*.repo
+          
+          CIBW_BEFORE_ALL_LINUX: |
+            if [ -f /etc/centos-release ]; then
+              sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-*.repo
+              sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*.repo
             fi
-  
             yum clean all
-            
-            # Install development tools
-            yum install -y gcc gcc-c++ gcc-gfortran python3-devel
-            
-            # Install other dependencies
-            yum install -y libaio-devel libcurl-devel ca-certificates
-            
-            # Install Intel MKL (only for x86_64)
+            yum install -y gcc gcc-c++ gcc-gfortran python3-devel libaio-devel libcurl-devel ca-certificates libgomp
             if [[ "$(uname -m)" == "x86_64" ]]; then
               yum-config-manager --add-repo https://yum.repos.intel.com/mkl/setup/intel-mkl.repo
               rpm --import https://yum.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS-2019.PUB
               yum install -y intel-mkl-64bit-2020.0-088
             fi
-            
-            # For OpenMP, use the standard package instead of alibaba-specific ones
-            yum install -y libgomp
-
+      
+      - name: Verify wheel content
+        run: |
+          pip install wheel
+          for wheel in wheelhouse/*.whl; do
+            echo "Checking $(basename $wheel)"
+            python -m wheel unpack "$wheel" -d /tmp/check
+            find /tmp/check -name "*.so" -exec basename {} \;
+            PYVSAG_COUNT=$(find /tmp/check -name "_pyvsag*.so" | wc -l)
+            if [ "$PYVSAG_COUNT" -ne 1 ]; then
+              echo "ERROR: Expected 1 _pyvsag*.so, found $PYVSAG_COUNT"
+              exit 1
+            fi
+            if find /tmp/check -name "example*.so" | grep -q .; then
+              echo "ERROR: Found example.so in wheel!"
+              exit 1
+            fi
+            rm -rf /tmp/check
+          done
+      
       - uses: actions/upload-artifact@v4
         with:
-          name: wheels-${{ matrix.arch }}
+          name: wheels-${{ matrix.python }}-${{ matrix.arch }}
           path: ./wheelhouse/*.whl
           if-no-files-found: error
