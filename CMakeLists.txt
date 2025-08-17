@@ -308,6 +308,7 @@ if (ENABLE_PYBINDS)
     
   
     include (extern/pybind11/pybind11.cmake)
+    target_link_options(_pyvsag PRIVATE -static-libstdc++ -static-libgcc)
     pybind11_add_module (_pyvsag python_bindings/binding.cpp)
     target_compile_options (_pyvsag PRIVATE -fopenmp)
     target_link_libraries (_pyvsag PRIVATE pybind11::module vsag)

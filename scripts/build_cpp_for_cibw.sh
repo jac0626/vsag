@@ -33,10 +33,8 @@ echo "Python SOABI: $PYTHON_SOABI"
 echo "Expected suffix: $EXPECTED_SUFFIX"
 
 # 2. 清理之前的构建
-if [ -d "$CMAKE_BUILD_DIR" ]; then
-    echo "Cleaning previous build directory..."
-    rm -rf "$CMAKE_BUILD_DIR"
-fi
+echo "Cleaning previous extension modules in python/pyvsag/..."
+rm -rf python/pyvsag/*.so python/pyvsag/*.so.*
 
 # 3. 配置 CMake - 关键：传递正确的 Python 路径
 echo "=== Configuring CMake ==="
