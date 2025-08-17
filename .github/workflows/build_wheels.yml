@@ -203,14 +203,14 @@ jobs:
       
       - name: Test installation from TestPyPI
         run: |
-          # Replace 'your-package-name' with your actual package name
-          pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ your-package-name
+          # Replace 'pyvsag-test-jc' with your actual package name
+          pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ pyvsag-test-jc
           
           # Test import (replace with your actual package name)
           python -c "import your_package_name; print('Successfully imported package')"
           
           # Verify the installed package info
-          pip show your-package-name
+          pip show pyvsag-test-jc
       
       - name: Run basic tests
         run: |
@@ -238,7 +238,7 @@ jobs:
     if: github.event_name == 'release' && github.event.action == 'published'
     environment:
       name: pypi
-      url: https://pypi.org/p/your-package-name  # Replace with your package
+      url: https://pypi.org/p/pyvsag-test-jc  # Replace with your package
     
     steps:
       # Download all artifacts again
