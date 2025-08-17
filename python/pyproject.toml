@@ -47,9 +47,7 @@ before-build = "bash scripts/build_cpp_for_cibw.sh"
 
 [tool.cibuildwheel.linux]
 repair-wheel-command = """
-  auditwheel repair -w {dest_dir} {wheel} \
-  --exclude libmkl* \
-  --exclude libiomp5*
+  auditwheel repair -w {dest_dir} {wheel}
 """
 
 manylinux-x86_64-image = "manylinux2014"
