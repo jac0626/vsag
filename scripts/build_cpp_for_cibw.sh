@@ -47,7 +47,8 @@ cmake -S. -B$CMAKE_BUILD_DIR \
     -DPython_EXECUTABLE="$PYTHON_EXECUTABLE" \
     -DPython3_EXECUTABLE="$PYTHON_EXECUTABLE" \
     -DPython3_ROOT_DIR="$(dirname $(dirname $PYTHON_EXECUTABLE))" \
-    -DPython3_FIND_STRATEGY=LOCATION
+    -DPython3_FIND_STRATEGY=LOCATION \
+    -DENABLE_INTEL_MKL=OFF
 
 # 4. 构建项目
 echo "=== Building project ==="
