@@ -23,6 +23,7 @@ classifiers = [
 ]
 dependencies = [
     "packaging",
+    "mkl==2025.2.0; platform_machine=='x86_64'",
 ]
 dynamic = ["version"]
 
@@ -41,14 +42,22 @@ write_to = "python/pyvsag/_version.py"
 root = ".."
 
 [tool.cibuildwheel]
-
 skip = ["*-musllinux*", "*i686*", "pp*"]
 before-build = "bash scripts/build_cpp_for_cibw.sh"
 
 [tool.cibuildwheel.linux]
-
-repair-wheel-command = "auditwheel repair -w {dest_dir} {wheel}"
-
+repair-wheel-command = """
+  auditwheel repair -w {dest_dir} {wheel} \
+  --exclude libmkl_rt.so.1 \
+  --exclude libmkl_intel_lp64.so.1 \
+  --exclude libmkl_gnu_thread.so.1 \
+  --exclude libmkl_core.so.1 \
+  --exclude libmkl_def.so.1 \
+  --exclude libmkl_avx.so.1 \
+  --exclude libmkl_avx2.so.1 \
+  --exclude libmkl_avx512.so.1 \
+  --exclude libiomp5.so
+"""
 
 manylinux-x86_64-image = "manylinux2014"
 manylinux-aarch64-image = "manylinux2014"

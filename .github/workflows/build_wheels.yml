@@ -80,39 +80,11 @@ jobs:
           path: ./wheelhouse/*.whl
           if-no-files-found: error
 
-  build_sdist:
-    name: Build source distribution
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          fetch-depth: 0  # Required for setuptools_scm
-      
-      - name: Set up Python
-        uses: actions/setup-python@v4
-        with:
-          python-version: '3.11'
-      
-      - name: Build sdist
-        run: |
-          cd python
-          pip install build
-          python -m build --sdist
-      
-      # Upload source distribution
-      # sdist is important because:
-      # 1. It provides source code for platforms without pre-built wheels
-      # 2. PyPI best practice is to upload both wheels and sdist
-      # 3. Some users prefer to build from source for security/audit reasons
-      - uses: actions/upload-artifact@v4
-        with:
-          name: sdist
-          path: python/dist/*.tar.gz
-          if-no-files-found: error
+
 
   publish_test_pypi:
     name: Publish to TestPyPI
-    needs: [build_wheels, build_sdist]
+    needs: [build_wheels]
     runs-on: ubuntu-latest
     # Only publish on main branch or release
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'release'
