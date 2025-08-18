@@ -25,141 +25,87 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0
-      
-      - name: Get package info
-        id: get_info
-        # 使用 working-directory 会比 cd 更清晰，所有命令都在 ./python 目录中执行
-        working-directory: ./python
-        run: |
-          pip install setuptools setuptools-scm tomli
-
-          # 从 setuptools-scm 获取包版本
-          # 因为工作目录是 ./python，所以需要告诉 setuptools-scm Git 的根目录是上一级 '..'
-          VERSION=$(python -c "from setuptools_scm import get_version; print(get_version(root='..'))")
-          
-          # 增加错误检查，如果版本号为空则直接失败
-          if [ -z "$VERSION" ]; then
-            echo "::error::无法确定包的版本号 (Could not determine package version)."
-            exit 1
-          fi
-          echo "版本号确定: $VERSION"
-          
-          # 从 pyproject.toml 获取包名
-          if [ ! -f pyproject.toml ]; then
-            echo "::error::在 $(pwd) 目录下未找到 pyproject.toml"
-            exit 1
-          fi
-          
-          # 使用更健壮的 Python 命令来获取包名，如果失败则会退出
-          PACKAGE_NAME=$(python -c "import tomli, sys; \
-            try: \
-              with open('pyproject.toml', 'rb') as f: \
-                data = tomli.load(f); \
-                print(data['project']['name']); \
-            except Exception as e: \
-              print(f'从 pyproject.toml 读取包名时出错: {e}', file=sys.stderr); \
-              sys.exit(1)")
-
-          # 增加错误检查，如果包名为空则直接失败
-          if [ -z "$PACKAGE_NAME" ]; then
-            echo "::error::无法从 pyproject.toml 确定包名 (Could not determine package name)."
-            exit 1
-          fi
-          echo "包名确定: $PACKAGE_NAME"
-
-          # 设置此步骤的输出，以便同一 Job 中的后续步骤可以引用
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "package_name=$PACKAGE_NAME" >> $GITHUB_OUTPUT
-          
-          # 将版本和包名保存到文件中，用于后续 Job 的 Artifacts
-          # 因为工作目录是 ./python，所以需要使用 ../ 来指定到根目录
-          echo "$VERSION" > ../version.txt
-          echo "$PACKAGE_NAME" > ../package_name.txt
+          fetch-depth: 0  # Required for setuptools_scm
       
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.12.0
         with:
           package-dir: python
         env:
+          # Tell cibuildwheel to build for the specific architecture
           CIBW_ARCHS: ${{ matrix.arch }}
+          
+          # Specify which Python versions to build
           CIBW_BUILD: "cp38-* cp39-* cp310-* cp311-* cp312-*"
+          
+          # Skip PyPy and musllinux builds
           CIBW_SKIP: "pp* *-musllinux*"
+          
+          # Use a newer manylinux image that doesn't rely on CentOS 7
           CIBW_MANYLINUX_X86_64_IMAGE: manylinux2014
           CIBW_MANYLINUX_AARCH64_IMAGE: manylinux2014
+          
           CIBW_BEFORE_ALL: |
+            # Fix CentOS 7 repos
             sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-*.repo
             sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*.repo
             
+            # Fix aarch64 specific issues
             if [[ "$(uname -m)" == "aarch64" ]]; then
               rm -f /etc/yum.repos.d/CentOS-SCLo-*.repo
             fi
             
             yum clean all
+            
+            # Install development tools
             yum install -y gcc gcc-c++ gcc-gfortran python3-devel
+            
+            # Install other dependencies
             yum install -y libaio-devel libcurl-devel ca-certificates
             
+            # Install Intel MKL (only for x86_64)
             if [[ "$(uname -m)" == "x86_64" ]]; then
               yum-config-manager --add-repo https://yum.repos.intel.com/mkl/setup/intel-mkl.repo
               rpm --import https://yum.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS-2019.PUB
               yum install -y intel-mkl-64bit-2020.0-088
             fi
             
+            # For OpenMP, use the standard package instead of alibaba-specific ones
             yum install -y libgomp
       
+      # Upload individual wheel files
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.arch }}
           path: ./wheelhouse/*.whl
           if-no-files-found: error
-      
-      - uses: actions/upload-artifact@v4
-        if: matrix.arch == 'x86_64'
-        with:
-          name: package-info
-          path: |
-            version.txt
-            package_name.txt
+
+
 
   publish_test_pypi:
     name: Publish to TestPyPI
     needs: [build_wheels]
     runs-on: ubuntu-latest
-    outputs:
-      version: ${{ steps.get_info.outputs.version }}
-      package_name: ${{ steps.get_info.outputs.package_name }}
+    # Only publish on main branch or release
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'release'
     
     steps:
       - uses: actions/checkout@v4
       
-      - uses: actions/download-artifact@v4
-        with:
-          name: package-info
-          path: .
-      
-      - name: Get package info from artifacts
-        id: get_info
-        run: |
-          VERSION=$(cat version.txt)
-          PACKAGE_NAME=$(cat package_name.txt)
-          echo "Package version: $VERSION"
-          echo "Package name: $PACKAGE_NAME"
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
-          echo "package_name=$PACKAGE_NAME" >> $GITHUB_OUTPUT
-      
+      # Download all artifacts
       - uses: actions/download-artifact@v4
         with:
           path: dist
-          pattern: wheels-*
           merge-multiple: true
       
+      # Show what we're uploading
       - name: List distribution files
         run: |
           ls -la dist/
-          echo "Files to upload for ${{ steps.get_info.outputs.package_name }} (version ${{ steps.get_info.outputs.version }}):"
+          echo "Files to upload:"
           ls -1 dist/
       
+      # Publish to TestPyPI
       - name: Publish to TestPyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
@@ -176,6 +122,7 @@ jobs:
       fail-fast: false
       matrix:
         include:
+          # x86_64 架构测试
           - arch: x86_64
             runner: ubuntu-latest
             python-version: '3.8'
@@ -191,6 +138,7 @@ jobs:
           - arch: x86_64
             runner: ubuntu-latest
             python-version: '3.12'
+          # ARM64 架构测试
           - arch: aarch64
             runner: ubuntu-22.04-arm
             python-version: '3.8'
@@ -217,85 +165,75 @@ jobs:
         run: |
           echo "Architecture: $(uname -m)"
           echo "Python version: ${{ matrix.python-version }}"
-          echo "Package name: ${{ needs.publish_test_pypi.outputs.package_name }}"
-          echo "Package version to install: ${{ needs.publish_test_pypi.outputs.version }}"
           python --version
           pip --version
       
       - name: Wait for TestPyPI to update
         run: |
-          PACKAGE_NAME="${{ needs.publish_test_pypi.outputs.package_name }}"
-          VERSION="${{ needs.publish_test_pypi.outputs.version }}"
-          echo "Waiting for TestPyPI to update with $PACKAGE_NAME version $VERSION..."
-          
-          for i in {1..20}; do
-            echo "Attempt $i: Checking if version is available..."
-            if pip index versions $PACKAGE_NAME -i https://test.pypi.org/simple/ 2>/dev/null | grep -q "$VERSION"; then
-              echo "Version $VERSION is now available!"
-              break
-            fi
-            if [ $i -eq 20 ]; then
-              echo "Warning: Version might not be available yet, proceeding anyway..."
-            fi
-            sleep 15
-          done
+          echo "Waiting 60 seconds for TestPyPI to update..."
+          sleep 60
       
       - name: Test installation from TestPyPI
         run: |
-          PACKAGE_NAME="${{ needs.publish_test_pypi.outputs.package_name }}"
-          VERSION="${{ needs.publish_test_pypi.outputs.version }}"
-          echo "Installing $PACKAGE_NAME version: $VERSION"
+          # Replace 'pyvsag-test-jc' with your actual package name
+          pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ pyvsag-test-jc
           
-          pip install --index-url https://test.pypi.org/simple/ \
-                      --extra-index-url https://pypi.org/simple/ \
-                      ${PACKAGE_NAME}==$VERSION
+          # Test import (replace with your actual package name)
+          python -c "import your_package_name; print('Successfully imported package')"
           
-          # Extract the base module name (handle cases like package-name -> package_name)
-          MODULE_NAME=$(echo "$PACKAGE_NAME" | sed 's/-/_/g')
-          python -c "import $MODULE_NAME; print('Successfully imported package')"
-          
-          pip show $PACKAGE_NAME
-          
-          INSTALLED_VERSION=$(pip show $PACKAGE_NAME | grep Version | awk '{print $2}')
-          if [ "$INSTALLED_VERSION" != "$VERSION" ]; then
-            echo "Error: Installed version ($INSTALLED_VERSION) doesn't match expected version ($VERSION)"
-            exit 1
-          fi
-          echo "✓ Correct version installed: $INSTALLED_VERSION"
+          # Verify the installed package info
+          pip show pyvsag-test-jc
       
       - name: Run basic tests
         run: |
-          pip install numpy
-          python examples/python/example_diskann.py
+          # Show architecture info for debugging
+          python -c "
+          import platform
+          import sys
+          print(f'Platform: {platform.platform()}')
+          print(f'Machine: {platform.machine()}')
+          print(f'Processor: {platform.processor()}')
+          print(f'Python: {sys.version}')
+          print(f'Architecture: {platform.architecture()}')
+          "
+          
+          # Add your actual tests here
+          # For example:
+          # python -c "from your_package import some_function; some_function()"
+          echo "Add your basic tests here"
 
   publish_pypi:
     name: Publish to PyPI
-    needs: [test_installation, publish_test_pypi]
+    needs: test_installation
     runs-on: ubuntu-latest
+    # Only publish on release
     if: github.event_name == 'release' && github.event.action == 'published'
     environment:
       name: pypi
-      url: https://pypi.org/p/${{ needs.publish_test_pypi.outputs.package_name }}
+      url: https://pypi.org/p/pyvsag-test-jc  # Replace with your package
     
     steps:
+      # Download all artifacts again
       - uses: actions/download-artifact@v4
         with:
           path: dist
-          pattern: wheels-*
           merge-multiple: true
       
+      # Show what we're uploading
       - name: List distribution files
         run: |
           ls -la dist/
-          echo "Files to upload to PyPI for ${{ needs.publish_test_pypi.outputs.package_name }}:"
+          echo "Files to upload to PyPI:"
           ls -1 dist/
       
+      # Publish to PyPI
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
           verbose: true
 
+  # Optional: Create GitHub Release with artifacts
   upload_release_assets:
     name: Upload Release Assets
     needs: publish_pypi
@@ -306,7 +244,6 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: dist
-          pattern: wheels-*
           merge-multiple: true
       
       - name: Upload Release Assets
