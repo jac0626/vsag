@@ -23,7 +23,6 @@ classifiers = [
 ]
 dependencies = [
     "packaging",
-    "mkl==2025.2.0; platform_machine=='x86_64'",
 ]
 dynamic = ["version"]
 
