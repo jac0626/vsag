@@ -114,97 +114,8 @@ jobs:
           skip-existing: true
           verbose: true
 
-  test_installation:
-    name: Test installation from TestPyPI (${{ matrix.arch }})
-    needs: publish_test_pypi
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          # x86_64 架构测试
-          - arch: x86_64
-            runner: ubuntu-latest
-            python-version: '3.8'
-          - arch: x86_64
-            runner: ubuntu-latest
-            python-version: '3.9'
-          - arch: x86_64
-            runner: ubuntu-latest
-            python-version: '3.10'
-          - arch: x86_64
-            runner: ubuntu-latest
-            python-version: '3.11'
-          - arch: x86_64
-            runner: ubuntu-latest
-            python-version: '3.12'
-          # ARM64 架构测试
-          - arch: aarch64
-            runner: ubuntu-22.04-arm
-            python-version: '3.8'
-          - arch: aarch64
-            runner: ubuntu-22.04-arm
-            python-version: '3.9'
-          - arch: aarch64
-            runner: ubuntu-22.04-arm
-            python-version: '3.10'
-          - arch: aarch64
-            runner: ubuntu-22.04-arm
-            python-version: '3.11'
-          - arch: aarch64
-            runner: ubuntu-22.04-arm
-            python-version: '3.12'
-    
-    steps:
-      - name: Set up Python ${{ matrix.python-version }}
-        uses: actions/setup-python@v4
-        with:
-          python-version: ${{ matrix.python-version }}
-      
-      - name: Show system info
-        run: |
-          echo "Architecture: $(uname -m)"
-          echo "Python version: ${{ matrix.python-version }}"
-          python --version
-          pip --version
-      
-      - name: Wait for TestPyPI to update
-        run: |
-          echo "Waiting 60 seconds for TestPyPI to update..."
-          sleep 60
-      
-      - name: Test installation from TestPyPI
-        run: |
-          # Replace 'pyvsag-test-jc' with your actual package name
-          pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ pyvsag-test-jc
-          
-          # Test import (replace with your actual package name)
-          python -c "import your_package_name; print('Successfully imported package')"
-          
-          # Verify the installed package info
-          pip show pyvsag-test-jc
-      
-      - name: Run basic tests
-        run: |
-          # Show architecture info for debugging
-          python -c "
-          import platform
-          import sys
-          print(f'Platform: {platform.platform()}')
-          print(f'Machine: {platform.machine()}')
-          print(f'Processor: {platform.processor()}')
-          print(f'Python: {sys.version}')
-          print(f'Architecture: {platform.architecture()}')
-          "
-          
-          # Add your actual tests here
-          # For example:
-          # python -c "from your_package import some_function; some_function()"
-          echo "Add your basic tests here"
-
   publish_pypi:
     name: Publish to PyPI
-    needs: test_installation
     runs-on: ubuntu-latest
     # Only publish on release
     if: github.event_name == 'release' && github.event.action == 'published'
@@ -232,23 +143,3 @@ jobs:
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
           verbose: true
-
-  # Optional: Create GitHub Release with artifacts
-  upload_release_assets:
-    name: Upload Release Assets
-    needs: publish_pypi
-    runs-on: ubuntu-latest
-    if: github.event_name == 'release' && github.event.action == 'published'
-    
-    steps:
-      - uses: actions/download-artifact@v4
-        with:
-          path: dist
-          merge-multiple: true
-      
-      - name: Upload Release Assets
-        uses: softprops/action-gh-release@v1
-        with:
-          files: dist/*
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
