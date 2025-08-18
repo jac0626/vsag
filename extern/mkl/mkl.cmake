@@ -114,9 +114,6 @@ if (CMAKE_HOST_SYSTEM_PROCESSOR STREQUAL "x86_64" AND ENABLE_INTEL_MKL)
                     ${MKL_PATH}/libmkl_intel_thread.a
                     ${MKL_PATH}/libmkl_core.a
                 )
-                if(MKL_DEF_SO)
-                    list(APPEND BLAS_LIBRARIES ${MKL_DEF_SO})
-                endif()
                 list(APPEND BLAS_LIBRARIES
                     iomp5
                     pthread
