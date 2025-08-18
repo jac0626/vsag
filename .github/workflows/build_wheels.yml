@@ -27,15 +27,32 @@ jobs:
         with:
           fetch-depth: 0
       
-      - name: Get package version
-        id: get_version
+      - name: Get package info
+        id: get_info
         run: |
           pip install setuptools setuptools-scm
           cd python
+          
+          # Get package version
           VERSION=$(python -c "from setuptools_scm import get_version; print(get_version(root='..', relative_to=__file__))")
           echo "Package version: $VERSION"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
+          
+         
+          
+          # Get package name
+          if [ -z "$PACKAGE_NAME" ] && [ -f pyproject.toml ]; then
+            pip install tomli
+            PACKAGE_NAME=$(python -c "import tomli; data = tomli.load(open('pyproject.toml', 'rb')); print(data['project']['name'])" 2>/dev/null || echo "")
+          fi
+          
+     
+          echo "Package name: $PACKAGE_NAME"
+          echo "package_name=$PACKAGE_NAME" >> $GITHUB_OUTPUT
+          
+          # Save both to files for later jobs
           echo "$VERSION" > ../version.txt
+          echo "$PACKAGE_NAME" > ../package_name.txt
       
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.12.0
@@ -76,15 +93,18 @@ jobs:
       - uses: actions/upload-artifact@v4
         if: matrix.arch == 'x86_64'
         with:
-          name: version-info
-          path: version.txt
+          name: package-info
+          path: |
+            version.txt
+            package_name.txt
 
   publish_test_pypi:
     name: Publish to TestPyPI
     needs: [build_wheels]
     runs-on: ubuntu-latest
     outputs:
-      version: ${{ steps.get_version.outputs.version }}
+      version: ${{ steps.get_info.outputs.version }}
+      package_name: ${{ steps.get_info.outputs.package_name }}
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'release'
     
     steps:
@@ -92,15 +112,18 @@ jobs:
       
       - uses: actions/download-artifact@v4
         with:
-          name: version-info
+          name: package-info
           path: .
       
-      - name: Get version from artifact
-        id: get_version
+      - name: Get package info from artifacts
+        id: get_info
         run: |
           VERSION=$(cat version.txt)
+          PACKAGE_NAME=$(cat package_name.txt)
           echo "Package version: $VERSION"
+          echo "Package name: $PACKAGE_NAME"
           echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "package_name=$PACKAGE_NAME" >> $GITHUB_OUTPUT
       
       - uses: actions/download-artifact@v4
         with:
@@ -111,7 +134,7 @@ jobs:
       - name: List distribution files
         run: |
           ls -la dist/
-          echo "Files to upload (version ${{ steps.get_version.outputs.version }}):"
+          echo "Files to upload for ${{ steps.get_info.outputs.package_name }} (version ${{ steps.get_info.outputs.version }}):"
           ls -1 dist/
       
       - name: Publish to TestPyPI
@@ -171,18 +194,21 @@ jobs:
         run: |
           echo "Architecture: $(uname -m)"
           echo "Python version: ${{ matrix.python-version }}"
+          echo "Package name: ${{ needs.publish_test_pypi.outputs.package_name }}"
           echo "Package version to install: ${{ needs.publish_test_pypi.outputs.version }}"
           python --version
           pip --version
       
       - name: Wait for TestPyPI to update
         run: |
-          echo "Waiting for TestPyPI to update with version ${{ needs.publish_test_pypi.outputs.version }}..."
+          PACKAGE_NAME="${{ needs.publish_test_pypi.outputs.package_name }}"
+          VERSION="${{ needs.publish_test_pypi.outputs.version }}"
+          echo "Waiting for TestPyPI to update with $PACKAGE_NAME version $VERSION..."
           
           for i in {1..20}; do
             echo "Attempt $i: Checking if version is available..."
-            if pip index versions pyvsag-test-jc -i https://test.pypi.org/simple/ 2>/dev/null | grep -q "${{ needs.publish_test_pypi.outputs.version }}"; then
-              echo "Version ${{ needs.publish_test_pypi.outputs.version }} is now available!"
+            if pip index versions $PACKAGE_NAME -i https://test.pypi.org/simple/ 2>/dev/null | grep -q "$VERSION"; then
+              echo "Version $VERSION is now available!"
               break
             fi
             if [ $i -eq 20 ]; then
@@ -193,18 +219,21 @@ jobs:
       
       - name: Test installation from TestPyPI
         run: |
+          PACKAGE_NAME="${{ needs.publish_test_pypi.outputs.package_name }}"
           VERSION="${{ needs.publish_test_pypi.outputs.version }}"
-          echo "Installing pyvsag-test-jc version: $VERSION"
+          echo "Installing $PACKAGE_NAME version: $VERSION"
           
           pip install --index-url https://test.pypi.org/simple/ \
                       --extra-index-url https://pypi.org/simple/ \
-                      pyvsag-test-jc==$VERSION
+                      ${PACKAGE_NAME}==$VERSION
           
-          python -c "import pyvsag; print('Successfully imported package')"
+          # Extract the base module name (handle cases like package-name -> package_name)
+          MODULE_NAME=$(echo "$PACKAGE_NAME" | sed 's/-/_/g')
+          python -c "import $MODULE_NAME; print('Successfully imported package')"
           
-          pip show pyvsag-test-jc
+          pip show $PACKAGE_NAME
           
-          INSTALLED_VERSION=$(pip show pyvsag-test-jc | grep Version | awk '{print $2}')
+          INSTALLED_VERSION=$(pip show $PACKAGE_NAME | grep Version | awk '{print $2}')
           if [ "$INSTALLED_VERSION" != "$VERSION" ]; then
             echo "Error: Installed version ($INSTALLED_VERSION) doesn't match expected version ($VERSION)"
             exit 1
@@ -213,17 +242,17 @@ jobs:
       
       - name: Run basic tests
         run: |
-         pip install numpy
-         python examples/python/example_diskann.py
+          pip install numpy
+          python examples/python/example_diskann.py
 
   publish_pypi:
     name: Publish to PyPI
-    needs: test_installation
+    needs: [test_installation, publish_test_pypi]
     runs-on: ubuntu-latest
     if: github.event_name == 'release' && github.event.action == 'published'
     environment:
       name: pypi
-      url: https://pypi.org/p/pyvsag-test-jc
+      url: https://pypi.org/p/${{ needs.publish_test_pypi.outputs.package_name }}
     
     steps:
       - uses: actions/download-artifact@v4
@@ -235,7 +264,7 @@ jobs:
       - name: List distribution files
         run: |
           ls -la dist/
-          echo "Files to upload to PyPI:"
+          echo "Files to upload to PyPI for ${{ needs.publish_test_pypi.outputs.package_name }}:"
           ls -1 dist/
       
       - name: Publish to PyPI
