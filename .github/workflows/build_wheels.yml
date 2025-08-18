@@ -25,87 +25,95 @@ jobs:
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  # Required for setuptools_scm
+          fetch-depth: 0
+      
+      - name: Get package version
+        id: get_version
+        run: |
+          pip install setuptools setuptools-scm
+          cd python
+          VERSION=$(python -c "from setuptools_scm import get_version; print(get_version(root='..', relative_to=__file__))")
+          echo "Package version: $VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+          echo "$VERSION" > ../version.txt
       
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.12.0
         with:
           package-dir: python
         env:
-          # Tell cibuildwheel to build for the specific architecture
           CIBW_ARCHS: ${{ matrix.arch }}
-          
-          # Specify which Python versions to build
           CIBW_BUILD: "cp38-* cp39-* cp310-* cp311-* cp312-*"
-          
-          # Skip PyPy and musllinux builds
           CIBW_SKIP: "pp* *-musllinux*"
-          
-          # Use a newer manylinux image that doesn't rely on CentOS 7
           CIBW_MANYLINUX_X86_64_IMAGE: manylinux2014
           CIBW_MANYLINUX_AARCH64_IMAGE: manylinux2014
-          
           CIBW_BEFORE_ALL: |
-            # Fix CentOS 7 repos
             sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-*.repo
             sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*.repo
             
-            # Fix aarch64 specific issues
             if [[ "$(uname -m)" == "aarch64" ]]; then
               rm -f /etc/yum.repos.d/CentOS-SCLo-*.repo
             fi
             
             yum clean all
-            
-            # Install development tools
             yum install -y gcc gcc-c++ gcc-gfortran python3-devel
-            
-            # Install other dependencies
             yum install -y libaio-devel libcurl-devel ca-certificates
             
-            # Install Intel MKL (only for x86_64)
             if [[ "$(uname -m)" == "x86_64" ]]; then
               yum-config-manager --add-repo https://yum.repos.intel.com/mkl/setup/intel-mkl.repo
               rpm --import https://yum.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS-2019.PUB
               yum install -y intel-mkl-64bit-2020.0-088
             fi
             
-            # For OpenMP, use the standard package instead of alibaba-specific ones
             yum install -y libgomp
       
-      # Upload individual wheel files
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-${{ matrix.arch }}
           path: ./wheelhouse/*.whl
           if-no-files-found: error
-
-
+      
+      - uses: actions/upload-artifact@v4
+        if: matrix.arch == 'x86_64'
+        with:
+          name: version-info
+          path: version.txt
 
   publish_test_pypi:
     name: Publish to TestPyPI
     needs: [build_wheels]
     runs-on: ubuntu-latest
-    # Only publish on main branch or release
+    outputs:
+      version: ${{ steps.get_version.outputs.version }}
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'release'
     
     steps:
       - uses: actions/checkout@v4
       
-      # Download all artifacts
+      - uses: actions/download-artifact@v4
+        with:
+          name: version-info
+          path: .
+      
+      - name: Get version from artifact
+        id: get_version
+        run: |
+          VERSION=$(cat version.txt)
+          echo "Package version: $VERSION"
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
+      
       - uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: wheels-*
           merge-multiple: true
       
-      # Show what we're uploading
       - name: List distribution files
         run: |
           ls -la dist/
-          echo "Files to upload:"
+          echo "Files to upload (version ${{ steps.get_version.outputs.version }}):"
           ls -1 dist/
       
-      # Publish to TestPyPI
       - name: Publish to TestPyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
@@ -122,7 +130,6 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          # x86_64 架构测试
           - arch: x86_64
             runner: ubuntu-latest
             python-version: '3.8'
@@ -138,7 +145,6 @@ jobs:
           - arch: x86_64
             runner: ubuntu-latest
             python-version: '3.12'
-          # ARM64 架构测试
           - arch: aarch64
             runner: ubuntu-22.04-arm
             python-version: '3.8'
@@ -165,75 +171,79 @@ jobs:
         run: |
           echo "Architecture: $(uname -m)"
           echo "Python version: ${{ matrix.python-version }}"
+          echo "Package version to install: ${{ needs.publish_test_pypi.outputs.version }}"
           python --version
           pip --version
       
       - name: Wait for TestPyPI to update
         run: |
-          echo "Waiting 60 seconds for TestPyPI to update..."
-          sleep 60
+          echo "Waiting for TestPyPI to update with version ${{ needs.publish_test_pypi.outputs.version }}..."
+          
+          for i in {1..20}; do
+            echo "Attempt $i: Checking if version is available..."
+            if pip index versions pyvsag-test-jc -i https://test.pypi.org/simple/ 2>/dev/null | grep -q "${{ needs.publish_test_pypi.outputs.version }}"; then
+              echo "Version ${{ needs.publish_test_pypi.outputs.version }} is now available!"
+              break
+            fi
+            if [ $i -eq 20 ]; then
+              echo "Warning: Version might not be available yet, proceeding anyway..."
+            fi
+            sleep 15
+          done
       
       - name: Test installation from TestPyPI
         run: |
-          # Replace 'pyvsag-test-jc' with your actual package name
-          pip install --index-url https://test.pypi.org/simple/ --extra-index-url https://pypi.org/simple/ pyvsag-test-jc
+          VERSION="${{ needs.publish_test_pypi.outputs.version }}"
+          echo "Installing pyvsag-test-jc version: $VERSION"
           
-          # Test import (replace with your actual package name)
-          python -c "import your_package_name; print('Successfully imported package')"
+          pip install --index-url https://test.pypi.org/simple/ \
+                      --extra-index-url https://pypi.org/simple/ \
+                      pyvsag-test-jc==$VERSION
           
-          # Verify the installed package info
+          python -c "import pyvsag; print('Successfully imported package')"
+          
           pip show pyvsag-test-jc
+          
+          INSTALLED_VERSION=$(pip show pyvsag-test-jc | grep Version | awk '{print $2}')
+          if [ "$INSTALLED_VERSION" != "$VERSION" ]; then
+            echo "Error: Installed version ($INSTALLED_VERSION) doesn't match expected version ($VERSION)"
+            exit 1
+          fi
+          echo "✓ Correct version installed: $INSTALLED_VERSION"
       
       - name: Run basic tests
         run: |
-          # Show architecture info for debugging
-          python -c "
-          import platform
-          import sys
-          print(f'Platform: {platform.platform()}')
-          print(f'Machine: {platform.machine()}')
-          print(f'Processor: {platform.processor()}')
-          print(f'Python: {sys.version}')
-          print(f'Architecture: {platform.architecture()}')
-          "
-          
-          # Add your actual tests here
-          # For example:
-          # python -c "from your_package import some_function; some_function()"
-          echo "Add your basic tests here"
+         pip install numpy
+         python examples/python/example_diskann.py
 
   publish_pypi:
     name: Publish to PyPI
     needs: test_installation
     runs-on: ubuntu-latest
-    # Only publish on release
     if: github.event_name == 'release' && github.event.action == 'published'
     environment:
       name: pypi
-      url: https://pypi.org/p/pyvsag-test-jc  # Replace with your package
+      url: https://pypi.org/p/pyvsag-test-jc
     
     steps:
-      # Download all artifacts again
       - uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: wheels-*
           merge-multiple: true
       
-      # Show what we're uploading
       - name: List distribution files
         run: |
           ls -la dist/
           echo "Files to upload to PyPI:"
           ls -1 dist/
       
-      # Publish to PyPI
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
           verbose: true
 
-  # Optional: Create GitHub Release with artifacts
   upload_release_assets:
     name: Upload Release Assets
     needs: publish_pypi
@@ -244,6 +254,7 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: wheels-*
           merge-multiple: true
       
       - name: Upload Release Assets
