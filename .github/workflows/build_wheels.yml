@@ -33,10 +33,16 @@ jobs:
           pip install setuptools setuptools-scm
           cd python
           
-          # Get package version
-          VERSION=$(python -c "from setuptools_scm import get_version; print(get_version(root='..', relative_to=__file__))")
-          echo "Package version: $VERSION"
-          echo "version=$VERSION" >> $GITHUB_OUTPUT
+            # Get package version
+           cat > get_version.py << 'EOF'
+            from setuptools_scm import get_version
+            import os
+            # Go up one directory to find the git root
+            print(get_version(root='..'))
+            EOF
+
+          # 执行脚本获取版本
+          VERSION=$(python get_version.py)
           
          
           
