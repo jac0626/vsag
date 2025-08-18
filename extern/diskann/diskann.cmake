@@ -47,7 +47,7 @@ endif()
 target_link_libraries(diskann
   ${BLAS_LIBRARIES}
 )
-
+message(STATUS "BLAS_LIBRARIES: ${BLAS_LIBRARIES}")
 install (
   TARGETS diskann
   ARCHIVE DESTINATION lib
