@@ -1,0 +1,248 @@
+name: Build and Publish Wheels
+
+on:
+  push:
+    branches:
+      - main
+  pull_request:
+  workflow_dispatch:
+  release:
+    types: [published]
+
+jobs:
+  build-modern-wheels:
+    name: Build wheels for Python 3.8+ on ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Generate version file
+        run: |
+          pip install setuptools_scm
+          python -c "
+          import setuptools_scm
+          version = setuptools_scm.get_version()
+          with open('python/pyvsag/_version.py', 'w') as f:
+              f.write(f'__version__ = \"{version}\"\\n')
+          "
+          cat python/pyvsag/_version.py
+      - name: Patch pyproject.toml to remove dynamic versioning
+        run: |
+          sed -i '/\[tool.setuptools_scm\]/,/^$/d' python/pyproject.toml
+      - name: Patch setup.py to use environment variable
+        run: |
+          cat > python/setup.py << 'EOF'
+          from setuptools import setup, Extension
+          import os
+          import sys
+
+          version = "0.0.0"
+          version_file = os.path.join(os.path.dirname(__file__), "pyvsag", "_version.py")
+          if os.path.exists(version_file):
+            with open(version_file) as f:
+              exec(f.read())
+              version = __version__
+
+          setup(
+          version=version,
+          ext_modules=[Extension('example', sources=['example.c'])],
+          zip_safe=False,
+          )
+          EOF
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.19.1
+        with:
+          package-dir: python
+        env:
+          CIBW_ARCHS: ${{ matrix.arch }}
+          CIBW_BUILD: "cp38-* cp39-* cp310-* cp311-* cp312-*"
+          CIBW_TEST_COMMAND: "pip install numpy && ls -alF /project/ && python /project/examples/python/example_hnsw.py"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-modern-${{ matrix.arch }}
+          path: ./wheelhouse/*.whl
+          if-no-files-found: error
+
+  build-py37-wheels:
+    name: Build wheels for Python 3.7 on ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Generate version file
+        run: |
+          pip install setuptools_scm
+          python -c "
+          import setuptools_scm
+          version = setuptools_scm.get_version()
+          with open('python/pyvsag/_version.py', 'w') as f:
+              f.write(f'__version__ = \"{version}\"\\n')
+          "
+          cat python/pyvsag/_version.py
+      - name: Patch pyproject.toml for Python 3.7
+        run: |
+          sed -i 's/setuptools>=61.0/setuptools>=61.0,<67/g' python/pyproject.toml
+          sed -i '/\[tool.setuptools_scm\]/,/^$/d' python/pyproject.toml
+      - name: Patch setup.py to use environment variable
+        run: |
+          cat > python/setup.py << 'EOF'
+          from setuptools import setup, Extension
+          import os
+          import sys
+
+          version = "0.0.0"
+          version_file = os.path.join(os.path.dirname(__file__), "pyvsag", "_version.py")
+          if os.path.exists(version_file):
+            with open(version_file) as f:
+              exec(f.read())
+              version = __version__
+
+          setup(
+          version=version,
+          ext_modules=[Extension('example', sources=['example.c'])],
+          zip_safe=False,
+          )
+          EOF
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.19.1
+        with:
+          package-dir: python
+        env:
+          CIBW_ARCHS: ${{ matrix.arch }}
+          CIBW_BUILD: "cp37-*"
+          CIBW_TEST_COMMAND: "pip install numpy && ls -alF /project/ && python /project/examples/python/example_hnsw.py"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-py37-${{ matrix.arch }}
+          path: ./wheelhouse/*.whl
+          if-no-files-found: error
+
+  build-py36-wheels:
+    name: Build wheels for Python 3.6 on ${{ matrix.arch }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-latest
+          - arch: aarch64
+            runner: ubuntu-22.04-arm
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Generate version file for Python 3.6
+        run: |
+          pip install setuptools_scm
+          python -c "
+          import setuptools_scm
+          version = setuptools_scm.get_version()
+          with open('python/pyvsag/_version.py', 'w') as f:
+              f.write(f'__version__ = \"{version}\"\\n')
+          "
+          cat python/pyvsag/_version.py
+      - name: Patch pyproject.toml for Python 3.6
+        run: |
+          sed -i 's/setuptools>=61.0/setuptools<60/g' python/pyproject.toml
+          sed -i 's/setuptools_scm\[toml\]>=6.2/setuptools_scm[toml]<7/g' python/pyproject.toml
+          sed -i '/\[tool.setuptools_scm\]/,/^$/d' python/pyproject.toml
+      - name: Patch setup.py to use environment variable
+        run: |
+          cat > python/setup.py << 'EOF'
+          from setuptools import setup, Extension
+          import os
+          import sys
+
+          version = "0.0.0"
+          version_file = os.path.join(os.path.dirname(__file__), "pyvsag", "_version.py")
+          if os.path.exists(version_file):
+            with open(version_file) as f:
+              exec(f.read())
+              version = __version__
+
+          setup(
+          version=version,
+          ext_modules=[Extension('example', sources=['example.c'])],
+          zip_safe=False,
+          )
+          EOF
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.11.4
+        with:
+          package-dir: python
+        env:
+          CIBW_ARCHS: ${{ matrix.arch }}
+          CIBW_BUILD: "cp36-*"
+          CIBW_TEST_COMMAND: "pip install numpy && ls -alF /project/ && python /project/examples/python/example_hnsw.py"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: wheels-py36-${{ matrix.arch }}
+          path: ./wheelhouse/*.whl
+          if-no-files-found: error
+
+  publish_test_pypi:
+    name: Publish to TestPyPI
+    needs: [build-modern-wheels, build-py37-wheels, build-py36-wheels]
+    runs-on: ubuntu-latest
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' || github.event_name == 'release'
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: List distribution files
+        run: |
+          ls -la dist/
+          echo "Files to upload:"
+          ls -1 dist/
+      - name: Publish to TestPyPI
+        uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe128415bbaabdfc
+        with:
+          repository-url: https://test.pypi.org/legacy/
+          password: ${{ secrets.TEST_PYPI_API_TOKEN }}
+          skip-existing: true
+          verbose: true
+
+  publish_pypi:
+    name: Publish to PyPI
+    runs-on: ubuntu-latest
+    needs: [build-modern-wheels, build-py37-wheels, build-py36-wheels]
+    if: github.event_name == 'release' && github.event.action == 'published'
+    environment:
+      name: pypi
+      url: https://pypi.org/p/pyvsag
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: List distribution files
+        run: |
+          ls -la dist/
+          echo "Files to upload to PyPI:"
+          ls -1 dist/
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@76f52bc884231f62b9a034ebfe128415bbaabdfc
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          verbose: true
