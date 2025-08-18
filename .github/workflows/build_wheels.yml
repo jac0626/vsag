@@ -29,34 +29,51 @@ jobs:
       
       - name: Get package info
         id: get_info
+        # 使用 working-directory 会比 cd 更清晰，所有命令都在 ./python 目录中执行
+        working-directory: ./python
         run: |
-          pip install setuptools setuptools-scm
-          cd python
-          
-            # Get package version
-           cat > get_version.py << 'EOF'
-            from setuptools_scm import get_version
-            import os
-            # Go up one directory to find the git root
-            print(get_version(root='..'))
-            EOF
+          pip install setuptools setuptools-scm tomli
 
-          # 执行脚本获取版本
-          VERSION=$(python get_version.py)
+          # 从 setuptools-scm 获取包版本
+          # 因为工作目录是 ./python，所以需要告诉 setuptools-scm Git 的根目录是上一级 '..'
+          VERSION=$(python -c "from setuptools_scm import get_version; print(get_version(root='..'))")
           
-         
+          # 增加错误检查，如果版本号为空则直接失败
+          if [ -z "$VERSION" ]; then
+            echo "::error::无法确定包的版本号 (Could not determine package version)."
+            exit 1
+          fi
+          echo "版本号确定: $VERSION"
           
-          # Get package name
-          if [ -z "$PACKAGE_NAME" ] && [ -f pyproject.toml ]; then
-            pip install tomli
-            PACKAGE_NAME=$(python -c "import tomli; data = tomli.load(open('pyproject.toml', 'rb')); print(data['project']['name'])" 2>/dev/null || echo "")
+          # 从 pyproject.toml 获取包名
+          if [ ! -f pyproject.toml ]; then
+            echo "::error::在 $(pwd) 目录下未找到 pyproject.toml"
+            exit 1
           fi
           
-     
-          echo "Package name: $PACKAGE_NAME"
+          # 使用更健壮的 Python 命令来获取包名，如果失败则会退出
+          PACKAGE_NAME=$(python -c "import tomli, sys; \
+            try: \
+              with open('pyproject.toml', 'rb') as f: \
+                data = tomli.load(f); \
+                print(data['project']['name']); \
+            except Exception as e: \
+              print(f'从 pyproject.toml 读取包名时出错: {e}', file=sys.stderr); \
+              sys.exit(1)")
+
+          # 增加错误检查，如果包名为空则直接失败
+          if [ -z "$PACKAGE_NAME" ]; then
+            echo "::error::无法从 pyproject.toml 确定包名 (Could not determine package name)."
+            exit 1
+          fi
+          echo "包名确定: $PACKAGE_NAME"
+
+          # 设置此步骤的输出，以便同一 Job 中的后续步骤可以引用
+          echo "version=$VERSION" >> $GITHUB_OUTPUT
           echo "package_name=$PACKAGE_NAME" >> $GITHUB_OUTPUT
           
-          # Save both to files for later jobs
+          # 将版本和包名保存到文件中，用于后续 Job 的 Artifacts
+          # 因为工作目录是 ./python，所以需要使用 ../ 来指定到根目录
           echo "$VERSION" > ../version.txt
           echo "$PACKAGE_NAME" > ../package_name.txt
       
