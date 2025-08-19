@@ -5,7 +5,7 @@ on:
 jobs:
   performance:
     name: test-py
-    runs-on: ubuntu-22.04-arm
+    runs-on: ubuntu-22.04
   
     steps:
       - name: Checkout code
@@ -23,4 +23,4 @@ jobs:
           python3.10 -m pip install numpy
           
       - name: test
-        run: python3.10 examples/python/example_hnsw.py
+        run: python3.10 examples/python/example_diskann.py
