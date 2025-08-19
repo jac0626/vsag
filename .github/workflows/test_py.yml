@@ -19,7 +19,7 @@ jobs:
       - name: Install Python package
         run: |
           python3.10 -m pip install --upgrade pip
-          sudo pip install -i https://test.pypi.org/simple/ pyvsag-test-jc==0.1.0.dev664
+          pip install pyvsag-test-jc
           python3.10 -m pip install numpy
           
       - name: test
