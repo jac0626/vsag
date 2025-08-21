@@ -1,4 +1,3 @@
-
 // Copyright 2024-present the vsag project
 //
 // Licensed under the Apache License, Version 2.0 (the "License");
@@ -22,49 +21,65 @@
 #include "simd_status.h"
 using namespace vsag;
 
-#define TEST_ACCURACY(Func)                                        \
-    {                                                              \
-        auto gt = generic::Func(codes1.data() + i * code_size,     \
-                                codes2.data() + i * code_size,     \
-                                lb.data(),                         \
-                                diff.data(),                       \
-                                dim);                              \
-        auto sse = sse::Func(codes1.data() + i * code_size,        \
-                             codes2.data() + i * code_size,        \
-                             lb.data(),                            \
-                             diff.data(),                          \
-                             dim);                                 \
-        auto avx = avx::Func(codes1.data() + i * code_size,        \
-                             codes2.data() + i * code_size,        \
-                             lb.data(),                            \
-                             diff.data(),                          \
-                             dim);                                 \
-        auto avx2 = avx2::Func(codes1.data() + i * code_size,      \
-                               codes2.data() + i * code_size,      \
-                               lb.data(),                          \
-                               diff.data(),                        \
-                               dim);                               \
-        auto avx512 = avx512::Func(codes1.data() + i * code_size,  \
-                                   codes2.data() + i * code_size,  \
-                                   lb.data(),                      \
-                                   diff.data(),                    \
-                                   dim);                           \
-        auto neon = neon::Func(codes1.data() + i * code_size,      \
-                               codes2.data() + i * code_size,      \
-                               lb.data(),                          \
-                               diff.data(),                        \
-                               dim);                               \
-        auto sve = sve::Func(codes1.data() + i * code_size,        \
-                             codes2.data() + i * code_size,        \
-                             lb.data(),                            \
-                             diff.data(),                          \
-                             dim);                                 \
-        REQUIRE(fixtures::dist_t(gt) == fixtures::dist_t(sse));    \
-        REQUIRE(fixtures::dist_t(gt) == fixtures::dist_t(avx));    \
-        REQUIRE(fixtures::dist_t(gt) == fixtures::dist_t(avx2));   \
-        REQUIRE(fixtures::dist_t(gt) == fixtures::dist_t(avx512)); \
-        REQUIRE(fixtures::dist_t(gt) == fixtures::dist_t(neon));   \
-        REQUIRE(fixtures::dist_t(gt) == fixtures::dist_t(sve));    \
+// MODIFIED: Added SimdStatus checks inside the macro
+#define TEST_ACCURACY(Func)                                            \
+    {                                                                  \
+        /* Calculate ground truth (generic) once as the reference */   \
+        auto gt = generic::Func(codes1.data() + i * code_size,         \
+                                codes2.data() + i * code_size,         \
+                                lb.data(),                             \
+                                diff.data(),                           \
+                                dim);                                  \
+                                                                       \
+        /* Conditionally run and check each SIMD implementation */     \
+        if (SimdStatus::SupportSSE()) {                                \
+            auto sse = sse::Func(codes1.data() + i * code_size,        \
+                                 codes2.data() + i * code_size,        \
+                                 lb.data(),                            \
+                                 diff.data(),                          \
+                                 dim);                                 \
+            REQUIRE(fixtures::dist_t(gt) == fixtures::dist_t(sse));    \
+        }                                                              \
+        if (SimdStatus::SupportAVX()) {                                \
+            auto avx = avx::Func(codes1.data() + i * code_size,        \
+                                 codes2.data() + i * code_size,        \
+                                 lb.data(),                            \
+                                 diff.data(),                          \
+                                 dim);                                 \
+            REQUIRE(fixtures::dist_t(gt) == fixtures::dist_t(avx));    \
+        }                                                              \
+        if (SimdStatus::SupportAVX2()) {                               \
+            auto avx2 = avx2::Func(codes1.data() + i * code_size,      \
+                                   codes2.data() + i * code_size,      \
+                                   lb.data(),                          \
+                                   diff.data(),                        \
+                                   dim);                               \
+            REQUIRE(fixtures::dist_t(gt) == fixtures::dist_t(avx2));   \
+        }                                                              \
+        if (SimdStatus::SupportAVX512()) {                             \
+            auto avx512 = avx512::Func(codes1.data() + i * code_size,  \
+                                       codes2.data() + i * code_size,  \
+                                       lb.data(),                      \
+                                       diff.data(),                    \
+                                       dim);                           \
+            REQUIRE(fixtures::dist_t(gt) == fixtures::dist_t(avx512)); \
+        }                                                              \
+        if (SimdStatus::SupportNEON()) {                               \
+            auto neon = neon::Func(codes1.data() + i * code_size,      \
+                                   codes2.data() + i * code_size,      \
+                                   lb.data(),                          \
+                                   diff.data(),                        \
+                                   dim);                               \
+            REQUIRE(fixtures::dist_t(gt) == fixtures::dist_t(neon));   \
+        }                                                              \
+        if (SimdStatus::SupportSVE()) {                                \
+            auto sve = sve::Func(codes1.data() + i * code_size,        \
+                                 codes2.data() + i * code_size,        \
+                                 lb.data(),                            \
+                                 diff.data(),                          \
+                                 dim);                                 \
+            REQUIRE(fixtures::dist_t(gt) == fixtures::dist_t(sve));    \
+        }                                                              \
     }
 
 TEST_CASE("SQ4 SIMD Compute Codes", "[ut][simd]") {
