@@ -725,7 +725,48 @@ SQ4ComputeIP(const float* RESTRICT query,
              const float* RESTRICT lower_bound,
              const float* RESTRICT diff,
              uint64_t dim) {
+#if defined(ENABLE_AVX2)
+    __m256 sum = _mm256_setzero_ps();
+    const __m256 scale_factor = _mm256_set1_ps(1.0f / 15.0f);
+
+    uint64_t i = 0;
+    for (; i + 8 <= dim; i += 8) {
+        uint32_t packed_int;
+        memcpy(&packed_int, &codes[i / 2], 4);
+        __m128i packed_codes = _mm_cvtsi32_si128(packed_int);
+
+        const __m128i mask = _mm_set1_epi8(0x0F);
+        __m128i lo = _mm_and_si128(packed_codes, mask);
+        __m128i hi = _mm_srli_epi16(packed_codes, 4);
+        __m128i unpacked = _mm_unpacklo_epi8(lo, hi);
+
+        __m256i codes_epi32 = _mm256_cvtepu8_epi32(unpacked);
+        __m256 codes_f = _mm256_cvtepi32_ps(codes_epi32);
+
+        __m256 query_vec = _mm256_loadu_ps(&query[i]);
+        __m256 lower_bound_vec = _mm256_loadu_ps(&lower_bound[i]);
+        __m256 diff_vec = _mm256_loadu_ps(&diff[i]);
+
+        __m256 dequantized =
+            _mm256_fmadd_ps(_mm256_mul_ps(codes_f, scale_factor), diff_vec, lower_bound_vec);
+        sum = _mm256_fmadd_ps(query_vec, dequantized, sum);
+    }
+
+    float result = 0.0f;
+    alignas(32) float temp[8];
+    _mm256_store_ps(temp, sum);
+    for (int j = 0; j < 8; ++j) {
+        result += temp[j];
+    }
+
+    if (i < dim) {
+        result += avx::SQ4ComputeIP(&query[i], &codes[i / 2], &lower_bound[i], &diff[i], dim - i);
+    }
+
+    return result;
+#else
     return avx::SQ4ComputeIP(query, codes, lower_bound, diff, dim);
+#endif
 }
 
 float
@@ -734,7 +775,48 @@ SQ4ComputeL2Sqr(const float* RESTRICT query,
                 const float* RESTRICT lower_bound,
                 const float* RESTRICT diff,
                 uint64_t dim) {
+#if defined(ENABLE_AVX2)
+    __m256 sum = _mm256_setzero_ps();
+    const __m256 scale_factor = _mm256_set1_ps(1.0f / 15.0f);
+    uint64_t i = 0;
+    for (; i + 8 <= dim; i += 8) {
+        uint32_t packed_int;
+        memcpy(&packed_int, &codes[i / 2], 4);
+        __m128i packed_codes = _mm_cvtsi32_si128(packed_int);
+
+        const __m128i mask = _mm_set1_epi8(0x0F);
+        __m128i lo = _mm_and_si128(packed_codes, mask);
+        __m128i hi = _mm_srli_epi16(packed_codes, 4);
+        __m128i unpacked = _mm_unpacklo_epi8(lo, hi);
+
+        __m256i codes_epi32 = _mm256_cvtepu8_epi32(unpacked);
+        __m256 codes_f = _mm256_cvtepi32_ps(codes_epi32);
+
+        __m256 query_vec = _mm256_loadu_ps(&query[i]);
+        __m256 lower_bound_vec = _mm256_loadu_ps(&lower_bound[i]);
+        __m256 diff_vec = _mm256_loadu_ps(&diff[i]);
+
+        __m256 dequantized =
+            _mm256_fmadd_ps(_mm256_mul_ps(codes_f, scale_factor), diff_vec, lower_bound_vec);
+        __m256 delta = _mm256_sub_ps(query_vec, dequantized);
+        sum = _mm256_fmadd_ps(delta, delta, sum);
+    }
+
+    float result = 0.0f;
+    alignas(32) float temp[8];
+    _mm256_store_ps(temp, sum);
+    for (int j = 0; j < 8; ++j) {
+        result += temp[j];
+    }
+
+    if (i < dim) {
+        result +=
+            avx::SQ4ComputeL2Sqr(&query[i], &codes[i / 2], &lower_bound[i], &diff[i], dim - i);
+    }
+    return result;
+#else
     return avx::SQ4ComputeL2Sqr(query, codes, lower_bound, diff, dim);
+#endif
 }
 
 float
@@ -743,7 +825,54 @@ SQ4ComputeCodesIP(const uint8_t* RESTRICT codes1,
                   const float* RESTRICT lower_bound,
                   const float* RESTRICT diff,
                   uint64_t dim) {
+#if defined(ENABLE_AVX2)
+    __m256 sum = _mm256_setzero_ps();
+    const __m256 scale_factor = _mm256_set1_ps(1.0f / 15.0f);
+    uint64_t i = 0;
+    for (; i + 8 <= dim; i += 8) {
+        uint32_t packed_int1;
+        memcpy(&packed_int1, &codes1[i / 2], 4);
+        __m128i packed_codes1 = _mm_cvtsi32_si128(packed_int1);
+        const __m128i mask = _mm_set1_epi8(0x0F);
+        __m128i lo1 = _mm_and_si128(packed_codes1, mask);
+        __m128i hi1 = _mm_srli_epi16(packed_codes1, 4);
+        __m128i unpacked1 = _mm_unpacklo_epi8(lo1, hi1);
+        __m256i codes1_epi32 = _mm256_cvtepu8_epi32(unpacked1);
+        __m256 codes1_f = _mm256_cvtepi32_ps(codes1_epi32);
+
+        uint32_t packed_int2;
+        memcpy(&packed_int2, &codes2[i / 2], 4);
+        __m128i packed_codes2 = _mm_cvtsi32_si128(packed_int2);
+        __m128i lo2 = _mm_and_si128(packed_codes2, mask);
+        __m128i hi2 = _mm_srli_epi16(packed_codes2, 4);
+        __m128i unpacked2 = _mm_unpacklo_epi8(lo2, hi2);
+        __m256i codes2_epi32 = _mm256_cvtepu8_epi32(unpacked2);
+        __m256 codes2_f = _mm256_cvtepi32_ps(codes2_epi32);
+
+        __m256 lower_bound_vec = _mm256_loadu_ps(&lower_bound[i]);
+        __m256 diff_vec = _mm256_loadu_ps(&diff[i]);
+
+        __m256 dequantized1 =
+            _mm256_fmadd_ps(_mm256_mul_ps(codes1_f, scale_factor), diff_vec, lower_bound_vec);
+        __m256 dequantized2 =
+            _mm256_fmadd_ps(_mm256_mul_ps(codes2_f, scale_factor), diff_vec, lower_bound_vec);
+        sum = _mm256_fmadd_ps(dequantized1, dequantized2, sum);
+    }
+    float result = 0.0f;
+    alignas(32) float temp[8];
+    _mm256_store_ps(temp, sum);
+    for (int j = 0; j < 8; ++j) {
+        result += temp[j];
+    }
+
+    if (i < dim) {
+        result += avx::SQ4ComputeCodesIP(
+            &codes1[i / 2], &codes2[i / 2], &lower_bound[i], &diff[i], dim - i);
+    }
+    return result;
+#else
     return avx::SQ4ComputeCodesIP(codes1, codes2, lower_bound, diff, dim);
+#endif
 }
 
 float
@@ -752,7 +881,54 @@ SQ4ComputeCodesL2Sqr(const uint8_t* RESTRICT codes1,
                      const float* RESTRICT lower_bound,
                      const float* RESTRICT diff,
                      uint64_t dim) {
+#if defined(ENABLE_AVX2)
+    __m256 sum = _mm256_setzero_ps();
+    const __m256 scale_factor = _mm256_set1_ps(1.0f / 15.0f);
+    uint64_t i = 0;
+    for (; i + 8 <= dim; i += 8) {
+        uint32_t packed_int1;
+        memcpy(&packed_int1, &codes1[i / 2], 4);
+        __m128i packed_codes1 = _mm_cvtsi32_si128(packed_int1);
+        const __m128i mask = _mm_set1_epi8(0x0F);
+        __m128i lo1 = _mm_and_si128(packed_codes1, mask);
+        __m128i hi1 = _mm_srli_epi16(packed_codes1, 4);
+        __m128i unpacked1 = _mm_unpacklo_epi8(lo1, hi1);
+        __m256i codes1_epi32 = _mm256_cvtepu8_epi32(unpacked1);
+        __m256 codes1_f = _mm256_cvtepi32_ps(codes1_epi32);
+
+        uint32_t packed_int2;
+        memcpy(&packed_int2, &codes2[i / 2], 4);
+        __m128i packed_codes2 = _mm_cvtsi32_si128(packed_int2);
+        __m128i lo2 = _mm_and_si128(packed_codes2, mask);
+        __m128i hi2 = _mm_srli_epi16(packed_codes2, 4);
+        __m128i unpacked2 = _mm_unpacklo_epi8(lo2, hi2);
+        __m256i codes2_epi32 = _mm256_cvtepu8_epi32(unpacked2);
+        __m256 codes2_f = _mm256_cvtepi32_ps(codes2_epi32);
+
+        __m256 lower_bound_vec = _mm256_loadu_ps(&lower_bound[i]);
+        __m256 diff_vec = _mm256_loadu_ps(&diff[i]);
+
+        __m256 dequantized1 =
+            _mm256_fmadd_ps(_mm256_mul_ps(codes1_f, scale_factor), diff_vec, lower_bound_vec);
+        __m256 dequantized2 =
+            _mm256_fmadd_ps(_mm256_mul_ps(codes2_f, scale_factor), diff_vec, lower_bound_vec);
+        __m256 delta = _mm256_sub_ps(dequantized1, dequantized2);
+        sum = _mm256_fmadd_ps(delta, delta, sum);
+    }
+    float result = 0.0f;
+    alignas(32) float temp[8];
+    _mm256_store_ps(temp, sum);
+    for (int j = 0; j < 8; ++j) {
+        result += temp[j];
+    }
+    if (i < dim) {
+        result += avx::SQ4ComputeCodesL2Sqr(
+            &codes1[i / 2], &codes2[i / 2], &lower_bound[i], &diff[i], dim - i);
+    }
+    return result;
+#else
     return avx::SQ4ComputeCodesL2Sqr(codes1, codes2, lower_bound, diff, dim);
+#endif
 }
 
 float

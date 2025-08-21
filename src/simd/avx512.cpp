@@ -730,7 +730,43 @@ SQ4ComputeIP(const float* RESTRICT query,
              const float* RESTRICT lower_bound,
              const float* RESTRICT diff,
              uint64_t dim) {
+#if defined(ENABLE_AVX512)
+    __m512 sum = _mm512_setzero_ps();
+    const __m512 scale_factor = _mm512_set1_ps(1.0f / 15.0f);
+
+    uint64_t i = 0;
+
+    for (; i + 16 <= dim; i += 16) {
+        __m128i packed_codes_128 = _mm_loadl_epi64((__m128i const*)&codes[i / 2]);
+        __m128i codes_16 = _mm_cvtepu8_epi16(packed_codes_128);
+        __m128i low_nibbles = _mm_and_si128(codes_16, _mm_set1_epi16(0x0F));
+        __m128i high_nibbles = _mm_srli_epi16(codes_16, 4);
+        __m128i codes_lo = _mm_unpacklo_epi16(low_nibbles, high_nibbles);
+        __m128i codes_hi = _mm_unpackhi_epi16(low_nibbles, high_nibbles);
+        __m256i codes_lo_32 = _mm256_cvtepu16_epi32(codes_lo);
+        __m256i codes_hi_32 = _mm256_cvtepu16_epi32(codes_hi);
+        __m512i codes_512 = _mm512_inserti32x8(_mm512_castsi256_si512(codes_lo_32), codes_hi_32, 1);
+        __m512 codes_f = _mm512_cvtepi32_ps(codes_512);
+
+        __m512 query_vec = _mm512_loadu_ps(&query[i]);
+        __m512 lower_bound_vec = _mm512_loadu_ps(&lower_bound[i]);
+        __m512 diff_vec = _mm512_loadu_ps(&diff[i]);
+
+        __m512 dequantized =
+            _mm512_fmadd_ps(_mm512_mul_ps(codes_f, scale_factor), diff_vec, lower_bound_vec);
+        sum = _mm512_fmadd_ps(query_vec, dequantized, sum);
+    }
+
+    float result = _mm512_reduce_add_ps(sum);
+
+    if (i < dim) {
+        result += avx2::SQ4ComputeIP(&query[i], &codes[i / 2], &lower_bound[i], &diff[i], dim - i);
+    }
+
+    return result;
+#else
     return avx2::SQ4ComputeIP(query, codes, lower_bound, diff, dim);
+#endif
 }
 
 float
@@ -739,7 +775,42 @@ SQ4ComputeL2Sqr(const float* RESTRICT query,
                 const float* RESTRICT lower_bound,
                 const float* RESTRICT diff,
                 uint64_t dim) {
+#if defined(ENABLE_AVX512)
+
+    __m512 sum = _mm512_setzero_ps();
+    const __m512 scale_factor = _mm512_set1_ps(1.0f / 15.0f);
+    uint64_t i = 0;
+    for (; i + 16 <= dim; i += 16) {
+        __m128i packed_codes_128 = _mm_loadl_epi64((__m128i const*)&codes[i / 2]);
+        __m128i codes_16 = _mm_cvtepu8_epi16(packed_codes_128);
+        __m128i low_nibbles = _mm_and_si128(codes_16, _mm_set1_epi16(0x0F));
+        __m128i high_nibbles = _mm_srli_epi16(codes_16, 4);
+        __m128i codes_lo = _mm_unpacklo_epi16(low_nibbles, high_nibbles);
+        __m128i codes_hi = _mm_unpackhi_epi16(low_nibbles, high_nibbles);
+        __m256i codes_lo_32 = _mm256_cvtepu16_epi32(codes_lo);
+        __m256i codes_hi_32 = _mm256_cvtepu16_epi32(codes_hi);
+        __m512i codes_512 = _mm512_inserti32x8(_mm512_castsi256_si512(codes_lo_32), codes_hi_32, 1);
+        __m512 codes_f = _mm512_cvtepi32_ps(codes_512);
+
+        __m512 query_vec = _mm512_loadu_ps(&query[i]);
+        __m512 lower_bound_vec = _mm512_loadu_ps(&lower_bound[i]);
+        __m512 diff_vec = _mm512_loadu_ps(&diff[i]);
+
+        __m512 dequantized =
+            _mm512_fmadd_ps(_mm512_mul_ps(codes_f, scale_factor), diff_vec, lower_bound_vec);
+        __m512 delta = _mm512_sub_ps(query_vec, dequantized);
+        sum = _mm512_fmadd_ps(delta, delta, sum);
+    }
+
+    float result = _mm512_reduce_add_ps(sum);
+    if (i < dim) {
+        result +=
+            avx2::SQ4ComputeL2Sqr(&query[i], &codes[i / 2], &lower_bound[i], &diff[i], dim - i);
+    }
+    return result;
+#else
     return avx2::SQ4ComputeL2Sqr(query, codes, lower_bound, diff, dim);
+#endif
 }
 
 float
@@ -748,7 +819,52 @@ SQ4ComputeCodesIP(const uint8_t* RESTRICT codes1,
                   const float* RESTRICT lower_bound,
                   const float* RESTRICT diff,
                   uint64_t dim) {
+#if defined(ENABLE_AVX512)
+    __m512 sum = _mm512_setzero_ps();
+    const __m512 scale_factor = _mm512_set1_ps(1.0f / 15.0f);
+    uint64_t i = 0;
+    for (; i + 16 <= dim; i += 16) {
+        __m128i packed_codes1_128 = _mm_loadl_epi64((__m128i const*)&codes1[i / 2]);
+        __m128i packed_codes2_128 = _mm_loadl_epi64((__m128i const*)&codes2[i / 2]);
+        __m128i codes1_16 = _mm_cvtepu8_epi16(packed_codes1_128);
+        __m128i codes2_16 = _mm_cvtepu8_epi16(packed_codes2_128);
+        __m128i codes1_low = _mm_and_si128(codes1_16, _mm_set1_epi16(0x0F));
+        __m128i codes1_high = _mm_srli_epi16(codes1_16, 4);
+        __m128i codes1_lo = _mm_unpacklo_epi16(codes1_low, codes1_high);
+        __m128i codes1_hi = _mm_unpackhi_epi16(codes1_low, codes1_high);
+        __m128i codes2_low = _mm_and_si128(codes2_16, _mm_set1_epi16(0x0F));
+        __m128i codes2_high = _mm_srli_epi16(codes2_16, 4);
+        __m128i codes2_lo = _mm_unpacklo_epi16(codes2_low, codes2_high);
+        __m128i codes2_hi = _mm_unpackhi_epi16(codes2_low, codes2_high);
+        __m256i codes1_lo_32 = _mm256_cvtepu16_epi32(codes1_lo);
+        __m256i codes1_hi_32 = _mm256_cvtepu16_epi32(codes1_hi);
+        __m256i codes2_lo_32 = _mm256_cvtepu16_epi32(codes2_lo);
+        __m256i codes2_hi_32 = _mm256_cvtepu16_epi32(codes2_hi);
+        __m512i codes1_512 =
+            _mm512_inserti32x8(_mm512_castsi256_si512(codes1_lo_32), codes1_hi_32, 1);
+        __m512i codes2_512 =
+            _mm512_inserti32x8(_mm512_castsi256_si512(codes2_lo_32), codes2_hi_32, 1);
+        __m512 codes1_f = _mm512_cvtepi32_ps(codes1_512);
+        __m512 codes2_f = _mm512_cvtepi32_ps(codes2_512);
+
+        __m512 lower_bound_vec = _mm512_loadu_ps(&lower_bound[i]);
+        __m512 diff_vec = _mm512_loadu_ps(&diff[i]);
+
+        __m512 dequantized1 =
+            _mm512_fmadd_ps(_mm512_mul_ps(codes1_f, scale_factor), diff_vec, lower_bound_vec);
+        __m512 dequantized2 =
+            _mm512_fmadd_ps(_mm512_mul_ps(codes2_f, scale_factor), diff_vec, lower_bound_vec);
+        sum = _mm512_fmadd_ps(dequantized1, dequantized2, sum);
+    }
+    float result = _mm512_reduce_add_ps(sum);
+    if (i < dim) {
+        result += avx2::SQ4ComputeCodesIP(
+            &codes1[i / 2], &codes2[i / 2], &lower_bound[i], &diff[i], dim - i);
+    }
+    return result;
+#else
     return avx2::SQ4ComputeCodesIP(codes1, codes2, lower_bound, diff, dim);
+#endif
 }
 
 float
@@ -757,7 +873,53 @@ SQ4ComputeCodesL2Sqr(const uint8_t* RESTRICT codes1,
                      const float* RESTRICT lower_bound,
                      const float* RESTRICT diff,
                      uint64_t dim) {
+#if defined(ENABLE_AVX512)
+    __m512 sum = _mm512_setzero_ps();
+    const __m512 scale_factor = _mm512_set1_ps(1.0f / 15.0f);
+    uint64_t i = 0;
+    for (; i + 16 <= dim; i += 16) {
+        __m128i packed_codes1_128 = _mm_loadl_epi64((__m128i const*)&codes1[i / 2]);
+        __m128i packed_codes2_128 = _mm_loadl_epi64((__m128i const*)&codes2[i / 2]);
+        __m128i codes1_16 = _mm_cvtepu8_epi16(packed_codes1_128);
+        __m128i codes2_16 = _mm_cvtepu8_epi16(packed_codes2_128);
+        __m128i codes1_low = _mm_and_si128(codes1_16, _mm_set1_epi16(0x0F));
+        __m128i codes1_high = _mm_srli_epi16(codes1_16, 4);
+        __m128i codes1_lo = _mm_unpacklo_epi16(codes1_low, codes1_high);
+        __m128i codes1_hi = _mm_unpackhi_epi16(codes1_low, codes1_high);
+        __m128i codes2_low = _mm_and_si128(codes2_16, _mm_set1_epi16(0x0F));
+        __m128i codes2_high = _mm_srli_epi16(codes2_16, 4);
+        __m128i codes2_lo = _mm_unpacklo_epi16(codes2_low, codes2_high);
+        __m128i codes2_hi = _mm_unpackhi_epi16(codes2_low, codes2_high);
+        __m256i codes1_lo_32 = _mm256_cvtepu16_epi32(codes1_lo);
+        __m256i codes1_hi_32 = _mm256_cvtepu16_epi32(codes1_hi);
+        __m256i codes2_lo_32 = _mm256_cvtepu16_epi32(codes2_lo);
+        __m256i codes2_hi_32 = _mm256_cvtepu16_epi32(codes2_hi);
+        __m512i codes1_512 =
+            _mm512_inserti32x8(_mm512_castsi256_si512(codes1_lo_32), codes1_hi_32, 1);
+        __m512i codes2_512 =
+            _mm512_inserti32x8(_mm512_castsi256_si512(codes2_lo_32), codes2_hi_32, 1);
+        __m512 codes1_f = _mm512_cvtepi32_ps(codes1_512);
+        __m512 codes2_f = _mm512_cvtepi32_ps(codes2_512);
+
+        __m512 lower_bound_vec = _mm512_loadu_ps(&lower_bound[i]);
+        __m512 diff_vec = _mm512_loadu_ps(&diff[i]);
+
+        __m512 dequantized1 =
+            _mm512_fmadd_ps(_mm512_mul_ps(codes1_f, scale_factor), diff_vec, lower_bound_vec);
+        __m512 dequantized2 =
+            _mm512_fmadd_ps(_mm512_mul_ps(codes2_f, scale_factor), diff_vec, lower_bound_vec);
+        __m512 delta = _mm512_sub_ps(dequantized1, dequantized2);
+        sum = _mm512_fmadd_ps(delta, delta, sum);
+    }
+    float result = _mm512_reduce_add_ps(sum);
+    if (i < dim) {
+        result += avx2::SQ4ComputeCodesL2Sqr(
+            &codes1[i / 2], &codes2[i / 2], &lower_bound[i], &diff[i], dim - i);
+    }
+    return result;
+#else
     return avx2::SQ4ComputeCodesL2Sqr(codes1, codes2, lower_bound, diff, dim);
+#endif
 }
 
 float

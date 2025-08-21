@@ -717,7 +717,59 @@ SQ4ComputeIP(const float* RESTRICT query,
              const float* RESTRICT lower_bound,
              const float* RESTRICT diff,
              uint64_t dim) {
+#if defined(ENABLE_AVX)
+    __m256 sum = _mm256_setzero_ps();
+    const __m256 scale_factor = _mm256_set1_ps(1.0f / 15.0f);
+
+    uint64_t i = 0;
+    for (; i + 8 <= dim; i += 8) {
+        // Load 4 bytes (8 codes)
+        __m128i packed_codes =
+            _mm_castps_si128(_mm_load_ss(reinterpret_cast<const float*>(&codes[i / 2])));
+
+        // Unpack 4-bit codes to 8-bit integers
+        const __m128i mask = _mm_set1_epi8(0x0F);
+        __m128i lo = _mm_and_si128(packed_codes, mask);
+        __m128i hi = _mm_srli_epi16(packed_codes, 4);
+        __m128i unpacked = _mm_unpacklo_epi8(lo, hi);
+
+        // Convert 8-bit integers to 16-bit integers
+        __m128i codes_16 = _mm_cvtepu8_epi16(unpacked);
+
+        // Convert 16-bit integers to 32-bit integers using SSE
+        __m128i codes_32_lo = _mm_cvtepi16_epi32(codes_16);
+        __m128i codes_32_hi = _mm_cvtepi16_epi32(_mm_srli_si128(codes_16, 8));
+
+        // Combine into a 256-bit vector
+        __m256i codes_epi32 = _mm256_castsi128_si256(codes_32_lo);
+        codes_epi32 = _mm256_insertf128_si256(codes_epi32, codes_32_hi, 1);
+
+        __m256 codes_f = _mm256_cvtepi32_ps(codes_epi32);
+
+        __m256 query_vec = _mm256_loadu_ps(&query[i]);
+        __m256 lower_bound_vec = _mm256_loadu_ps(&lower_bound[i]);
+        __m256 diff_vec = _mm256_loadu_ps(&diff[i]);
+
+        __m256 dequantized = _mm256_add_ps(
+            _mm256_mul_ps(_mm256_mul_ps(codes_f, scale_factor), diff_vec), lower_bound_vec);
+        sum = _mm256_add_ps(sum, _mm256_mul_ps(query_vec, dequantized));
+    }
+
+    float result = 0.0f;
+    alignas(32) float temp[8];
+    _mm256_store_ps(temp, sum);
+    for (int j = 0; j < 8; ++j) {
+        result += temp[j];
+    }
+
+    if (i < dim) {
+        result += sse::SQ4ComputeIP(&query[i], &codes[i / 2], &lower_bound[i], &diff[i], dim - i);
+    }
+
+    return result;
+#else
     return sse::SQ4ComputeIP(query, codes, lower_bound, diff, dim);
+#endif
 }
 
 float
@@ -726,7 +778,59 @@ SQ4ComputeL2Sqr(const float* RESTRICT query,
                 const float* RESTRICT lower_bound,
                 const float* RESTRICT diff,
                 uint64_t dim) {
+#if defined(ENABLE_AVX)
+    __m256 sum = _mm256_setzero_ps();
+    const __m256 scale_factor = _mm256_set1_ps(1.0f / 15.0f);
+    uint64_t i = 0;
+    for (; i + 8 <= dim; i += 8) {
+        // Load 4 bytes (8 codes)
+        __m128i packed_codes =
+            _mm_castps_si128(_mm_load_ss(reinterpret_cast<const float*>(&codes[i / 2])));
+
+        // Unpack 4-bit codes to 8-bit integers
+        const __m128i mask = _mm_set1_epi8(0x0F);
+        __m128i lo = _mm_and_si128(packed_codes, mask);
+        __m128i hi = _mm_srli_epi16(packed_codes, 4);
+        __m128i unpacked = _mm_unpacklo_epi8(lo, hi);
+
+        // Convert 8-bit integers to 16-bit integers
+        __m128i codes_16 = _mm_cvtepu8_epi16(unpacked);
+
+        // Convert 16-bit integers to 32-bit integers using SSE
+        __m128i codes_32_lo = _mm_cvtepi16_epi32(codes_16);
+        __m128i codes_32_hi = _mm_cvtepi16_epi32(_mm_srli_si128(codes_16, 8));
+
+        // Combine into a 256-bit vector
+        __m256i codes_epi32 = _mm256_castsi128_si256(codes_32_lo);
+        codes_epi32 = _mm256_insertf128_si256(codes_epi32, codes_32_hi, 1);
+
+        __m256 codes_f = _mm256_cvtepi32_ps(codes_epi32);
+
+        __m256 query_vec = _mm256_loadu_ps(&query[i]);
+        __m256 lower_bound_vec = _mm256_loadu_ps(&lower_bound[i]);
+        __m256 diff_vec = _mm256_loadu_ps(&diff[i]);
+
+        __m256 dequantized = _mm256_add_ps(
+            _mm256_mul_ps(_mm256_mul_ps(codes_f, scale_factor), diff_vec), lower_bound_vec);
+        __m256 delta = _mm256_sub_ps(query_vec, dequantized);
+        sum = _mm256_add_ps(sum, _mm256_mul_ps(delta, delta));
+    }
+
+    float result = 0.0f;
+    alignas(32) float temp[8];
+    _mm256_store_ps(temp, sum);
+    for (int j = 0; j < 8; ++j) {
+        result += temp[j];
+    }
+
+    if (i < dim) {
+        result +=
+            sse::SQ4ComputeL2Sqr(&query[i], &codes[i / 2], &lower_bound[i], &diff[i], dim - i);
+    }
+    return result;
+#else
     return sse::SQ4ComputeL2Sqr(query, codes, lower_bound, diff, dim);
+#endif
 }
 
 float
@@ -735,7 +839,60 @@ SQ4ComputeCodesIP(const uint8_t* RESTRICT codes1,
                   const float* RESTRICT lower_bound,
                   const float* RESTRICT diff,
                   uint64_t dim) {
+#if defined(ENABLE_AVX)
+    __m256 sum = _mm256_setzero_ps();
+    const __m256 scale_factor = _mm256_set1_ps(1.0f / 15.0f);
+    uint64_t i = 0;
+    for (; i + 8 <= dim; i += 8) {
+        __m128i packed_codes1 =
+            _mm_castps_si128(_mm_load_ss(reinterpret_cast<const float*>(&codes1[i / 2])));
+        const __m128i mask = _mm_set1_epi8(0x0F);
+        __m128i lo1 = _mm_and_si128(packed_codes1, mask);
+        __m128i hi1 = _mm_srli_epi16(packed_codes1, 4);
+        __m128i unpacked1 = _mm_unpacklo_epi8(lo1, hi1);
+        __m128i codes1_16 = _mm_cvtepu8_epi16(unpacked1);
+        __m128i codes1_32_lo = _mm_cvtepi16_epi32(codes1_16);
+        __m128i codes1_32_hi = _mm_cvtepi16_epi32(_mm_srli_si128(codes1_16, 8));
+        __m256i codes1_epi32 = _mm256_castsi128_si256(codes1_32_lo);
+        codes1_epi32 = _mm256_insertf128_si256(codes1_epi32, codes1_32_hi, 1);
+        __m256 codes1_f = _mm256_cvtepi32_ps(codes1_epi32);
+
+        __m128i packed_codes2 =
+            _mm_castps_si128(_mm_load_ss(reinterpret_cast<const float*>(&codes2[i / 2])));
+        __m128i lo2 = _mm_and_si128(packed_codes2, mask);
+        __m128i hi2 = _mm_srli_epi16(packed_codes2, 4);
+        __m128i unpacked2 = _mm_unpacklo_epi8(lo2, hi2);
+        __m128i codes2_16 = _mm_cvtepu8_epi16(unpacked2);
+        __m128i codes2_32_lo = _mm_cvtepi16_epi32(codes2_16);
+        __m128i codes2_32_hi = _mm_cvtepi16_epi32(_mm_srli_si128(codes2_16, 8));
+        __m256i codes2_epi32 = _mm256_castsi128_si256(codes2_32_lo);
+        codes2_epi32 = _mm256_insertf128_si256(codes2_epi32, codes2_32_hi, 1);
+        __m256 codes2_f = _mm256_cvtepi32_ps(codes2_epi32);
+
+        __m256 lower_bound_vec = _mm256_loadu_ps(&lower_bound[i]);
+        __m256 diff_vec = _mm256_loadu_ps(&diff[i]);
+
+        __m256 dequantized1 = _mm256_add_ps(
+            _mm256_mul_ps(_mm256_mul_ps(codes1_f, scale_factor), diff_vec), lower_bound_vec);
+        __m256 dequantized2 = _mm256_add_ps(
+            _mm256_mul_ps(_mm256_mul_ps(codes2_f, scale_factor), diff_vec), lower_bound_vec);
+        sum = _mm256_add_ps(sum, _mm256_mul_ps(dequantized1, dequantized2));
+    }
+    float result = 0.0f;
+    alignas(32) float temp[8];
+    _mm256_store_ps(temp, sum);
+    for (int j = 0; j < 8; ++j) {
+        result += temp[j];
+    }
+
+    if (i < dim) {
+        result += sse::SQ4ComputeCodesIP(
+            &codes1[i / 2], &codes2[i / 2], &lower_bound[i], &diff[i], dim - i);
+    }
+    return result;
+#else
     return sse::SQ4ComputeCodesIP(codes1, codes2, lower_bound, diff, dim);
+#endif
 }
 
 float
@@ -744,7 +901,60 @@ SQ4ComputeCodesL2Sqr(const uint8_t* RESTRICT codes1,
                      const float* RESTRICT lower_bound,
                      const float* RESTRICT diff,
                      uint64_t dim) {
+#if defined(ENABLE_AVX)
+    __m256 sum = _mm256_setzero_ps();
+    const __m256 scale_factor = _mm256_set1_ps(1.0f / 15.0f);
+    uint64_t i = 0;
+    for (; i + 8 <= dim; i += 8) {
+        __m128i packed_codes1 =
+            _mm_castps_si128(_mm_load_ss(reinterpret_cast<const float*>(&codes1[i / 2])));
+        const __m128i mask = _mm_set1_epi8(0x0F);
+        __m128i lo1 = _mm_and_si128(packed_codes1, mask);
+        __m128i hi1 = _mm_srli_epi16(packed_codes1, 4);
+        __m128i unpacked1 = _mm_unpacklo_epi8(lo1, hi1);
+        __m128i codes1_16 = _mm_cvtepu8_epi16(unpacked1);
+        __m128i codes1_32_lo = _mm_cvtepi16_epi32(codes1_16);
+        __m128i codes1_32_hi = _mm_cvtepi16_epi32(_mm_srli_si128(codes1_16, 8));
+        __m256i codes1_epi32 = _mm256_castsi128_si256(codes1_32_lo);
+        codes1_epi32 = _mm256_insertf128_si256(codes1_epi32, codes1_32_hi, 1);
+        __m256 codes1_f = _mm256_cvtepi32_ps(codes1_epi32);
+
+        __m128i packed_codes2 =
+            _mm_castps_si128(_mm_load_ss(reinterpret_cast<const float*>(&codes2[i / 2])));
+        __m128i lo2 = _mm_and_si128(packed_codes2, mask);
+        __m128i hi2 = _mm_srli_epi16(packed_codes2, 4);
+        __m128i unpacked2 = _mm_unpacklo_epi8(lo2, hi2);
+        __m128i codes2_16 = _mm_cvtepu8_epi16(unpacked2);
+        __m128i codes2_32_lo = _mm_cvtepi16_epi32(codes2_16);
+        __m128i codes2_32_hi = _mm_cvtepi16_epi32(_mm_srli_si128(codes2_16, 8));
+        __m256i codes2_epi32 = _mm256_castsi128_si256(codes2_32_lo);
+        codes2_epi32 = _mm256_insertf128_si256(codes2_epi32, codes2_32_hi, 1);
+        __m256 codes2_f = _mm256_cvtepi32_ps(codes2_epi32);
+
+        __m256 lower_bound_vec = _mm256_loadu_ps(&lower_bound[i]);
+        __m256 diff_vec = _mm256_loadu_ps(&diff[i]);
+
+        __m256 dequantized1 = _mm256_add_ps(
+            _mm256_mul_ps(_mm256_mul_ps(codes1_f, scale_factor), diff_vec), lower_bound_vec);
+        __m256 dequantized2 = _mm256_add_ps(
+            _mm256_mul_ps(_mm256_mul_ps(codes2_f, scale_factor), diff_vec), lower_bound_vec);
+        __m256 delta = _mm256_sub_ps(dequantized1, dequantized2);
+        sum = _mm256_add_ps(sum, _mm256_mul_ps(delta, delta));
+    }
+    float result = 0.0f;
+    alignas(32) float temp[8];
+    _mm256_store_ps(temp, sum);
+    for (int j = 0; j < 8; ++j) {
+        result += temp[j];
+    }
+    if (i < dim) {
+        result += sse::SQ4ComputeCodesL2Sqr(
+            &codes1[i / 2], &codes2[i / 2], &lower_bound[i], &diff[i], dim - i);
+    }
+    return result;
+#else
     return sse::SQ4ComputeCodesL2Sqr(codes1, codes2, lower_bound, diff, dim);
+#endif
 }
 
 float
