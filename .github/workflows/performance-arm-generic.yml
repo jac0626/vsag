@@ -1,8 +1,6 @@
 name: Performance-arm-generic
 
 on:
-  schedule:
-    - cron: "01 08 * * 1-5" # UTC 08:01 every weekday
   workflow_dispatch: {}
 
 jobs:
@@ -141,7 +139,7 @@ jobs:
       # Upload logs as artifacts for debugging
       - name: Upload Test Logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: performance-test-logs
           path: /tmp/perf-*.log
