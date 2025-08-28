@@ -1,8 +1,6 @@
 name: Performance-arm-neon
 
 on:
-  schedule:
-    - cron: "01 08 * * 1-5" # UTC 08:01 every weekday
   workflow_dispatch: {}
 
 jobs:
@@ -23,9 +21,81 @@ jobs:
       - name: Build test executables
         run: cmake -B build-release -S . -DDISABLE_SVE_FORCE=ON  -DENABLE_TOOLS=ON -DCMAKE_BUILD_TYPE=Release &&cmake --build build-release -j6
 
-       
+       # FP32 Tests
+      - name: Run Perf - FP32
+        id: test-fp32
+        continue-on-error: true
+        run: |
+          echo "::group::FP32 Performance Tests"
+          ./build-release/tools/eval/eval_performance .github/perf-fp32.yml 2>&1 | tee /tmp/perf-fp32.log
+          echo "::endgroup::"
       
-       # RABITQ Tests
+      # FP16 Tests
+      - name: Run Perf - FP16
+        id: test-fp16
+        continue-on-error: true
+        run: |
+          echo "::group::FP16 Performance Tests"
+          ./build-release/tools/eval/eval_performance .github/perf-fp16.yml 2>&1 | tee /tmp/perf-fp16.log
+          echo "::endgroup::"
+      
+      # BF16 Tests
+      - name: Run Perf - BF16
+        id: test-bf16
+        continue-on-error: true
+        run: |
+          echo "::group::BF16 Performance Tests"
+          ./build-release/tools/eval/eval_performance .github/perf-bf16.yml 2>&1 | tee /tmp/perf-bf16.log
+          echo "::endgroup::"
+      
+      # SQ8 Tests
+      - name: Run Perf - SQ8
+        id: test-sq8
+        continue-on-error: true
+        run: |
+          echo "::group::SQ8 Performance Tests"
+          ./build-release/tools/eval/eval_performance .github/perf-sq8.yml 2>&1 | tee /tmp/perf-sq8.log
+          echo "::endgroup::"
+      
+      # SQ8_UNIFORM Tests
+      - name: Run Perf - SQ8_UNIFORM
+        id: test-sq8-uniform
+        continue-on-error: true
+        run: |
+          echo "::group::SQ8_UNIFORM Performance Tests"
+          ./build-release/tools/eval/eval_performance .github/perf-sq8_uniform.yml 2>&1 | tee /tmp/perf-sq8_uniform.log
+          echo "::endgroup::"
+      
+      # SQ4 Tests
+      - name: Run Perf - SQ4
+        id: test-sq4
+        continue-on-error: true
+        run: |
+          echo "::group::SQ4 Performance Tests"
+          ./build-release/tools/eval/eval_performance .github/perf-sq4.yml 2>&1 | tee /tmp/perf-sq4.log
+          echo "::endgroup::"
+      
+      # SQ4_UNIFORM Tests
+      - name: Run Perf - SQ4_UNIFORM
+        id: test-sq4-uniform
+        continue-on-error: true
+        run: |
+          echo "::group::SQ4_UNIFORM Performance Tests"
+          ./build-release/tools/eval/eval_performance .github/perf-sq4_uniform.yml 2>&1 | tee /tmp/perf-sq4_uniform.log
+          echo "::endgroup::"
+      
+      # PQ Tests
+      - name: Run Perf - PQ
+        id: test-pq
+        continue-on-error: true
+        run: |
+          echo "::group::PQ Performance Tests"
+          ./build-release/tools/eval/eval_performance .github/perf-pq.yml 2>&1 | tee /tmp/perf-pq.log
+          echo "::endgroup::"
+      
+    
+      
+      # RABITQ Tests
       - name: Run Perf - RABITQ
         id: test-rabitq
         continue-on-error: true
@@ -34,10 +104,6 @@ jobs:
           ./build-release/tools/eval/eval_performance .github/perf-rabitq.yml 2>&1 | tee /tmp/perf-rabitq.log
           echo "::endgroup::"
       
-    
-      
-     
-      
       # Summary of test results
       - name: Test Summary
         if: always()
@@ -45,7 +111,14 @@ jobs:
           echo "## Test Results Summary"
           echo "| Quantization Method | Status |"
           echo "|---------------------|--------|"
-          echo "| SQ4 | ${{ steps.test-pq.outcome }} |"
+          echo "| FP32 | ${{ steps.test-fp32.outcome }} |"
+          echo "| FP16 | ${{ steps.test-fp16.outcome }} |"
+          echo "| BF16 | ${{ steps.test-bf16.outcome }} |"
+          echo "| SQ8 | ${{ steps.test-sq8.outcome }} |"
+          echo "| SQ8_UNIFORM | ${{ steps.test-sq8-uniform.outcome }} |"
+          echo "| SQ4 | ${{ steps.test-sq4.outcome }} |"
+          echo "| SQ4_UNIFORM | ${{ steps.test-sq4-uniform.outcome }} |"
+          echo "| PQ | ${{ steps.test-pq.outcome }} |"
           echo "| RABITQ | ${{ steps.test-rabitq.outcome }} |"
           
           # Show any errors from log files
@@ -66,7 +139,7 @@ jobs:
       # Upload logs as artifacts for debugging
       - name: Upload Test Logs
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v3
         with:
           name: performance-test-logs
           path: /tmp/perf-*.log
