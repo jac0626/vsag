@@ -20,4 +20,3 @@ GIST-rabitq:
     search_mode: "knn"
     range: 0.5
     delete_index_after_search: true
-    delete_index_after_search: true
