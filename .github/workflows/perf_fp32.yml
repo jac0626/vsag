@@ -1,0 +1,257 @@
+name: Performance-fp32
+
+on:
+  workflow_dispatch: {}
+
+jobs:
+  performance:
+    name: Performance
+    runs-on: ubuntu-22.04-arm
+    steps:
+      - name: Checkout code
+        uses: actions/checkout@v4
+
+      - name: Install Performance Analysis Tools
+        run: |
+          # Install perf tools
+          apt-get update && apt-get install -y \
+            linux-tools-generic \
+            linux-tools-$(uname -r) \
+            perf-tools-unstable \
+            systemtap \
+            bpfcc-tools \
+            valgrind \
+            cachegrind \
+            kcachegrind \
+            flamegraph \
+            htop \
+            sysstat \
+            iotop \
+            trace-cmd || true
+          
+          # Install FlameGraph tools
+          git clone https://github.com/brendangregg/FlameGraph.git /opt/FlameGraph
+          
+          # Install Python dependencies for analysis
+          pip3 install -r ./scripts/perf_reports/requirements.txt
+          pip3 install matplotlib pandas numpy psutil py-spy memory_profiler
+
+      - name: Download Datasets
+        run: bash ./scripts/download_annbench_datasets.sh
+
+      - name: Build Release with Debug Symbols
+        run: |
+          # Build with debug symbols for profiling
+          make release CMAKE_BUILD_TYPE=RelWithDebInfo
+          # Or add specific flags for better profiling
+          # export CFLAGS="-g -fno-omit-frame-pointer"
+          # export CXXFLAGS="-g -fno-omit-frame-pointer"
+
+      - name: Setup Performance Monitoring
+        run: |
+          # Enable kernel performance events
+          echo -1 | sudo tee /proc/sys/kernel/perf_event_paranoid
+          echo 0 | sudo tee /proc/sys/kernel/kptr_restrict
+          
+          # Create output directories
+          mkdir -p /tmp/perf-results/{flamegraphs,metrics,reports}
+
+      - name: Collect System Baseline Metrics
+        run: |
+          # Collect baseline system metrics
+          sar -u -r -d -n DEV 1 10 > /tmp/perf-results/metrics/baseline_system.txt
+          free -h > /tmp/perf-results/metrics/baseline_memory.txt
+          cat /proc/cpuinfo > /tmp/perf-results/metrics/cpu_info.txt
+
+      - name: Run Performance Tests with Profiling
+        run: |
+          # Run with perf record for CPU profiling
+          perf record -F 99 -a -g -- ./build-release/tools/eval/eval_performance .github/fp32.yml &
+          PERF_PID=$!
+          
+          # Run the actual performance test
+          ./build-release/tools/eval/eval_performance .github/fp32.yml
+          
+          # Stop perf recording
+          kill $PERF_PID || true
+          sleep 2
+          
+          # Generate perf report
+          perf report --stdio > /tmp/perf-results/reports/perf_report.txt
+
+      - name: Generate CPU Flame Graph
+        run: |
+          # Generate flame graph from perf data
+          perf script > /tmp/perf-results/perf.script
+          /opt/FlameGraph/stackcollapse-perf.pl /tmp/perf-results/perf.script > /tmp/perf-results/perf.folded
+          /opt/FlameGraph/flamegraph.pl /tmp/perf-results/perf.folded > /tmp/perf-results/flamegraphs/cpu_flamegraph.svg
+          
+          # Alternative: Use perf directly to generate flame graph
+          perf script | /opt/FlameGraph/stackcollapse-perf.pl | /opt/FlameGraph/flamegraph.pl > /tmp/perf-results/flamegraphs/cpu_flamegraph_alt.svg
+
+      - name: Collect Cache Performance Metrics
+        run: |
+          # Run with cache profiling
+          perf stat -e cache-references,cache-misses,L1-dcache-loads,L1-dcache-load-misses,LLC-loads,LLC-load-misses \
+            ./build-release/tools/eval/eval_performance .github/fp32.yml 2> /tmp/perf-results/metrics/cache_stats.txt
+          
+          # Calculate cache hit rates
+          python3 << 'EOF'
+          import re
+          
+          with open('/tmp/perf-results/metrics/cache_stats.txt', 'r') as f:
+              content = f.read()
+          
+          # Parse cache statistics
+          cache_refs = re.search(r'([\d,]+)\s+cache-references', content)
+          cache_misses = re.search(r'([\d,]+)\s+cache-misses', content)
+          l1d_loads = re.search(r'([\d,]+)\s+L1-dcache-loads', content)
+          l1d_misses = re.search(r'([\d,]+)\s+L1-dcache-load-misses', content)
+          llc_loads = re.search(r'([\d,]+)\s+LLC-loads', content)
+          llc_misses = re.search(r'([\d,]+)\s+LLC-load-misses', content)
+          
+          results = []
+          
+          if cache_refs and cache_misses:
+              refs = int(cache_refs.group(1).replace(',', ''))
+              misses = int(cache_misses.group(1).replace(',', ''))
+              hit_rate = (1 - misses/refs) * 100 if refs > 0 else 0
+              results.append(f"Overall Cache Hit Rate: {hit_rate:.2f}%")
+          
+          if l1d_loads and l1d_misses:
+              loads = int(l1d_loads.group(1).replace(',', ''))
+              misses = int(l1d_misses.group(1).replace(',', ''))
+              hit_rate = (1 - misses/loads) * 100 if loads > 0 else 0
+              results.append(f"L1 Data Cache Hit Rate: {hit_rate:.2f}%")
+          
+          if llc_loads and llc_misses:
+              loads = int(llc_loads.group(1).replace(',', ''))
+              misses = int(llc_misses.group(1).replace(',', ''))
+              hit_rate = (1 - misses/loads) * 100 if loads > 0 else 0
+              results.append(f"LLC Cache Hit Rate: {hit_rate:.2f}%")
+          
+          with open('/tmp/perf-results/metrics/cache_hit_rates.txt', 'w') as f:
+              f.write('\n'.join(results))
+          EOF
+
+      - name: Analyze Pipeline Utilization
+        run: |
+          # Collect CPU pipeline metrics
+          perf stat -e cycles,instructions,branches,branch-misses,stalled-cycles-frontend,stalled-cycles-backend \
+            ./build-release/tools/eval/eval_performance .github/fp32.yml 2> /tmp/perf-results/metrics/pipeline_stats.txt
+          
+          # Calculate pipeline utilization metrics
+          python3 << 'EOF'
+          import re
+          
+          with open('/tmp/perf-results/metrics/pipeline_stats.txt', 'r') as f:
+              content = f.read()
+          
+          # Parse pipeline statistics
+          cycles = re.search(r'([\d,]+)\s+cycles', content)
+          instructions = re.search(r'([\d,]+)\s+instructions', content)
+          branches = re.search(r'([\d,]+)\s+branches', content)
+          branch_misses = re.search(r'([\d,]+)\s+branch-misses', content)
+          stalled_frontend = re.search(r'([\d,]+)\s+stalled-cycles-frontend', content)
+          stalled_backend = re.search(r'([\d,]+)\s+stalled-cycles-backend', content)
+          
+          results = []
+          
+          if cycles and instructions:
+              c = int(cycles.group(1).replace(',', ''))
+              i = int(instructions.group(1).replace(',', ''))
+              ipc = i/c if c > 0 else 0
+              results.append(f"Instructions Per Cycle (IPC): {ipc:.3f}")
+          
+          if branches and branch_misses:
+              b = int(branches.group(1).replace(',', ''))
+              bm = int(branch_misses.group(1).replace(',', ''))
+              prediction_rate = (1 - bm/b) * 100 if b > 0 else 0
+              results.append(f"Branch Prediction Success Rate: {prediction_rate:.2f}%")
+          
+          if cycles and stalled_frontend:
+              c = int(cycles.group(1).replace(',', ''))
+              sf = int(stalled_frontend.group(1).replace(',', ''))
+              frontend_util = (1 - sf/c) * 100 if c > 0 else 100
+              results.append(f"Frontend Pipeline Utilization: {frontend_util:.2f}%")
+          
+          if cycles and stalled_backend:
+              c = int(cycles.group(1).replace(',', ''))
+              sb = int(stalled_backend.group(1).replace(',', ''))
+              backend_util = (1 - sb/c) * 100 if c > 0 else 100
+              results.append(f"Backend Pipeline Utilization: {backend_util:.2f}%")
+          
+          with open('/tmp/perf-results/metrics/pipeline_utilization.txt', 'w') as f:
+              f.write('\n'.join(results))
+          EOF
+
+      - name: Generate Memory Flame Graph
+        run: |
+          # Use valgrind/massif for memory profiling
+          valgrind --tool=massif --massif-out-file=/tmp/perf-results/massif.out \
+            ./build-release/tools/eval/eval_performance .github/fp32.yml || true
+          
+          # Convert massif output to flame graph format (if ms_print is available)
+          ms_print /tmp/perf-results/massif.out > /tmp/perf-results/reports/memory_profile.txt || true
+
+      - name: Collect Advanced Metrics
+        run: |
+          # Collect more detailed performance counters
+          perf stat -d -d -d ./build-release/tools/eval/eval_performance .github/fp32.yml \
+            2> /tmp/perf-results/metrics/detailed_perf_stats.txt
+
+      - name: Generate Performance Report
+        run: |
+          # Create a comprehensive performance report
+          python3 << 'EOF'
+          import json
+          import os
+          from datetime import datetime
+          
+          report = {
+              "timestamp": datetime.now().isoformat(),
+              "test_name": "Performance Test",
+              "metrics": {}
+          }
+          
+          # Read cache hit rates
+          if os.path.exists('/tmp/perf-results/metrics/cache_hit_rates.txt'):
+              with open('/tmp/perf-results/metrics/cache_hit_rates.txt', 'r') as f:
+                  cache_metrics = f.read().strip().split('\n')
+                  for metric in cache_metrics:
+                      if ':' in metric:
+                          key, value = metric.split(':', 1)
+                          report["metrics"][key.strip()] = value.strip()
+          
+          # Read pipeline utilization
+          if os.path.exists('/tmp/perf-results/metrics/pipeline_utilization.txt'):
+              with open('/tmp/perf-results/metrics/pipeline_utilization.txt', 'r') as f:
+                  pipeline_metrics = f.read().strip().split('\n')
+                  for metric in pipeline_metrics:
+                      if ':' in metric:
+                          key, value = metric.split(':', 1)
+                          report["metrics"][key.strip()] = value.strip()
+          
+          # Read existing performance results
+          if os.path.exists('/tmp/github-perf.json'):
+              with open('/tmp/github-perf.json', 'r') as f:
+                  existing_data = json.load(f)
+                  report["recall_metrics"] = existing_data
+          
+          # Save enhanced report
+          with open('/tmp/enhanced-perf-report.json', 'w') as f:
+              json.dump(report, f, indent=2)
+          
+          print("Performance Report Generated:")
+          print(json.dumps(report, indent=2))
+          EOF
+
+      - name: Upload Performance Artifacts
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-results
+          path: |
+            /tmp/perf-results/
+            /tmp/enhanced-perf-report.json
+            /tmp/github-perf.json
+          retention-days: 30
