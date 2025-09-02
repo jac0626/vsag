@@ -1,0 +1,35 @@
+# PQ Performance Test Configuration
+
+global:
+  exporters:
+    e1:
+      format: "text"
+      to: "stdout"
+    e2:
+      format: "json"
+      to: "file://tmp/github-perf.json"
+
+SIFT-pq:
+    datapath: "/tmp/data/sift-128-euclidean.hdf5"
+    type: "search"
+    index_name: "ivf"
+    create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param": {
+            "buckets_count": 50,
+            "partition_strategy_type": "ivf",
+            "ivf_train_type": "kmeans",
+            "base_quantization_type": "pqfs",
+            "precise_quantization_type": "fp32",
+            "use_reorder": true,
+            "base_pq_dim": 32,
+            "precise_io_type": "async_io",
+            "precise_file_path": "./precise_codes"
+        }}'
+    search_params: '{"ivf": {
+            "scan_buckets_count": 10
+        }}'
+    index_path: "/tmp/sift-128-euclidean/index/hgraph_index"
+    topk: 10
+    search_mode: "knn"
+    range: 0.5
+    delete_index_after_search: false
+

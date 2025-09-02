@@ -49,9 +49,14 @@ main(int argc, char** argv) {
         "dim": 128,
         "index_param": {
             "buckets_count": 50,
-            "base_quantization_type": "fp32",
             "partition_strategy_type": "ivf",
-            "ivf_train_type": "kmeans"
+            "ivf_train_type": "kmeans",
+            "base_quantization_type": "pqfs",
+            "precise_quantization_type": "fp32",
+            "use_reorder": true,
+            "base_pq_dim": 32,
+            "precise_io_type": "async_io",
+            "precise_file_path": "./precise_codes"
         }
     }
     )";

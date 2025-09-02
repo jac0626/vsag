@@ -1,0 +1,61 @@
+name: VSAG Performance Test
+
+# 触发工作流的事件
+on:
+  push:
+    branches: [ main ]  # 当有代码推送到 main 分支时触发
+  pull_request:
+    branches: [ main ]  # 当有PR合并到 main 分支时触发
+  workflow_dispatch:      # 允许手动触发
+
+jobs:
+  performance-analysis:
+    runs-on: ubuntu-22.04-arm  # 使用最新的 Ubuntu Runner
+
+    steps:
+      # 第1步：检出代码
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      # 第2步：安装依赖 (perf 工具)
+      # 这是在 Runner 上准备环境的关键步骤
+      - name: Install perf and dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y \
+          build-essential \
+          linux-tools-common \
+          linux-tools-generic \
+          linux-tools-$(uname -r) || sudo apt-get install -y linux-tools-5.15.0-1053-azure
+          git clone --depth 1 https://github.com/brendangregg/FlameGraph.git
+        
+          pip install pandas matplotlib seaborn plotly kaleido
+          echo -1 | sudo tee /proc/sys/kernel/perf_event_paranoid || true
+          echo 0 | sudo tee /proc/sys/kernel/kptr_restrict || true
+
+      # 第3步：运行您的性能测试脚本
+      # 我们将您的脚本命名为 run_perf_tests.sh
+      - name: Run Performance Test Script
+        run: |
+          # 赋予脚本执行权限
+          chmod +x ./perf.sh
+          # 使用 sudo 运行，因为 perf 需要 root 权限
+          sudo ./perf.sh
+
+      # 第4步：打包性能测试结果
+      # 在上传之前，最好将所有结果打包成一个压缩文件
+      - name: Archive performance results
+        run: |
+          # 从脚本的输出中获取结果目录名
+          # 注意：这里我们假设脚本的输出格式是固定的
+          RESULT_DIR=$(ls -t perf_results | head -n 1)
+          tar -czvf perf_results.tar.gz -C perf_results $RESULT_DIR
+
+      # 第5步：上传性能测试数据作为构建产物 (Artifact)
+      # 这是将数据保存下来并可供下载的关键
+      - name: Upload performance artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: performance-report-${{ github.sha }} # 使用 commit SHA 命名，方便追溯
+          path: perf_results.tar.gz
+          retention-days: 90 # 产物保留90天
