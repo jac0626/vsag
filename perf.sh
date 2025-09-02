@@ -6,9 +6,10 @@ export CFLAGS="-g -fno-omit-frame-pointer"
 export CXXFLAGS="-g -fno-omit-frame-pointer"
 make release
 EVAL_BINARY="./build-release/tools/eval/eval_performance"
-./build-release/tools/eval/eval_performance .github/build_index.yml
-
 bash scripts/download_annbench_datasets.sh
+./build-release/tools/eval/eval_performance .github/build-index.yml
+
+
 # FlameGraph 脚本所在的目录
 FLAMEGRAPH_DIR="./FlameGraph"
 
@@ -93,7 +94,7 @@ for config_file in "${TEST_CONFIGS[@]}"; do
     echo ""
 
     # 清理临时的 perf.data 文件，可选
-    # sudo rm "$PERF_DATA_FILE"
+    sudo rm "$PERF_DATA_FILE"
 
     echo "测试 ${TEST_NAME} 完成. 结果位于: ${OUTPUT_DIR}"
     echo ""
