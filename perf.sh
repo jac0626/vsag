@@ -7,6 +7,8 @@ export CXXFLAGS="-g -fno-omit-frame-pointer"
 make release
 EVAL_BINARY="./build-release/tools/eval/eval_performance"
 ./build-release/tools/eval/eval_performance .github/build_index.yml
+
+bash scripts/download_annbench_datasets.sh
 # FlameGraph 脚本所在的目录
 FLAMEGRAPH_DIR="./FlameGraph"
 
