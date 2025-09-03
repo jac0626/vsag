@@ -5,8 +5,11 @@
 export CFLAGS="-g -fno-omit-frame-pointer"
 export CXXFLAGS="-g -fno-omit-frame-pointer"
 
-EVAL_BINARY="./build-release/tools/eval/eval_performance"
 
+make release
+
+EVAL_BINARY="./build-release/tools/eval/eval_performance"
+bash scripts/download_annbench_datasets.sh
 ./build-release/tools/eval/eval_performance .github/build-index.yml
 
 
