@@ -4,9 +4,9 @@
 # 可执行的评估程序路径
 export CFLAGS="-g -fno-omit-frame-pointer"
 export CXXFLAGS="-g -fno-omit-frame-pointer"
-make release
+
 EVAL_BINARY="./build-release/tools/eval/eval_performance"
-bash scripts/download_annbench_datasets.sh
+
 ./build-release/tools/eval/eval_performance .github/build-index.yml
 
 
@@ -36,7 +36,7 @@ fi
 
 # 创建一个带时间戳的主输出目录，用于存放本次所有测试的结果
 TIMESTAMP=$(date +%Y%m%d_%H%M%S)
-BASE_OUTPUT_DIR="perf_results/${TIMESTAMP}"
+BASE_OUTPUT_DIR="perf_results"
 mkdir -p "$BASE_OUTPUT_DIR"
 echo "所有性能测试结果将保存在: ${BASE_OUTPUT_DIR}"
 echo ""

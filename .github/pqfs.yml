@@ -27,7 +27,7 @@ SIFT-pq:
     search_params: '{"ivf": {
             "scan_buckets_count": 10
         }}'
-    index_path: "/tmp/sift-128-euclidean/index/hgraph_index"
+    index_path: "/tmp/sift-128-euclidean/index/hgraph_index_pqfs"
     topk: 10
     search_mode: "knn"
     range: 0.5

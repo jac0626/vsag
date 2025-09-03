@@ -46,14 +46,8 @@ jobs:
 
       - name: Archive performance results
         run: |
-          RESULT_DIR=$(ls -t perf_results | head -n 1)
-          # 使用 --include 和 --exclude 来精确控制打包内容
-          sudo tar -czvf performance_report.tar.gz \
-            -C perf_results/$RESULT_DIR \
-            --wildcards \
-            --include='*.svg' \
-            --include='*.log' \
-            .
+          sudo tar -czvf performance_report.tar.gz perf_results
+      
 
       # 第5步：上传性能测试数据
       - name: Change artifact ownership

@@ -13,7 +13,7 @@ SIFT-fp32:
     index_name: "hgraph"
     create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"fp32","max_degree":32,"ef_construction":400}}'
     search_params: '{"hgraph":{"ef_search":40}}'
-    index_path: "/tmp/sift-128-euclidean/index/hgraph_index"
+    index_path: "/tmp/sift-128-euclidean/index/hgraph_index_fp32"
     topk: 10
     search_mode: "knn"
     range: 0.5
@@ -26,7 +26,7 @@ SIFT-pq:
     index_name: "hgraph"
     create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"pq","max_degree":40,"ef_construction":400,"base_pq_dim": 32,"precise_quantization_type":"fp32","use_reorder":true}}'
     search_params: '{"hgraph":{"ef_search":57}}'
-    index_path: "/tmp/sift-128-euclidean/index/hgraph_index"
+    index_path: "/tmp/sift-128-euclidean/index/hgraph_index_pq"
     topk: 10
     search_mode: "knn"
     range: 0.5
@@ -50,7 +50,7 @@ SIFT-pqfs:
     search_params: '{"ivf": {
             "scan_buckets_count": 10
         }}'
-    index_path: "/tmp/sift-128-euclidean/index/hgraph_index"
+    index_path: "/tmp/sift-128-euclidean/index/hgraph_index_pqfs"
     topk: 10
     search_mode: "knn"
     range: 0.5
@@ -62,7 +62,7 @@ SIFT-rabitq:
     index_name: "hgraph"
     create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"rabitq","max_degree":32,"ef_construction":400,"precise_quantization_type":"fp32","use_reorder":true,"rabitq_bits_per_dim_query":32}}'
     search_params: '{"hgraph":{"ef_search":48}}'
-    index_path: "/tmp/sift-128-euclidean/index/hgraph_index"
+    index_path: "/tmp/sift-128-euclidean/index/hgraph_index_rabitq"
     topk: 10
     search_mode: "knn"
     range: 0.5
@@ -74,7 +74,7 @@ SIFT-sq8:
     index_name: "hgraph"
     create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"sq8","max_degree":32,"ef_construction":400}}'
     search_params: '{"hgraph":{"ef_search":44}}'
-    index_path: "/tmp/sift-128-euclidean/index/hgraph_index"
+    index_path: "/tmp/sift-128-euclidean/index/hgraph_index_sq8"
     topk: 10
     search_mode: "knn"
     range: 0.5
@@ -86,7 +86,7 @@ SIFT-sq8_uniform:
     index_name: "hgraph"
     create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"sq8_uniform","max_degree":32,"ef_construction":400}}'
     search_params: '{"hgraph":{"ef_search":44}}'
-    index_path: "/tmp/sift-128-euclidean/index/hgraph_index"
+    index_path: "/tmp/sift-128-euclidean/index/hgraph_index_sq8_uniform"
     topk: 10
     search_mode: "knn"
     range: 0.5
