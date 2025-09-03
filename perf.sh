@@ -28,7 +28,6 @@ TEST_CONFIGS=(
 
 # --- 脚本主体 ---
 
-git clone https://github.com/brendangregg/FlameGraph.git
 
 # 检查评估程序是否存在
 if [ ! -f "$EVAL_BINARY" ]; then
