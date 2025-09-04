@@ -21,6 +21,8 @@
 #include <cstdint>
 #include <cstring>
 #include <memory>
+#include <vector>
+#include <mutex>
 
 #include "simd.h"
 constexpr auto
@@ -1224,6 +1226,26 @@ Normalize(const float* from, float* to, uint64_t dim) {
 #endif
 }
 
+inline const uint8_t* get_offset_table_safe() {
+    
+    static std::vector<uint8_t> offsets_data; 
+    static std::once_flag init_flag;
+    
+    std::call_once(init_flag, []() {
+        
+        size_t sve_bytes = svcntb();
+        offsets_data.resize(sve_bytes);
+        
+        
+        for (uint64_t c = 0; c < sve_bytes / 16; ++c) {
+            std::memset(offsets_data.data() + c * 16, c * 16, 16);
+        }
+    });
+    
+  
+    return offsets_data.data();
+}
+
 __attribute__((no_sanitize("address", "undefined"))) void
 PQFastScanLookUp32(const uint8_t* RESTRICT lookup_table,
                    const uint8_t* RESTRICT codes,
@@ -1242,9 +1264,7 @@ PQFastScanLookUp32(const uint8_t* RESTRICT lookup_table,
     svuint16_t accum2 = svdup_u16(0);
     svuint16_t accum3 = svdup_u16(0);
 
-    uint8_t offsets_data[svcntb()];
-    for (uint64_t c = 0; c < svcntb() / 16; ++c) std::memset(offsets_data + c * 16, c * 16, 16);
-
+    const uint8_t* offsets_data = get_offset_table_safe();
     const svuint8_t index_offsets = svld1_u8(svptrue_b8(), offsets_data);
 
     svbool_t predicate = svwhilelt_b8(i, total_bytes);
