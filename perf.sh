@@ -24,6 +24,7 @@ TEST_CONFIGS=(
     ".github/rabitq.yml"
     ".github/pq.yml"
     ".github/pqfs.yml"
+    ".github/ivf-pq.yml"
 )
 
 # --- 脚本主体 ---

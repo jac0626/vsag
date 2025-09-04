@@ -56,6 +56,28 @@ SIFT-pqfs:
     range: 0.5
     delete_index_after_search: false
 
+SIFT-ivfpq:
+    datapath: "/tmp/data/sift-128-euclidean.hdf5"
+    type: "build"
+    index_name: "ivf"
+    create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param": {
+            "buckets_count": 50,
+            "partition_strategy_type": "ivf",
+            "ivf_train_type": "kmeans",
+            "base_quantization_type": "pq",
+            "precise_quantization_type": "fp32",
+            "use_reorder": true,
+            "base_pq_dim": 32
+        }}'
+    search_params: '{"ivf": {
+            "scan_buckets_count": 20
+        }}'
+    index_path: "/tmp/sift-128-euclidean/index/hgraph_index_ivfpq"
+    topk: 10
+    search_mode: "knn"
+    range: 0.5
+    delete_index_after_search: false
+
 SIFT-rabitq:
     datapath: "/tmp/data/sift-128-euclidean.hdf5"
     type: "build"
