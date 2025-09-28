@@ -291,17 +291,9 @@ endif ()
 
 # pybinds
 if (ENABLE_PYBINDS)
-    if(DEFINED PYTHON_EXECUTABLE)
-        message(STATUS "Using specified Python executable: ${PYTHON_EXECUTABLE}")
-        set(Python3_EXECUTABLE ${PYTHON_EXECUTABLE})
-    elseif(DEFINED Python_EXECUTABLE)
-        message(STATUS "Using specified Python executable: ${Python_EXECUTABLE}")
-        set(Python3_EXECUTABLE ${Python_EXECUTABLE})
-    elseif(DEFINED Python3_EXECUTABLE)
-        message(STATUS "Using Python3_EXECUTABLE: ${Python3_EXECUTABLE}")
-    else()
-        message(WARNING "No Python executable specified, using system default")
-    endif()
+    # find_package(Python3) will find the python interpreter.
+    # To use a specific python, set the CMake variable Python3_EXECUTABLE.
+    # For example: cmake -DPython3_EXECUTABLE=/usr/bin/python3 ...
     
     find_package (Python3 REQUIRED COMPONENTS Interpreter Development.Module)
     

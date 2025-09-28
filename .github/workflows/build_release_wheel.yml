@@ -11,72 +11,67 @@ on:
 
 jobs:
   build_wheels:
-    name: Build wheels for ${{ matrix.arch }}
+    name: Build wheels for Python ${{ matrix.python-version-range }} on ${{ matrix.arch }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - arch: x86_64
+          - python-version-range: '3.8+'
+            cibw-build: 'cp38-* cp39-* cp310-* cp311-* cp312-*'
+            patch-script: ''
+            arch: x86_64
             runner: ubuntu-latest
-          - arch: aarch64
+          - python-version-range: '3.8+'
+            cibw-build: 'cp38-* cp39-* cp310-* cp311-* cp312-*'
+            patch-script: ''
+            arch: aarch64
             runner: ubuntu-22.04-arm
-    
+          - python-version-range: '3.7'
+            cibw-build: 'cp37-*'
+            patch-script: "sed -i 's/setuptools>=61.0/setuptools>=61.0,<67/g' python/pyproject.toml"
+            arch: x86_64
+            runner: ubuntu-latest
+          - python-version-range: '3.7'
+            cibw-build: 'cp37-*'
+            patch-script: "sed -i 's/setuptools>=61.0/setuptools>=61.0,<67/g' python/pyproject.toml"
+            arch: aarch64
+            runner: ubuntu-22.04-arm
+          - python-version-range: '3.6'
+            cibw-build: 'cp36-*'
+            patch-script: |
+              sed -i 's/setuptools>=61.0/setuptools<60/g' python/pyproject.toml
+              sed -i 's/setuptools_scm\\[toml\\]>=6.2/setuptools_scm[toml]<7/g' python/pyproject.toml
+            arch: x86_64
+            runner: ubuntu-latest
+          - python-version-range: '3.6'
+            cibw-build: 'cp36-*'
+            patch-script: |
+              sed -i 's/setuptools>=61.0/setuptools<60/g' python/pyproject.toml
+              sed -i 's/setuptools_scm\\[toml\\]>=6.2/setuptools_scm[toml]<7/g' python/pyproject.toml
+            arch: aarch64
+            runner: ubuntu-22.04-arm
+
     steps:
       - uses: actions/checkout@v4
         with:
-          fetch-depth: 0  
-      
+          fetch-depth: 0
+
+      - name: Patch pyproject.toml for legacy Python
+        if: matrix.patch-script != ''
+        run: ${{ matrix.patch-script }}
+
       - name: Build wheels
         uses: pypa/cibuildwheel@5f22145df44122af0f5a201f93cf0207171beca7
         with:
           package-dir: python
         env:
-          
           CIBW_ARCHS: ${{ matrix.arch }}
-          
-          
-          CIBW_BUILD: "cp38-* cp39-* cp310-* cp311-* cp312-*"
-          
-          
-          CIBW_SKIP: "pp* *-musllinux*"
-          
-         
-          CIBW_MANYLINUX_X86_64_IMAGE: manylinux2014
-          CIBW_MANYLINUX_AARCH64_IMAGE: manylinux2014
-          
-          CIBW_BEFORE_ALL: |
-           
-            sed -i 's/mirrorlist/#mirrorlist/g' /etc/yum.repos.d/CentOS-*.repo
-            sed -i 's|#baseurl=http://mirror.centos.org|baseurl=http://vault.centos.org|g' /etc/yum.repos.d/CentOS-*.repo
-            
-            
-            if [[ "$(uname -m)" == "aarch64" ]]; then
-              rm -f /etc/yum.repos.d/CentOS-SCLo-*.repo
-            fi
-            
-            yum clean all
-            
-           
-            yum install -y gcc gcc-c++ gcc-gfortran python3-devel
-            
-           
-            yum install -y libaio-devel libcurl-devel ca-certificates
-            
-            
-            if [[ "$(uname -m)" == "x86_64" ]]; then
-              yum-config-manager --add-repo https://yum.repos.intel.com/mkl/setup/intel-mkl.repo
-              rpm --import https://yum.repos.intel.com/intel-gpg-keys/GPG-PUB-KEY-INTEL-SW-PRODUCTS-2019.PUB
-              yum install -y intel-mkl-64bit-2020.0-088
-            fi
-            
-            # For OpenMP, use the standard package instead of alibaba-specific ones
-            yum install -y libgomp
-      
-      
+          CIBW_BUILD: ${{ matrix.cibw-build }}
+
       - uses: actions/upload-artifact@v4
         with:
-          name: wheels-${{ matrix.arch }}
+          name: wheels-${{ matrix.python-version-range }}-${{ matrix.arch }}
           path: ./wheelhouse/*.whl
           if-no-files-found: error
 

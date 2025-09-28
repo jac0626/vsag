@@ -8,7 +8,7 @@ CMAKE_BUILD_DIR="./build-release/"
 
 
 
-PYTHON_EXECUTABLE="${PYTHON:-$(which python)}"
+PYTHON_EXECUTABLE="${PYTHON:-$(which python3 || which python)}"
 
 
 if [ ! -x "$PYTHON_EXECUTABLE" ]; then
@@ -41,7 +41,6 @@ cmake -S. -B$CMAKE_BUILD_DIR \
     -DCMAKE_CXX_FLAGS_RELEASE="-O3 -DNDEBUG -s" \
     -DENABLE_PYBINDS=ON \
     -DENABLE_TESTS=OFF \
-    -DPython_EXECUTABLE="$PYTHON_EXECUTABLE" \
     -DPython3_EXECUTABLE="$PYTHON_EXECUTABLE" \
     -DPython3_ROOT_DIR="$(dirname $(dirname $PYTHON_EXECUTABLE))" \
     -DPython3_FIND_STRATEGY=LOCATION \
