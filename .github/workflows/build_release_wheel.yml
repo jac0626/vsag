@@ -22,21 +22,25 @@ jobs:
             patch-script: ''
             arch: x86_64
             runner: ubuntu-latest
+            cibw-version: 'v2.19.1'
           - python-version-range: '3.8+'
             cibw-build: 'cp38-* cp39-* cp310-* cp311-* cp312-*'
             patch-script: ''
             arch: aarch64
             runner: ubuntu-22.04-arm
+            cibw-version: 'v2.19.1'
           - python-version-range: '3.7'
             cibw-build: 'cp37-*'
             patch-script: "sed -i 's/setuptools>=61.0/setuptools>=61.0,<67/g' python/pyproject.toml"
             arch: x86_64
             runner: ubuntu-latest
+            cibw-version: 'v2.19.1'
           - python-version-range: '3.7'
             cibw-build: 'cp37-*'
             patch-script: "sed -i 's/setuptools>=61.0/setuptools>=61.0,<67/g' python/pyproject.toml"
             arch: aarch64
             runner: ubuntu-22.04-arm
+            cibw-version: 'v2.19.1'
           - python-version-range: '3.6'
             cibw-build: 'cp36-*'
             patch-script: |
@@ -44,6 +48,7 @@ jobs:
               sed -i 's/setuptools_scm\\[toml\\]>=6.2/setuptools_scm[toml]<7/g' python/pyproject.toml
             arch: x86_64
             runner: ubuntu-latest
+            cibw-version: 'v2.11.4'
           - python-version-range: '3.6'
             cibw-build: 'cp36-*'
             patch-script: |
@@ -51,6 +56,7 @@ jobs:
               sed -i 's/setuptools_scm\\[toml\\]>=6.2/setuptools_scm[toml]<7/g' python/pyproject.toml
             arch: aarch64
             runner: ubuntu-22.04-arm
+            cibw-version: 'v2.11.4'
 
     steps:
       - uses: actions/checkout@v4
@@ -62,7 +68,7 @@ jobs:
         run: ${{ matrix.patch-script }}
 
       - name: Build wheels
-        uses: pypa/cibuildwheel@5f22145df44122af0f5a201f93cf0207171beca7
+        uses: pypa/cibuildwheel@${{ matrix.cibw-version }}
         with:
           package-dir: python
         env:
