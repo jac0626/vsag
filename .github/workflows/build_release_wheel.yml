@@ -95,11 +95,6 @@ jobs:
           echo "packages = pyvsag" >> python/setup.cfg
           echo "[options.package_data]" >> python/setup.cfg
           echo "pyvsag = _pyvsag*.so" >> python/setup.cfg
-          echo "[setuptools_scm]" >> python/setup.cfg
-          echo "version_scheme = release-branch-semver" >> python/setup.cfg
-          echo "local_scheme = no-local-version" >> python/setup.cfg
-          echo "write_to = python/pyvsag/_version.py" >> python/setup.cfg
-          echo "root = .." >> python/setup.cfg
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.11.4
         with:
