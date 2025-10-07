@@ -32,7 +32,7 @@ jobs:
         env:
           CIBW_ARCHS: ${{ matrix.arch }}
           CIBW_BUILD: "cp38-* cp39-* cp310-* cp311-* cp312-*"
-          CIBW_TEST_COMMAND: "pip install numpy && python ../examples/python/example_diskann.py"
+          CIBW_TEST_COMMAND: "pip install numpy && python ${CIBW_PROJECT_DIR}/examples/python/example_diskann.py"
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-modern-${{ matrix.arch }}
@@ -63,7 +63,7 @@ jobs:
         env:
           CIBW_ARCHS: ${{ matrix.arch }}
           CIBW_BUILD: "cp37-*"
-          CIBW_TEST_COMMAND: "pip install numpy && python ../examples/python/example_diskann.py"
+          CIBW_TEST_COMMAND: "pip install numpy && python ${CIBW_PROJECT_DIR}/examples/python/example_diskann.py"
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-py37-${{ matrix.arch }}
@@ -96,7 +96,7 @@ jobs:
         env:
           CIBW_ARCHS: ${{ matrix.arch }}
           CIBW_BUILD: "cp36-*"
-          CIBW_TEST_COMMAND: "pip install numpy && python ../examples/python/example_diskann.py"
+          CIBW_TEST_COMMAND: "pip install numpy && python ${CIBW_PROJECT_DIR}/examples/python/example_diskann.py"
       - uses: actions/upload-artifact@v4
         with:
           name: wheels-py36-${{ matrix.arch }}
