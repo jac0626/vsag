@@ -31,6 +31,7 @@ jobs:
           package-dir: python
         env:
           CIBW_ARCHS: ${{ matrix.arch }}
+          CIBW_BUILD: "cp38-* cp39-* cp310-* cp311-* cp312-*"
           CIBW_TEST_COMMAND: "pip install numpy && ls -alF /project/ && python /project/examples/python/example_diskann.py"
       - uses: actions/upload-artifact@v4
         with:
