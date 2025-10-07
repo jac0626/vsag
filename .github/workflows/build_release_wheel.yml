@@ -87,14 +87,6 @@ jobs:
         run: |
           sed -i 's/setuptools>=61.0/setuptools<60/g' python/pyproject.toml
           sed -i 's/setuptools_scm\[toml\]>=6.2/setuptools_scm[toml]<7/g' python/pyproject.toml
-      - name: Create setup.cfg for legacy Python 3.6 build
-        run: |
-          echo "[metadata]" > python/setup.cfg
-          echo "name = pyvsag" >> python/setup.cfg
-          echo "[options]" >> python/setup.cfg
-          echo "packages = pyvsag" >> python/setup.cfg
-          echo "[options.package_data]" >> python/setup.cfg
-          echo "pyvsag = _pyvsag*.so" >> python/setup.cfg
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.11.4
         with:

@@ -1,8 +1,8 @@
 from setuptools import setup, Extension
 
-# DON'T REMOVE: to make the wheel's name contains python version
-example_module = Extension('example', sources=['example.c'])
-
+# All other configuration is in setup.cfg / pyproject.toml.
+# This file is kept for the C-extension definition.
 setup(
-    ext_modules=[example_module],
+    ext_modules=[Extension('example', sources=['example.c'])],
+    zip_safe=False,
 )
