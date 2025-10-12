@@ -102,10 +102,28 @@ jobs:
           sed -i 's/setuptools_scm\[toml\]>=6.2/setuptools_scm[toml]<7/g' python/pyproject.toml
           # 移除 setuptools_scm 配置，因为我们已经生成了版本文件
           sed -i '/\[tool.setuptools_scm\]/,/^$/d' python/pyproject.toml
-      - name: Patch pyproject.toml for Python 3.6
+      - name: Patch setup.py to use environment variable
         run: |
-          sed -i 's/setuptools>=61.0/setuptools<60/g' python/pyproject.toml
-          sed -i 's/setuptools_scm\[toml\]>=6.2/setuptools_scm[toml]<7/g' python/pyproject.toml
+          cat > python/setup.py << 'EOF'
+          from setuptools import setup, Extension
+          import os
+          import sys
+
+
+          version = "0.0.0"  
+          version_file = os.path.join(os.path.dirname(__file__), "pyvsag", "_version.py")
+          if os.path.exists(version_file):
+            with open(version_file) as f:
+            exec(f.read())
+              version = __version__
+
+          setup(
+          version=version,
+          ext_modules=[Extension('example', sources=['example.c'])],
+          zip_safe=False,
+          )
+          EOF
+
       - name: Build wheels
         uses: pypa/cibuildwheel@v2.11.4
         with:
