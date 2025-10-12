@@ -114,7 +114,7 @@ jobs:
           version_file = os.path.join(os.path.dirname(__file__), "pyvsag", "_version.py")
           if os.path.exists(version_file):
             with open(version_file) as f:
-            exec(f.read())
+              exec(f.read())
               version = __version__
 
           setup(
