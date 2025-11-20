@@ -184,7 +184,7 @@ data/
 
 /build-release/
 *.so.[0-9]*
-/python/pyvsag/_version.py
+/python/pyvsag/_generated_version.py
 /coverage-report/
 /coverage/
 *.gcov

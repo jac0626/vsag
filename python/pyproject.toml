@@ -1,5 +1,13 @@
 [build-system]
-requires = ["setuptools>=61.0", "setuptools_scm[toml]>=6.2", "pep440"]
+requires = [
+    "setuptools>=61.0; python_version>='3.8'",
+    "setuptools>=61.0,<67; python_version=='3.7'",
+    "setuptools<60; python_version<'3.7'",
+    "setuptools_scm[toml]>=6.2; python_version>='3.7'",
+    "setuptools_scm[toml]<7; python_version<'3.7'",
+    "wheel",
+    "pep440",
+]
 build-backend = "setuptools.build_meta"
 
 [project]
@@ -21,9 +29,11 @@ classifiers = [
     "Programming Language :: Python :: 3.10",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
 ]
 dependencies = [
-    "packaging",
+    "importlib-metadata>=4.6; python_version<'3.8'",
 ]
 dynamic = ["version"]
 
@@ -32,13 +42,13 @@ Homepage = "https://github.com/antgroup/vsag"
 
 [tool.setuptools]
 packages = ["pyvsag"]
-package-data = { "pyvsag" = ["_pyvsag*.so"] }
+package-data = { "pyvsag" = ["_pyvsag*.so", "libvsag.so*", "_generated_version.py"] }
 zip-safe = false
 
 [tool.setuptools_scm]
 version_scheme = "release-branch-semver"
 local_scheme = "no-local-version"
-write_to = "python/pyvsag/_version.py"
+write_to = "python/pyvsag/_generated_version.py"
 root = ".."
 
 [tool.cibuildwheel]

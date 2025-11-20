@@ -1,0 +1,135 @@
+name: Test Local Wheel Script
+
+on:
+  workflow_dispatch:
+    inputs:
+      python-version:
+        description: Python version to build (leave empty to build all)
+        required: false
+        default: ""
+
+jobs:
+  local-wheel:
+    name: Local wheel build (${{ matrix.job_label }})
+    runs-on: ${{ matrix.runs_on || 'ubuntu-latest' }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - job_label: docker (cibuildwheel)
+            docker_mode: docker
+            python-version: "3.11"
+            target_version: ""
+          - job_label: no_docker / Python 3.6
+            docker_mode: no_docker
+            python-version: "3.6"
+            target_version: "3.6"
+            runs_on: ubuntu-22.04
+            legacy_source_python: true
+          - job_label: no_docker / Python 3.7
+            docker_mode: no_docker
+            python-version: "3.7"
+            target_version: "3.7"
+            runs_on: ubuntu-22.04
+          - job_label: no_docker / Python 3.8
+            docker_mode: no_docker
+            python-version: "3.8"
+            target_version: "3.8"
+          - job_label: no_docker / Python 3.9
+            docker_mode: no_docker
+            python-version: "3.9"
+            target_version: "3.9"
+          - job_label: no_docker / Python 3.10
+            docker_mode: no_docker
+            python-version: "3.10"
+            target_version: "3.10"
+          - job_label: no_docker / Python 3.11
+            docker_mode: no_docker
+            python-version: "3.11"
+            target_version: "3.11"
+          - job_label: no_docker / Python 3.12
+            docker_mode: no_docker
+            python-version: "3.12"
+            target_version: "3.12"
+          - job_label: no_docker / Python 3.13
+            docker_mode: no_docker
+            python-version: "3.13"
+            target_version: "3.13"
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Ensure Python tooling
+        if: ${{ matrix.legacy_source_python != true }}
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+
+      - name: Build legacy Python from source
+        if: ${{ matrix.legacy_source_python }}
+        env:
+          PY_BUILD_VERSION: ${{ matrix.python-version }}
+          PY_PREFIX: ${{ runner.temp }}/python-${{ matrix.python-version }}
+        run: |
+          set -euxo pipefail
+
+          sudo apt-get update
+          sudo apt-get install -y \
+            build-essential \
+            zlib1g-dev \
+            libffi-dev \
+            libssl-dev \
+            libreadline-dev \
+            libbz2-dev \
+            libsqlite3-dev \
+            libncurses5-dev \
+            libncursesw5-dev \
+            tk-dev \
+            liblzma-dev \
+            libgdbm-dev \
+            uuid-dev \
+            xz-utils \
+            wget \
+            curl
+
+          ARCHIVE="Python-${PY_BUILD_VERSION}.15.tgz"
+          URL="https://www.python.org/ftp/python/${PY_BUILD_VERSION}.15/${ARCHIVE}"
+
+          curl -sSfL "${URL}" -o "/tmp/${ARCHIVE}"
+          tar -xf "/tmp/${ARCHIVE}" -C /tmp
+          pushd "/tmp/Python-${PY_BUILD_VERSION}.15"
+          ./configure --prefix="${PY_PREFIX}" --enable-optimizations
+          make -j"$(nproc)"
+          make install
+          popd
+
+          ln -sf "${PY_PREFIX}/bin/python${PY_BUILD_VERSION}" "${PY_PREFIX}/bin/python3"
+          ln -sf "${PY_PREFIX}/bin/pip${PY_BUILD_VERSION}" "${PY_PREFIX}/bin/pip3"
+          echo "${PY_PREFIX}/bin" >> "${GITHUB_PATH}"
+
+          python3 --version
+          python3 -m pip install --upgrade "pip<22" "setuptools<60" "wheel<0.38"
+
+      - name: Install build dependencies (Ubuntu)
+        run: sudo bash scripts/deps/install_deps_ubuntu.sh
+
+      - name: Run local wheel script
+        env:
+          TARGET_VERSION: ${{ inputs.python-version || matrix.target_version }}
+        run: |
+          set -euxo pipefail
+
+          if [ "${{ matrix.docker_mode }}" = "no_docker" ]; then
+            echo "Simulating environment without Docker..."
+            export DOCKER_HOST="unix:///var/run/docker.invalid"
+          else
+            echo "Running with Docker available."
+          fi
+
+          if [ -n "${TARGET_VERSION}" ]; then
+            bash scripts/python/local_build_wheel.sh "${TARGET_VERSION}"
+          else
+            bash scripts/python/local_build_wheel.sh
+          fi
+

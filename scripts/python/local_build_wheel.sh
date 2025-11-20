@@ -5,17 +5,13 @@ set -e
 
 # --- Configuration ---
 VENV_DIR=".venv"
-SUPPORTED_VERSIONS=("3.6" "3.7" "3.8" "3.9" "3.10" "3.11" "3.12")
+SUPPORTED_VERSIONS=("3.6" "3.7" "3.8" "3.9" "3.10" "3.11" "3.12" "3.13")
 HAVE_DOCKER=true
 
 # --- Prerequisite Checks ---
 echo "🔎 Checking prerequisites..."
 if ! command -v python3 &> /dev/null; then
     echo "❌ 'python3' command not found. Please ensure Python 3 is installed."
-    exit 1
-fi
-if [ ! -f "scripts/python/prepare_python_build.sh" ]; then
-    echo "❌ Preparation script not found at 'scripts/python/prepare_python_build.sh'."
     exit 1
 fi
 if ! docker info > /dev/null 2>&1; then
@@ -52,9 +48,7 @@ echo "✅ Detected local architecture: $ARCH"
 # --- Cleanup Function ---
 cleanup() {
   echo "🧹 Cleaning up and restoring files..."
-  # Use git to restore the patched files, which is safer than using .bak files
-  git restore python/pyproject.toml python/setup.py
-  rm -f python/pyvsag/_version.py
+  rm -f python/pyvsag/_generated_version.py
   echo "✅ Cleanup complete."
 }
 
@@ -62,10 +56,12 @@ cleanup() {
 run_build() {
   local py_version=$1
   local cibw_build_pattern="cp$(echo "$py_version" | tr -d '.')-*"
-  local cibw_version="2.19.1" # Default for modern python
+  local cibw_version=""
+  local cibw_spec="cibuildwheel>=2.20.0"
 
   if [[ "$py_version" == "3.6" ]]; then
     cibw_version="2.11.4"
+    cibw_spec="cibuildwheel==${cibw_version}"
   fi
 
   echo "========================================================================"
@@ -73,7 +69,7 @@ run_build() {
   echo "========================================================================"
 
   if $HAVE_DOCKER; then
-    pip install -q "cibuildwheel==${cibw_version}"
+    pip install -q "${cibw_spec}"
   else
     pip install build
   fi
@@ -81,11 +77,10 @@ run_build() {
   # Set trap to call cleanup on exit/error
   trap cleanup EXIT INT TERM
 
-  # Call the reusable script
-  bash ./scripts/python/prepare_python_build.sh "$py_version"
-
   PIP_DEFAULT_TIMEOUT="100" \
   PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"
+  local py_tag="cp$(echo "$py_version" | tr -d '.')"
+
   if $HAVE_DOCKER; then
     echo "🛠️  Starting cibuildwheel... "
     CIBW_BUILD="${cibw_build_pattern}" \
@@ -96,19 +91,19 @@ run_build() {
     echo "🛠️  Starting build..."
     bash scripts/python/build_cpp_for_cibw.sh
     python -m build --wheel --outdir wheelhouse python
-    echo "✅ Build complete. Starting test..."
-    # Find the most recently created wheel
-    LATEST_WHEEL=$(ls -t wheelhouse/pyvsag-*.whl | head -n 1)
-    if [ -z "$LATEST_WHEEL" ]; then
-        echo "❌ Failed to find the built wheel."
-        exit 1
-    fi
-    echo "   - Installing wheel: ${LATEST_WHEEL}"
-    pip install "${LATEST_WHEEL}" --force-reinstall
-    echo "   - Running tests..."
-    pip install numpy
-    python examples/python/example_hnsw.py
   fi
+
+  echo "✅ Build complete. Installing wheel locally for verification..."
+  LATEST_WHEEL=$(ls -t wheelhouse/pyvsag-*.whl | grep -m1 "${py_tag}")
+  if [ -z "$LATEST_WHEEL" ]; then
+    echo "❌ Failed to find the built wheel."
+    exit 1
+  fi
+  echo "   - Installing wheel: ${LATEST_WHEEL}"
+  pip install "${LATEST_WHEEL}" --force-reinstall
+  echo "   - Running example..."
+  pip install numpy
+  python examples/python/example_hnsw.py
 
   cleanup
   trap - EXIT INT TERM # Clear the trap

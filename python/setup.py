@@ -1,8 +1,6 @@
-from setuptools import setup, Extension
+from setuptools import setup
 
-# All other configuration is in setup.cfg / pyproject.toml.
-# This file is kept for the C-extension definition.
-setup(
-    ext_modules=[Extension('example', sources=['example.c'])],
-    zip_safe=False,
-)
+# PEP 517 builds are driven entirely by pyproject.toml. This stub is kept
+# for tooling that still imports setup.py directly (e.g. legacy workflows).
+if __name__ == "__main__":
+    setup()
