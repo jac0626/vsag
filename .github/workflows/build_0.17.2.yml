@@ -177,7 +177,6 @@ jobs:
           fi
 
       - name: Publish to TestPyPI
-        if: steps.list_files.outputs.should_publish == 'true' && github.event_name == 'push'
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           repository-url: https://test.pypi.org/legacy/
@@ -186,7 +185,7 @@ jobs:
           verbose: true
 
       - name: Publish to PyPI
-        if: steps.list_files.outputs.should_publish == 'true' && github.event_name == 'release' && github.event.action == 'published'
+        
         uses: pypa/gh-action-pypi-publish@release/v1
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
