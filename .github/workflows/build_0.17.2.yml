@@ -157,7 +157,7 @@ jobs:
     runs-on: ubuntu-latest
     # The `if: always()` ensures this job runs even if one of the build jobs is skipped
     # because its matrix was empty. We check for files later.
-    if: always() && (github.event_name == 'release' || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+   
     steps:
       - uses: actions/download-artifact@v5
         with:
