@@ -35,12 +35,6 @@ packages = ["pyvsag"]
 package-data = { "pyvsag" = ["_pyvsag*.so"] }
 zip-safe = false
 
-[tool.setuptools_scm]
-version_scheme = "release-branch-semver"
-local_scheme = "no-local-version"
-write_to = "python/pyvsag/_version.py"
-root = ".."
-
 [tool.cibuildwheel]
 skip = ["*-musllinux*", "*i686*", "pp*"]
 before-build = '''

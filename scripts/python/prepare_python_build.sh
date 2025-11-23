@@ -23,13 +23,7 @@ echo "   - Installing setuptools_scm to generate version..."
 pip install -q setuptools_scm
 
 echo "   - Generating python/pyvsag/_version.py..."
-python3 -c "
-import setuptools_scm
-version = setuptools_scm.get_version()
-with open('python/pyvsag/_version.py', 'w') as f:
-    f.write(f'__version__ = \"{version}\"\\n')
-print(f'   - Version generated: {version}')
-"
+python3 scripts/python/generate_version_file.py --fallback "0.0.0"
 
 # 2. Patch pyproject.toml to remove dynamic versioning and set constraints
 echo "   - Patching python/pyproject.toml..."
