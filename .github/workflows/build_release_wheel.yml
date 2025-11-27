@@ -18,7 +18,7 @@ jobs:
     runs-on: ubuntu-latest
     outputs:
       modern_matrix: ${{ steps.set-matrix.outputs.modern_matrix }}
-      py36_matrix: ${{ steps.set-matrix.outputs.py36_matrix }}
+      legacy_matrix: ${{ steps.set-matrix.outputs.legacy_matrix }}
     steps:
       - id: set-matrix
         name: Generate Matrix Configuration
@@ -37,49 +37,50 @@ jobs:
             {"python-version": "3.10", "arch": "x86_64", "runner": "ubuntu-latest", "cibw-build-id": "cp310-*"},
             {"python-version": "3.9", "arch": "x86_64", "runner": "ubuntu-latest", "cibw-build-id": "cp39-*"},
             {"python-version": "3.8", "arch": "x86_64", "runner": "ubuntu-latest", "cibw-build-id": "cp38-*"},
-            {"python-version": "3.7", "arch": "x86_64", "runner": "ubuntu-latest", "cibw-build-id": "cp37-*"},
             {"python-version": "3.14", "arch": "aarch64", "runner": "ubuntu-22.04-arm", "cibw-build-id": "cp314-*"},
             {"python-version": "3.13", "arch": "aarch64", "runner": "ubuntu-22.04-arm", "cibw-build-id": "cp313-*"},
             {"python-version": "3.12", "arch": "aarch64", "runner": "ubuntu-22.04-arm", "cibw-build-id": "cp312-*"},
             {"python-version": "3.11", "arch": "aarch64", "runner": "ubuntu-22.04-arm", "cibw-build-id": "cp311-*"},
             {"python-version": "3.10", "arch": "aarch64", "runner": "ubuntu-22.04-arm", "cibw-build-id": "cp310-*"},
             {"python-version": "3.9", "arch": "aarch64", "runner": "ubuntu-22.04-arm", "cibw-build-id": "cp39-*"},
-            {"python-version": "3.8", "arch": "aarch64", "runner": "ubuntu-22.04-arm", "cibw-build-id": "cp38-*"},
-            {"python-version": "3.7", "arch": "aarch64", "runner": "ubuntu-22.04-arm", "cibw-build-id": "cp37-*"}
+            {"python-version": "3.8", "arch": "aarch64", "runner": "ubuntu-22.04-arm", "cibw-build-id": "cp38-*"}
           ]'
 
-          # --- Define Full Matrix for Python 3.6 ---
-          full_py36_matrix='[
-            {"arch": "x86_64", "runner": "ubuntu-latest"},
-            {"arch": "aarch64", "runner": "ubuntu-22.04-arm"}
+          # --- Define Full Matrix for Legacy Python (3.6, 3.7) ---
+          full_legacy_matrix='[
+            {"python-version": "3.7", "arch": "x86_64", "runner": "ubuntu-latest", "cibw-build-id": "cp37-*"},
+            {"python-version": "3.6", "arch": "x86_64", "runner": "ubuntu-latest", "cibw-build-id": "cp36-*"},
+            {"python-version": "3.7", "arch": "aarch64", "runner": "ubuntu-22.04-arm", "cibw-build-id": "cp37-*"},
+            {"python-version": "3.6", "arch": "aarch64", "runner": "ubuntu-22.04-arm", "cibw-build-id": "cp36-*"}
           ]'
 
           # --- Filter logic ---
           if [[ "${{ github.event_name }}" != "workflow_dispatch" || ( -z "$py_ver" && -z "$arch" ) ]]; then
             echo "Running full matrix for all versions."
             echo "modern_matrix=$(echo $full_modern_matrix | jq -c .)" >> $GITHUB_OUTPUT
-            echo "py36_matrix=$(echo $full_py36_matrix | jq -c .)" >> $GITHUB_OUTPUT
+            echo "legacy_matrix=$(echo $full_legacy_matrix | jq -c .)" >> $GITHUB_OUTPUT
           else
             echo "Filtering matrix based on inputs: python-version='${py_ver}', arch='${arch}'"
             # Filter modern matrix
-            if [[ -z "$py_ver" || "$py_ver" != "3.6" ]]; then
+            if [[ -z "$py_ver" || ( "$py_ver" != "3.6" && "$py_ver" != "3.7" ) ]]; then
               filter_expression="."
               if [[ -n "$py_ver" ]]; then filter_expression+=" | map(select(.\"python-version\" == \"$py_ver\"))"; fi
               if [[ -n "$arch" ]]; then filter_expression+=" | map(select(.arch == \"$arch\"))"; fi
               filtered_modern_matrix=$(echo "$full_modern_matrix" | jq -c "$filter_expression")
               echo "modern_matrix=$filtered_modern_matrix" >> $GITHUB_OUTPUT
             else
-              echo "modern_matrix=[]" >> $GITHUB_OUTPUT # No modern builds if py3.6 is selected
+              echo "modern_matrix=[]" >> $GITHUB_OUTPUT # No modern builds if legacy version is selected
             fi
 
-            # Filter py36 matrix
-            if [[ -z "$py_ver" || "$py_ver" == "3.6" ]]; then
+            # Filter legacy matrix
+            if [[ -z "$py_ver" || "$py_ver" == "3.6" || "$py_ver" == "3.7" ]]; then
               filter_expression="."
+              if [[ -n "$py_ver" ]]; then filter_expression+=" | map(select(.\"python-version\" == \"$py_ver\"))"; fi
               if [[ -n "$arch" ]]; then filter_expression+=" | map(select(.arch == \"$arch\"))"; fi
-              filtered_py36_matrix=$(echo "$full_py36_matrix" | jq -c "$filter_expression")
-              echo "py36_matrix=$filtered_py36_matrix" >> $GITHUB_OUTPUT
+              filtered_legacy_matrix=$(echo "$full_legacy_matrix" | jq -c "$filter_expression")
+              echo "legacy_matrix=$filtered_legacy_matrix" >> $GITHUB_OUTPUT
             else
-              echo "py36_matrix=[]" >> $GITHUB_OUTPUT # No py3.6 builds if another version is selected
+              echo "legacy_matrix=[]" >> $GITHUB_OUTPUT # No legacy builds if modern version is selected
             fi
           fi
 
@@ -104,7 +105,7 @@ jobs:
         run: bash ./scripts/python/prepare_python_build.sh ${{ matrix.python-version }}
 
       - name: Build wheels
-        uses: pypa/cibuildwheel@v2.23.3
+        uses: pypa/cibuildwheel@v3.3.0
         with:
           package-dir: python
         env:
@@ -118,44 +119,44 @@ jobs:
           path: ./wheelhouse/*.whl
           if-no-files-found: error
 
-  build_wheels_py36:
-    name: Build wheels for Python 3.6 on ${{ matrix.arch }}
+  build_wheels_legacy:
+    name: Build wheels for Python ${{ matrix.python-version }} on ${{ matrix.arch }}
     needs: setup-matrix
     # Only run if the matrix is not empty
-    if: ${{ fromJson(needs.setup-matrix.outputs.py36_matrix) != '[]' }}
+    if: ${{ fromJson(needs.setup-matrix.outputs.legacy_matrix) != '[]' }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: false
       matrix:
         # Dynamically include the matrix generated by the setup job
-        include: ${{ fromJson(needs.setup-matrix.outputs.py36_matrix) }}
+        include: ${{ fromJson(needs.setup-matrix.outputs.legacy_matrix) }}
 
     steps:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Prepare build environment for Python 3.6
-        run: bash ./scripts/python/prepare_python_build.sh 3.6
+      - name: Prepare build environment for Python ${{ matrix.python-version }}
+        run: bash ./scripts/python/prepare_python_build.sh ${{ matrix.python-version }}
 
-      - name: Build wheels for Python 3.6
+      - name: Build wheels for Python ${{ matrix.python-version }}
         uses: pypa/cibuildwheel@v2.11.4
         with:
           package-dir: python
         env:
           CIBW_ARCHS: ${{ matrix.arch }}
-          CIBW_BUILD: "cp36-*"
+          CIBW_BUILD: ${{ matrix.cibw-build-id }}
           CIBW_TEST_COMMAND: "pip install numpy && ls -alF /project/ && python /project/examples/python/example_hnsw.py"
 
       - uses: actions/upload-artifact@v5
         with:
-          name: wheels-3.6-${{ matrix.arch }}
+          name: wheels-${{ matrix.python-version }}-${{ matrix.arch }}
           path: ./wheelhouse/*.whl
           if-no-files-found: error
 
   publish:
     name: Publish packages
-    needs: [build_wheels_modern, build_wheels_py36]
+    needs: [build_wheels_modern, build_wheels_legacy]
     runs-on: ubuntu-latest
     # The `if: always()` ensures this job runs even if one of the build jobs is skipped
     # because its matrix was empty. We check for files later.

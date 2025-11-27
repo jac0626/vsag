@@ -62,9 +62,9 @@ cleanup() {
 run_build() {
   local py_version=$1
   local cibw_build_pattern="cp$(echo "$py_version" | tr -d '.')-*"
-  local cibw_version="2.19.1" # Default for modern python
+  local cibw_version="3.3.0" # Default for modern python
 
-  if [[ "$py_version" == "3.6" ]]; then
+  if [[ "$py_version" == "3.6" || "$py_version" == "3.7" ]]; then
     cibw_version="2.11.4"
   fi
 
