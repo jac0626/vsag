@@ -8,6 +8,7 @@ import pathlib
 import shutil
 import tempfile
 import zipfile
+from typing import Tuple
 
 
 def update_wheel_metadata(root: pathlib.Path) -> None:
@@ -37,7 +38,7 @@ def move_purelib_to_platlib(root: pathlib.Path) -> None:
         shutil.rmtree(purelib_dir)
 
 
-def file_digest_and_size(path: pathlib.Path) -> tuple[str, int]:
+def file_digest_and_size(path: pathlib.Path) -> Tuple[str, int]:
     data = path.read_bytes()
     digest = hashlib.sha256(data).digest()
     encoded = base64.urlsafe_b64encode(digest).decode("ascii").rstrip("=")
