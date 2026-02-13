@@ -1,63 +1,31 @@
 #!/bin/bash
 
-# Exit immediately if a command exits with a non-zero status.
-set -e
+set -euo pipefail
 
-# This script prepares the project for building a Python wheel.
-# It handles version generation and config file patching based on the Python version.
-
-# --- Input Validation ---
-if [ -z "$1" ]; then
-  echo "❌ Error: Python version must be provided as the first argument."
-  echo "Usage: $0 <python_version>"
+if [ -z "${1:-}" ]; then
+  echo "Error: Python version must be provided as the first argument." >&2
+  echo "Usage: $0 <python_version>" >&2
   exit 1
 fi
 
-PY_VERSION=$1
-echo "🚀 Preparing build for Python ${PY_VERSION}..."
+PY_VERSION="$1"
+SUPPORTED_VERSIONS=("3.6" "3.7" "3.8" "3.9" "3.10" "3.11" "3.12")
 
-# --- Main Logic ---
+if [[ ! " ${SUPPORTED_VERSIONS[*]} " =~ " ${PY_VERSION} " ]]; then
+  echo "Error: Unsupported Python version '${PY_VERSION}'." >&2
+  echo "Supported versions: ${SUPPORTED_VERSIONS[*]}" >&2
+  exit 1
+fi
 
-# 1. Statically generate the version file using setuptools_scm
-echo "   - Installing setuptools_scm to generate version..."
-pip install -q setuptools_scm
+echo "Preparing Python ${PY_VERSION} build environment..."
 
-echo "   - Generating python/pyvsag/_version.py..."
-python3 -c "
-import setuptools_scm
-try:
-    # Explicitly configure setuptools_scm since pyproject.toml is in a subdir
-    version = setuptools_scm.get_version(
-        root='.',
-        version_scheme='release-branch-semver',
-        local_scheme='no-local-version'
-    )
-except Exception:
-    version = '0.0.0'
+if [ "${PY_VERSION}" = "3.6" ]; then
+  echo "- Using legacy backend pins: setuptools<60, setuptools_scm<7"
+elif [ "${PY_VERSION}" = "3.7" ]; then
+  echo "- Using transitional backend pins: setuptools>=61,<68, setuptools_scm>=6.2,<8"
+else
+  echo "- Using modern backend pins: setuptools>=68, setuptools_scm>=8"
+fi
 
-with open('python/pyvsag/_version.py', 'w') as f:
-    f.write(f'__version__ = \"{version}\"\\n')
-print(f'   - Version generated: {version}')
-"
-
-# 2. Patch pyproject.toml to remove dynamic versioning and set constraints
-echo "   - Patching python/pyproject.toml..."
-# Remove the entire [tool.setuptools_scm] section
-sed -i '/\[tool.setuptools_scm\]/,/^$/d' python/pyproject.toml
-
-# Apply version-specific constraints
-case $PY_VERSION in
-  "3.6")
-    sed -i 's/setuptools>=61.0/setuptools<60/g' python/pyproject.toml
-    sed -i 's/setuptools_scm\[toml\]>=6.2/setuptools_scm[toml]<7/g' python/pyproject.toml
-    ;;
-  "3.7")
-    sed -i "s/setuptools>=61.0/setuptools>=61.0,<67/g" python/pyproject.toml
-    ;;
-  *)
-    # No additional patch needed for Python 3.8+
-    ;;
-esac
-echo "   - pyproject.toml patched."
-
-echo "✅ Build preparation complete for Python ${PY_VERSION}."
+echo "- Build dependency pins are resolved by python/pyproject.toml markers."
+echo "Preparation complete."
