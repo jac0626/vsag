@@ -35,6 +35,6 @@ before-all = '''
 '''
 
 [tool.cibuildwheel.linux]
-repair-wheel-command = "auditwheel repair -w {dest_dir} {wheel}"
+repair-wheel-command = "python /project/scripts/python/repair_wheel_for_auditwheel.py {wheel} && auditwheel repair -w {dest_dir} {wheel}"
 manylinux-x86_64-image = "manylinux2014"
 manylinux-aarch64-image = "manylinux2014"
