@@ -22,20 +22,46 @@ def update_wheel_metadata(root: pathlib.Path) -> None:
     wheel_file.write_text(text, encoding="utf-8")
 
 
-def move_purelib_to_platlib(root: pathlib.Path) -> None:
-    for purelib_dir in root.glob("*.data/purelib"):
-        platlib_dir = purelib_dir.parent / "platlib"
-        platlib_dir.mkdir(parents=True, exist_ok=True)
+def move_data_libdirs_to_wheel_root(root: pathlib.Path) -> None:
+    """
+    Make the wheel layout auditwheel-friendly.
 
-        for source in sorted(purelib_dir.rglob("*")):
-            if source.is_dir():
+    Some build backends may place package contents under *.data/purelib or
+    *.data/platlib. auditwheel computes RPATHs based on the in-wheel locations,
+    but these *.data/<kind> prefixes are stripped during installation. If we
+    leave binaries under *.data/platlib, auditwheel may write an RPATH like
+    `$ORIGIN/../../../<pkg>.libs`, which becomes invalid after installation.
+
+    To avoid this, we move purelib/platlib payloads to the wheel root and rely
+    on `Root-Is-Purelib: false` to install them into platlib (site-packages).
+    """
+
+    for data_dir in root.glob("*.data"):
+        moved_any = False
+        for kind in ("purelib", "platlib"):
+            payload_dir = data_dir / kind
+            if not payload_dir.exists():
                 continue
-            relative = source.relative_to(purelib_dir)
-            target = platlib_dir / relative
-            target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.move(str(source), str(target))
 
-        shutil.rmtree(purelib_dir)
+            moved_any = True
+            for source in sorted(payload_dir.rglob("*")):
+                if source.is_dir():
+                    continue
+                relative = source.relative_to(payload_dir)
+                target = root / relative
+                if target.exists():
+                    raise RuntimeError(f"Target already exists: {target}")
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.move(str(source), str(target))
+
+            shutil.rmtree(payload_dir)
+
+        # Drop now-empty *.data directories if we moved payload out of them.
+        if moved_any:
+            try:
+                next(data_dir.iterdir())
+            except StopIteration:
+                shutil.rmtree(data_dir)
 
 
 def file_digest_and_size(path: pathlib.Path) -> Tuple[str, int]:
@@ -88,7 +114,7 @@ def prepare_wheel(wheel_path: pathlib.Path) -> None:
             zf.extractall(unpack_root)
 
         update_wheel_metadata(unpack_root)
-        move_purelib_to_platlib(unpack_root)
+        move_data_libdirs_to_wheel_root(unpack_root)
         rewrite_record(unpack_root)
 
         rebuilt = temp_dir / wheel_path.name

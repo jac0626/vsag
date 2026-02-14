@@ -67,6 +67,8 @@ run_build() {
 
   export PIP_DEFAULT_TIMEOUT="100"
   export PIP_INDEX_URL="https://pypi.tuna.tsinghua.edu.cn/simple"
+  export COPYFILE_DISABLE=1
+  export COPY_EXTENDED_ATTRIBUTES_DISABLE=1
 
   if $HAVE_DOCKER; then
     echo "Running cibuildwheel..."

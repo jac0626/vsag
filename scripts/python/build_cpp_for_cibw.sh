@@ -7,6 +7,10 @@ if [ "${1:-true}" = "false" ]; then
   MKL_STATIC_LINK="OFF"
 fi
 
+# Avoid compiling macOS metadata sidecar files (e.g. ._foo.cpp) when the
+# source tree is copied from macOS hosts into Linux containers.
+find . -type f -name '._*' -delete
+
 CMAKE_BUILD_DIR="./build-release"
 PYTHON_EXECUTABLE="${PYTHON:-$(command -v python3 || command -v python)}"
 if [ ! -x "$PYTHON_EXECUTABLE" ]; then
