@@ -48,6 +48,22 @@ class CMakeBuild(build_ext):
         for lib in glob.glob(os.path.join(build_temp, "**", "libvsag.so*"), recursive=True) + glob.glob(os.path.join(build_temp, "**", "libvsag.dylib"), recursive=True):
             shutil.copy(lib, extdir)
 
+        # Generate pyi stubs for the extension
+        lib_dir = os.path.dirname(extdir)
+        stub_env = os.environ.copy()
+        stub_env["PYTHONPATH"] = lib_dir + os.pathsep + stub_env.get("PYTHONPATH", "")
+        # Add extdir to LD_LIBRARY_PATH so _pyvsag.so can find libvsag.so during import
+        stub_env["LD_LIBRARY_PATH"] = extdir + os.pathsep + stub_env.get("LD_LIBRARY_PATH", "")
+
+        try:
+            print("Generating pyi stubs using pybind11-stubgen...")
+            subprocess.check_call(
+                [sys.executable, "-m", "pybind11_stubgen", "pyvsag._pyvsag", "-o", lib_dir],
+                env=stub_env
+            )
+        except subprocess.CalledProcessError as e:
+            print(f"Warning: Failed to generate .pyi type hints: {e}")
+
 class BinaryDistribution(Distribution):
     def has_ext_modules(self):
         return True
