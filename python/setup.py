@@ -55,6 +55,14 @@ class CMakeBuild(build_ext):
         # Add extdir to LD_LIBRARY_PATH so _pyvsag.so can find libvsag.so during import
         stub_env["LD_LIBRARY_PATH"] = extdir + os.pathsep + stub_env.get("LD_LIBRARY_PATH", "")
 
+        # Create a temporary __init__.py so Python treats `extdir` as a module
+        init_py_path = os.path.join(extdir, "__init__.py")
+        created_init = False
+        if not os.path.exists(init_py_path):
+            with open(init_py_path, "w") as f:
+                f.write("\n")
+            created_init = True
+
         try:
             print("Generating pyi stubs using pybind11-stubgen...")
             subprocess.check_call(
@@ -63,6 +71,9 @@ class CMakeBuild(build_ext):
             )
         except subprocess.CalledProcessError as e:
             print(f"Warning: Failed to generate .pyi type hints: {e}")
+        finally:
+            if created_init and os.path.exists(init_py_path):
+                os.remove(init_py_path)
 
 class BinaryDistribution(Distribution):
     def has_ext_modules(self):
