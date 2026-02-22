@@ -94,8 +94,6 @@ run_build() {
     cibuildwheel --platform linux --output-dir wheelhouse python
   else 
     echo "🛠️  Starting build..."
-    ENABLE_MKL_STATIC_LINK=$HAVE_DOCKER
-    bash scripts/python/build_cpp_for_cibw.sh $ENABLE_MKL_STATIC_LINK
     python -m build --wheel --outdir wheelhouse python
     echo "✅ Build complete. Starting test..."
     # Find the most recently created wheel
