@@ -51,22 +51,29 @@ class CMakeBuild(build_ext):
         # Generate pyi stubs for the extension
         lib_dir = os.path.dirname(extdir)
         stub_env = os.environ.copy()
-        
-        # We must add `extdir` to PYTHONPATH so Python can find `_pyvsag` directly,
-        # rather than trying to import `pyvsag._pyvsag` which fails if `pyvsag`
-        # isn't recognized as a valid package yet.
-        stub_env["PYTHONPATH"] = extdir + os.pathsep + stub_env.get("PYTHONPATH", "")
+        stub_env["PYTHONPATH"] = lib_dir + os.pathsep + stub_env.get("PYTHONPATH", "")
         # Add extdir to LD_LIBRARY_PATH so _pyvsag.so can find libvsag.so during import
         stub_env["LD_LIBRARY_PATH"] = extdir + os.pathsep + stub_env.get("LD_LIBRARY_PATH", "")
+
+        # Create a temporary __init__.py so Python treats `extdir` as a module
+        init_py_path = os.path.join(extdir, "__init__.py")
+        created_init = False
+        if not os.path.exists(init_py_path):
+            with open(init_py_path, "w") as f:
+                f.write("\n")
+            created_init = True
 
         try:
             print("Generating pyi stubs using pybind11-stubgen...")
             subprocess.check_call(
-                [sys.executable, "-m", "pybind11_stubgen", "_pyvsag", "-o", extdir],
+                [sys.executable, "-m", "pybind11_stubgen", "pyvsag._pyvsag", "-o", lib_dir],
                 env=stub_env
             )
         except subprocess.CalledProcessError as e:
             print(f"Warning: Failed to generate .pyi type hints: {e}")
+        finally:
+            if created_init and os.path.exists(init_py_path):
+                os.remove(init_py_path)
 
 class BinaryDistribution(Distribution):
     def has_ext_modules(self):
