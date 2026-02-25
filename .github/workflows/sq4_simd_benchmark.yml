@@ -1,0 +1,220 @@
+name: SQ4 SIMD Performance (ARM)
+
+on:
+  workflow_dispatch: {}
+  pull_request:
+    branches: [ "main" ]
+    paths:
+      - 'src/simd/neon.cpp'
+      - 'src/simd/sve.cpp'
+      - 'src/simd/sq4_simd*'
+
+jobs:
+  perf_baseline:
+    name: Build & Perf Baseline (main)
+    runs-on: ubuntu-22.04-arm
+    concurrency:
+      group: sq4-perf-baseline-${{ github.event.pull_request.number || github.sha }}
+      cancel-in-progress: true
+    steps:
+      - name: Free Disk Space
+        run: rm -rf /opt/hostedtoolcache
+
+      # Checkout main branch (BEFORE optimization) as baseline
+      - name: Checkout main (baseline - before optimization)
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Print Build Info (baseline)
+        run: |
+          echo "=== BASELINE BUILD ==="
+          echo "Branch: main (before SQ4 SIMD optimization)"
+          git log --oneline -3
+          echo "neon.cpp hash: $(git hash-object src/simd/neon.cpp)"
+          echo "sve.cpp hash:  $(git hash-object src/simd/sve.cpp)"
+
+      - name: Prepare Env
+        run: sudo bash ./scripts/deps/install_deps_ubuntu.sh
+
+      - name: Load Cache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          max-size: "2G"
+          key: sq4-perf-baseline-${{ hashFiles('./CMakeLists.txt') }}
+
+      - name: Download Datasets
+        run: |
+          mkdir -p /tmp/data
+          wget -q http://ann-benchmarks.com/sift-128-euclidean.hdf5 -O /tmp/data/sift-128-euclidean.hdf5
+          wget -q http://ann-benchmarks.com/nytimes-256-angular.hdf5 -O /tmp/data/nytimes-256-angular.hdf5
+          wget -q http://ann-benchmarks.com/glove-100-angular.hdf5 -O /tmp/data/glove-100-angular.hdf5
+
+      - name: Build Release
+        run: export CMAKE_GENERATOR="Ninja"; make release COMPILE_JOBS=4
+
+      - name: Run Perf (baseline)
+        run: |
+          # Use the perf-sq4.yml from the optimized branch (checked out next step)
+          # For baseline, we need the config, so fetch it separately
+          wget -q https://raw.githubusercontent.com/${{ github.repository }}/${{ github.sha }}/.github/perf-sq4.yml -O /tmp/perf-sq4.yml || cp .github/perf-sq4.yml /tmp/perf-sq4.yml 2>/dev/null || true
+          # Fallback: create inline config if file not available on main
+          if [ ! -f /tmp/perf-sq4.yml ]; then
+            cat > /tmp/perf-sq4.yml << 'EOF'
+          global:
+            exporters:
+              e1:
+                format: "text"
+                to: "stdout"
+              e2:
+                format: "json"
+                to: "file://tmp/sq4-perf.json"
+          SIFT-SQ4:
+              datapath: "/tmp/data/sift-128-euclidean.hdf5"
+              type: "build,search"
+              index_name: "hgraph"
+              create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"sq4","max_degree":32,"ef_construction":400}}'
+              search_params: '{"hgraph":{"ef_search":100}}'
+              index_path: "/tmp/sift-128-sq4/index/hgraph_index"
+              topk: 10
+              search_mode: "knn"
+              range: 0.5
+              delete_index_after_search: true
+          NYTimes-SQ4:
+              datapath: "/tmp/data/nytimes-256-angular.hdf5"
+              type: "build,search"
+              index_name: "hgraph"
+              create_params: '{"dim":256,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"sq4","max_degree":48,"ef_construction":400}}'
+              search_params: '{"hgraph":{"ef_search":120}}'
+              index_path: "/tmp/nytimes-256-sq4/index/hgraph_index"
+              topk: 10
+              search_mode: "knn"
+              range: 0.5
+              delete_index_after_search: true
+          GloVe-SQ4-Uniform:
+              datapath: "/tmp/data/glove-100-angular.hdf5"
+              type: "build,search"
+              index_name: "hgraph"
+              create_params: '{"dim":100,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"sq4_uniform","max_degree":64,"ef_construction":400}}'
+              search_params: '{"hgraph":{"ef_search":120}}'
+              index_path: "/tmp/glove-100-sq4u/index/hgraph_index"
+              topk: 10
+              search_mode: "knn"
+              range: 0.5
+              delete_index_after_search: true
+          EOF
+          fi
+          ./build-release/tools/eval/eval_performance /tmp/perf-sq4.yml 2>&1 | tee /tmp/baseline_perf.txt
+          cp /tmp/sq4-perf.json /tmp/baseline_perf.json 2>/dev/null || true
+
+      - name: Upload Baseline Results
+        uses: actions/upload-artifact@v5
+        with:
+          name: sq4-perf-baseline-${{ github.run_id }}
+          path: |
+            /tmp/baseline_perf.txt
+            /tmp/baseline_perf.json
+          retention-days: 30
+
+  perf_optimized:
+    name: Build & Perf Optimized (PR)
+    runs-on: ubuntu-22.04-arm
+    concurrency:
+      group: sq4-perf-optimized-${{ github.event.pull_request.number || github.sha }}
+      cancel-in-progress: true
+    steps:
+      - name: Free Disk Space
+        run: rm -rf /opt/hostedtoolcache
+
+      # Checkout PR branch (AFTER optimization) with optimized NEON/SVE code
+      - name: Checkout PR branch (optimized - after optimization)
+        uses: actions/checkout@v4
+
+      - name: Print Build Info (optimized)
+        run: |
+          echo "=== OPTIMIZED BUILD ==="
+          echo "Branch: ${{ github.head_ref || github.ref_name }} (with SQ4 SIMD optimization)"
+          git log --oneline -3
+          echo "neon.cpp hash: $(git hash-object src/simd/neon.cpp)"
+          echo "sve.cpp hash:  $(git hash-object src/simd/sve.cpp)"
+
+      - name: Prepare Env
+        run: sudo bash ./scripts/deps/install_deps_ubuntu.sh
+
+      - name: Load Cache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          max-size: "2G"
+          key: sq4-perf-optimized-${{ hashFiles('./CMakeLists.txt') }}
+
+      - name: Download Datasets
+        run: |
+          mkdir -p /tmp/data
+          wget -q http://ann-benchmarks.com/sift-128-euclidean.hdf5 -O /tmp/data/sift-128-euclidean.hdf5
+          wget -q http://ann-benchmarks.com/nytimes-256-angular.hdf5 -O /tmp/data/nytimes-256-angular.hdf5
+          wget -q http://ann-benchmarks.com/glove-100-angular.hdf5 -O /tmp/data/glove-100-angular.hdf5
+
+      - name: Build Release
+        run: export CMAKE_GENERATOR="Ninja"; make release COMPILE_JOBS=4
+
+      - name: Run Perf (optimized)
+        run: |
+          ./build-release/tools/eval/eval_performance .github/perf-sq4.yml 2>&1 | tee /tmp/optimized_perf.txt
+          cp /tmp/sq4-perf.json /tmp/optimized_perf.json 2>/dev/null || true
+
+      - name: Upload Optimized Results
+        uses: actions/upload-artifact@v5
+        with:
+          name: sq4-perf-optimized-${{ github.run_id }}
+          path: |
+            /tmp/optimized_perf.txt
+            /tmp/optimized_perf.json
+          retention-days: 30
+
+  compare:
+    name: Compare Results
+    needs: [perf_baseline, perf_optimized]
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Download Baseline Results
+        uses: actions/download-artifact@v5
+        with:
+          name: sq4-perf-baseline-${{ github.run_id }}
+          path: /tmp/baseline
+
+      - name: Download Optimized Results
+        uses: actions/download-artifact@v5
+        with:
+          name: sq4-perf-optimized-${{ github.run_id }}
+          path: /tmp/optimized
+
+      - name: Compare
+        run: |
+          echo "================================================================"
+          echo "  SQ4 SIMD Performance Comparison (eval_performance on ARM)"
+          echo "  Datasets: SIFT-128 (sq4), NYTimes-256 (sq4), GloVe-100 (sq4_uniform)"
+          echo "================================================================"
+          echo ""
+          echo "======================== BASELINE (main) ======================="
+          cat /tmp/baseline/baseline_perf.txt
+          echo ""
+          echo "======================== OPTIMIZED (PR) ========================"
+          cat /tmp/optimized/optimized_perf.txt
+          echo ""
+          echo "================================================================"
+          echo "  Compare JSON outputs (if available):"
+          echo "================================================================"
+          echo "--- Baseline JSON ---"
+          cat /tmp/baseline/baseline_perf.json 2>/dev/null || echo "(no JSON)"
+          echo ""
+          echo "--- Optimized JSON ---"
+          cat /tmp/optimized/optimized_perf.json 2>/dev/null || echo "(no JSON)"
+
+      - name: Upload Combined Results
+        uses: actions/upload-artifact@v5
+        with:
+          name: sq4-perf-comparison-${{ github.run_id }}
+          path: |
+            /tmp/baseline/
+            /tmp/optimized/
+          retention-days: 30
