@@ -709,51 +709,48 @@ SQ4ComputeIP(const float* RESTRICT query,
              const float* RESTRICT diff,
              uint64_t dim) {
 #if defined(ENABLE_SVE)
-    svfloat32_t sum = svdup_f32(0.0f);
+    svfloat32_t sum1 = svdup_f32(0.0f);
+    svfloat32_t sum2 = svdup_f32(0.0f);
     const svfloat32_t scale_factor = svdup_f32(1.0f / 15.0f);
     const uint64_t step = svcntw();
     uint64_t i = 0;
-    const svbool_t predicate = svwhilelt_b32(i, dim);
 
     for (; i + 2 * step <= dim; i += 2 * step) {
-        svfloat32x2_t query_pair = svld2_f32(predicate, &query[i]);
-        svfloat32x2_t lower_bound_pair = svld2_f32(predicate, &lower_bound[i]);
-        svfloat32x2_t diff_pair = svld2_f32(predicate, &diff[i]);
+        // Load packed codes and extract nibbles
+        svbool_t pg = svptrue_b32();
+        svuint32_t packed_codes = svld1ub_u32(pg, &codes[i / 2]);
+        svuint32_t codes_even_u32 = svand_n_u32_x(pg, packed_codes, 0x0F);
+        svuint32_t codes_odd_u32 = svlsr_n_u32_x(pg, packed_codes, 4);
+        svfloat32_t codes_even_f32 = svcvt_f32_u32_x(pg, codes_even_u32);
+        svfloat32_t codes_odd_f32 = svcvt_f32_u32_x(pg, codes_odd_u32);
 
-        svfloat32_t query_even = svget2_f32(query_pair, 0);
-        svfloat32_t query_odd = svget2_f32(query_pair, 1);
-        svfloat32_t lower_bound_even = svget2_f32(lower_bound_pair, 0);
-        svfloat32_t lower_bound_odd = svget2_f32(lower_bound_pair, 1);
-        svfloat32_t diff_even = svget2_f32(diff_pair, 0);
-        svfloat32_t diff_odd = svget2_f32(diff_pair, 1);
+        // Load query, lower_bound, diff deinterleaved
+        svfloat32x2_t query_pair = svld2_f32(pg, &query[i]);
+        svfloat32x2_t lower_bound_pair = svld2_f32(pg, &lower_bound[i]);
+        svfloat32x2_t diff_pair = svld2_f32(pg, &diff[i]);
 
-        svuint32_t packed_codes = svld1ub_u32(predicate, &codes[i / 2]);
-        svuint32_t codes_even_u32 = svand_n_u32_x(predicate, packed_codes, 0x0F);
-        svuint32_t codes_odd_u32 = svlsr_n_u32_x(predicate, packed_codes, 4);
-        svfloat32_t codes_even_f32 = svcvt_f32_u32_x(predicate, codes_even_u32);
-        svfloat32_t codes_odd_f32 = svcvt_f32_u32_x(predicate, codes_odd_u32);
+        // Dequantize: y = (nibble / 15) * diff + lower_bound
+        svfloat32_t dequantized_even = svmla_f32_x(pg,
+                                                   svget2_f32(lower_bound_pair, 0),
+                                                   svmul_f32_x(pg, codes_even_f32, scale_factor),
+                                                   svget2_f32(diff_pair, 0));
+        svfloat32_t dequantized_odd = svmla_f32_x(pg,
+                                                  svget2_f32(lower_bound_pair, 1),
+                                                  svmul_f32_x(pg, codes_odd_f32, scale_factor),
+                                                  svget2_f32(diff_pair, 1));
 
-        svfloat32_t dequantized_even =
-            svmla_f32_x(predicate,
-                        lower_bound_even,
-                        svmul_f32_x(predicate, codes_even_f32, scale_factor),
-                        diff_even);
-        svfloat32_t dequantized_odd =
-            svmla_f32_x(predicate,
-                        lower_bound_odd,
-                        svmul_f32_x(predicate, codes_odd_f32, scale_factor),
-                        diff_odd);
-
-        sum = svmla_f32_x(predicate, sum, query_even, dequantized_even);
-        sum = svmla_f32_x(predicate, sum, query_odd, dequantized_odd);
+        // Accumulate IP with two accumulators
+        sum1 = svmla_f32_x(pg, sum1, svget2_f32(query_pair, 0), dequantized_even);
+        sum2 = svmla_f32_x(pg, sum2, svget2_f32(query_pair, 1), dequantized_odd);
     }
+
+    float result = svaddv_f32(svptrue_b32(), svadd_f32_x(svptrue_b32(), sum1, sum2));
 
     if (i < dim) {
-        return svaddv_f32(predicate, sum) +
-               neon::SQ4ComputeIP(&query[i], &codes[i / 2], &lower_bound[i], &diff[i], dim - i);
+        result += neon::SQ4ComputeIP(&query[i], &codes[i / 2], &lower_bound[i], &diff[i], dim - i);
     }
 
-    return svaddv_f32(predicate, sum);
+    return result;
 #else
     return neon::SQ4ComputeIP(query, codes, lower_bound, diff, dim);
 #endif
@@ -766,54 +763,48 @@ SQ4ComputeL2Sqr(const float* RESTRICT query,
                 const float* RESTRICT diff,
                 uint64_t dim) {
 #if defined(ENABLE_SVE)
-    svfloat32_t sum = svdup_f32(0.0f);
+    svfloat32_t sum1 = svdup_f32(0.0f);
+    svfloat32_t sum2 = svdup_f32(0.0f);
     const svfloat32_t scale_factor = svdup_f32(1.0f / 15.0f);
     const uint64_t step = svcntw();
-    const svbool_t predicate = svptrue_b32();
+    const svbool_t pg = svptrue_b32();
 
     uint64_t i = 0;
     for (; i + 2 * step <= dim; i += 2 * step) {
-        svfloat32x2_t query_pair = svld2_f32(predicate, &query[i]);
-        svfloat32x2_t lower_bound_pair = svld2_f32(predicate, &lower_bound[i]);
-        svfloat32x2_t diff_pair = svld2_f32(predicate, &diff[i]);
+        svuint32_t packed_codes = svld1ub_u32(pg, &codes[i / 2]);
+        svuint32_t codes_even_u32 = svand_n_u32_x(pg, packed_codes, 0x0F);
+        svuint32_t codes_odd_u32 = svlsr_n_u32_x(pg, packed_codes, 4);
+        svfloat32_t codes_even_f32 = svcvt_f32_u32_x(pg, codes_even_u32);
+        svfloat32_t codes_odd_f32 = svcvt_f32_u32_x(pg, codes_odd_u32);
 
-        svfloat32_t query_even = svget2_f32(query_pair, 0);
-        svfloat32_t query_odd = svget2_f32(query_pair, 1);
-        svfloat32_t lower_bound_even = svget2_f32(lower_bound_pair, 0);
-        svfloat32_t lower_bound_odd = svget2_f32(lower_bound_pair, 1);
-        svfloat32_t diff_even = svget2_f32(diff_pair, 0);
-        svfloat32_t diff_odd = svget2_f32(diff_pair, 1);
+        svfloat32x2_t query_pair = svld2_f32(pg, &query[i]);
+        svfloat32x2_t lower_bound_pair = svld2_f32(pg, &lower_bound[i]);
+        svfloat32x2_t diff_pair = svld2_f32(pg, &diff[i]);
 
-        svuint32_t packed_codes = svld1ub_u32(predicate, &codes[i / 2]);
-        svuint32_t codes_even_u32 = svand_n_u32_x(predicate, packed_codes, 0x0F);
-        svuint32_t codes_odd_u32 = svlsr_n_u32_x(predicate, packed_codes, 4);
-        svfloat32_t codes_even_f32 = svcvt_f32_u32_x(predicate, codes_even_u32);
-        svfloat32_t codes_odd_f32 = svcvt_f32_u32_x(predicate, codes_odd_u32);
+        svfloat32_t dequantized_even = svmla_f32_x(pg,
+                                                   svget2_f32(lower_bound_pair, 0),
+                                                   svmul_f32_x(pg, codes_even_f32, scale_factor),
+                                                   svget2_f32(diff_pair, 0));
+        svfloat32_t dequantized_odd = svmla_f32_x(pg,
+                                                  svget2_f32(lower_bound_pair, 1),
+                                                  svmul_f32_x(pg, codes_odd_f32, scale_factor),
+                                                  svget2_f32(diff_pair, 1));
 
-        svfloat32_t dequantized_even =
-            svmla_f32_x(predicate,
-                        lower_bound_even,
-                        svmul_f32_x(predicate, codes_even_f32, scale_factor),
-                        diff_even);
-        svfloat32_t dequantized_odd =
-            svmla_f32_x(predicate,
-                        lower_bound_odd,
-                        svmul_f32_x(predicate, codes_odd_f32, scale_factor),
-                        diff_odd);
+        svfloat32_t delta_even = svsub_f32_x(pg, svget2_f32(query_pair, 0), dequantized_even);
+        svfloat32_t delta_odd = svsub_f32_x(pg, svget2_f32(query_pair, 1), dequantized_odd);
 
-        svfloat32_t delta_even = svsub_f32_x(predicate, query_even, dequantized_even);
-        svfloat32_t delta_odd = svsub_f32_x(predicate, query_odd, dequantized_odd);
-
-        sum = svmla_f32_x(predicate, sum, delta_even, delta_even);
-        sum = svmla_f32_x(predicate, sum, delta_odd, delta_odd);
+        sum1 = svmla_f32_x(pg, sum1, delta_even, delta_even);
+        sum2 = svmla_f32_x(pg, sum2, delta_odd, delta_odd);
     }
+
+    float result = svaddv_f32(pg, svadd_f32_x(pg, sum1, sum2));
 
     if (i < dim) {
-        return svaddv_f32(predicate, sum) +
-               neon::SQ4ComputeL2Sqr(&query[i], &codes[i / 2], &lower_bound[i], &diff[i], dim - i);
+        result +=
+            neon::SQ4ComputeL2Sqr(&query[i], &codes[i / 2], &lower_bound[i], &diff[i], dim - i);
     }
 
-    return svaddv_f32(predicate, sum);
+    return result;
 #else
     return neon::SQ4ComputeL2Sqr(query, codes, lower_bound, diff, dim);
 #endif
@@ -826,66 +817,59 @@ SQ4ComputeCodesIP(const uint8_t* RESTRICT codes1,
                   const float* RESTRICT diff,
                   uint64_t dim) {
 #if defined(ENABLE_SVE)
-    svfloat32_t sum = svdup_f32(0.0f);
+    svfloat32_t sum1 = svdup_f32(0.0f);
+    svfloat32_t sum2 = svdup_f32(0.0f);
     const svfloat32_t scale_factor = svdup_f32(1.0f / 15.0f);
     const uint64_t step = svcntw();
-    const svbool_t predicate = svptrue_b32();
+    const svbool_t pg = svptrue_b32();
 
     uint64_t i = 0;
     for (; i + 2 * step <= dim; i += 2 * step) {
-        svfloat32x2_t lower_bound_pair = svld2_f32(predicate, &lower_bound[i]);
-        svfloat32x2_t diff_pair = svld2_f32(predicate, &diff[i]);
+        svuint32_t packed_codes1 = svld1ub_u32(pg, &codes1[i / 2]);
+        svuint32_t packed_codes2 = svld1ub_u32(pg, &codes2[i / 2]);
 
-        svfloat32_t lower_bound_even = svget2_f32(lower_bound_pair, 0);
-        svfloat32_t lower_bound_odd = svget2_f32(lower_bound_pair, 1);
-        svfloat32_t diff_even = svget2_f32(diff_pair, 0);
-        svfloat32_t diff_odd = svget2_f32(diff_pair, 1);
+        svuint32_t codes1_even_u32 = svand_n_u32_x(pg, packed_codes1, 0x0F);
+        svuint32_t codes1_odd_u32 = svlsr_n_u32_x(pg, packed_codes1, 4);
+        svuint32_t codes2_even_u32 = svand_n_u32_x(pg, packed_codes2, 0x0F);
+        svuint32_t codes2_odd_u32 = svlsr_n_u32_x(pg, packed_codes2, 4);
 
-        svuint32_t packed_codes1 = svld1ub_u32(predicate, &codes1[i / 2]);
-        svuint32_t packed_codes2 = svld1ub_u32(predicate, &codes2[i / 2]);
+        svfloat32_t codes1_even_f32 = svcvt_f32_u32_x(pg, codes1_even_u32);
+        svfloat32_t codes1_odd_f32 = svcvt_f32_u32_x(pg, codes1_odd_u32);
+        svfloat32_t codes2_even_f32 = svcvt_f32_u32_x(pg, codes2_even_u32);
+        svfloat32_t codes2_odd_f32 = svcvt_f32_u32_x(pg, codes2_odd_u32);
 
-        svuint32_t codes1_even_u32 = svand_n_u32_x(predicate, packed_codes1, 0x0F);
-        svuint32_t codes1_odd_u32 = svlsr_n_u32_x(predicate, packed_codes1, 4);
-        svuint32_t codes2_even_u32 = svand_n_u32_x(predicate, packed_codes2, 0x0F);
-        svuint32_t codes2_odd_u32 = svlsr_n_u32_x(predicate, packed_codes2, 4);
+        svfloat32x2_t lower_bound_pair = svld2_f32(pg, &lower_bound[i]);
+        svfloat32x2_t diff_pair = svld2_f32(pg, &diff[i]);
 
-        svfloat32_t codes1_even_f32 = svcvt_f32_u32_x(predicate, codes1_even_u32);
-        svfloat32_t codes1_odd_f32 = svcvt_f32_u32_x(predicate, codes1_odd_u32);
-        svfloat32_t codes2_even_f32 = svcvt_f32_u32_x(predicate, codes2_even_u32);
-        svfloat32_t codes2_odd_f32 = svcvt_f32_u32_x(predicate, codes2_odd_u32);
+        svfloat32_t dequantized1_even = svmla_f32_x(pg,
+                                                    svget2_f32(lower_bound_pair, 0),
+                                                    svmul_f32_x(pg, codes1_even_f32, scale_factor),
+                                                    svget2_f32(diff_pair, 0));
+        svfloat32_t dequantized1_odd = svmla_f32_x(pg,
+                                                   svget2_f32(lower_bound_pair, 1),
+                                                   svmul_f32_x(pg, codes1_odd_f32, scale_factor),
+                                                   svget2_f32(diff_pair, 1));
+        svfloat32_t dequantized2_even = svmla_f32_x(pg,
+                                                    svget2_f32(lower_bound_pair, 0),
+                                                    svmul_f32_x(pg, codes2_even_f32, scale_factor),
+                                                    svget2_f32(diff_pair, 0));
+        svfloat32_t dequantized2_odd = svmla_f32_x(pg,
+                                                   svget2_f32(lower_bound_pair, 1),
+                                                   svmul_f32_x(pg, codes2_odd_f32, scale_factor),
+                                                   svget2_f32(diff_pair, 1));
 
-        svfloat32_t dequantized1_even =
-            svmla_f32_x(predicate,
-                        lower_bound_even,
-                        svmul_f32_x(predicate, codes1_even_f32, scale_factor),
-                        diff_even);
-        svfloat32_t dequantized1_odd =
-            svmla_f32_x(predicate,
-                        lower_bound_odd,
-                        svmul_f32_x(predicate, codes1_odd_f32, scale_factor),
-                        diff_odd);
-        svfloat32_t dequantized2_even =
-            svmla_f32_x(predicate,
-                        lower_bound_even,
-                        svmul_f32_x(predicate, codes2_even_f32, scale_factor),
-                        diff_even);
-        svfloat32_t dequantized2_odd =
-            svmla_f32_x(predicate,
-                        lower_bound_odd,
-                        svmul_f32_x(predicate, codes2_odd_f32, scale_factor),
-                        diff_odd);
-
-        sum = svmla_f32_x(predicate, sum, dequantized1_even, dequantized2_even);
-        sum = svmla_f32_x(predicate, sum, dequantized1_odd, dequantized2_odd);
+        sum1 = svmla_f32_x(pg, sum1, dequantized1_even, dequantized2_even);
+        sum2 = svmla_f32_x(pg, sum2, dequantized1_odd, dequantized2_odd);
     }
+
+    float result = svaddv_f32(pg, svadd_f32_x(pg, sum1, sum2));
 
     if (i < dim) {
-        return svaddv_f32(predicate, sum) +
-               neon::SQ4ComputeCodesIP(
-                   &codes1[i / 2], &codes2[i / 2], &lower_bound[i], &diff[i], dim - i);
+        result += neon::SQ4ComputeCodesIP(
+            &codes1[i / 2], &codes2[i / 2], &lower_bound[i], &diff[i], dim - i);
     }
 
-    return svaddv_f32(predicate, sum);
+    return result;
 #else
     return neon::SQ4ComputeCodesIP(codes1, codes2, lower_bound, diff, dim);
 #endif
@@ -898,69 +882,62 @@ SQ4ComputeCodesL2Sqr(const uint8_t* RESTRICT codes1,
                      const float* RESTRICT diff,
                      uint64_t dim) {
 #if defined(ENABLE_SVE)
-    svfloat32_t sum = svdup_f32(0.0f);
+    svfloat32_t sum1 = svdup_f32(0.0f);
+    svfloat32_t sum2 = svdup_f32(0.0f);
     const svfloat32_t scale_factor = svdup_f32(1.0f / 15.0f);
     const uint64_t step = svcntw();
-    const svbool_t predicate = svptrue_b32();
+    const svbool_t pg = svptrue_b32();
 
     uint64_t i = 0;
     for (; i + 2 * step <= dim; i += 2 * step) {
-        svfloat32x2_t lower_bound_pair = svld2_f32(predicate, &lower_bound[i]);
-        svfloat32x2_t diff_pair = svld2_f32(predicate, &diff[i]);
+        svuint32_t packed_codes1 = svld1ub_u32(pg, &codes1[i / 2]);
+        svuint32_t packed_codes2 = svld1ub_u32(pg, &codes2[i / 2]);
 
-        svfloat32_t lower_bound_even = svget2_f32(lower_bound_pair, 0);
-        svfloat32_t lower_bound_odd = svget2_f32(lower_bound_pair, 1);
-        svfloat32_t diff_even = svget2_f32(diff_pair, 0);
-        svfloat32_t diff_odd = svget2_f32(diff_pair, 1);
+        svuint32_t codes1_even_u32 = svand_n_u32_x(pg, packed_codes1, 0x0F);
+        svuint32_t codes1_odd_u32 = svlsr_n_u32_x(pg, packed_codes1, 4);
+        svuint32_t codes2_even_u32 = svand_n_u32_x(pg, packed_codes2, 0x0F);
+        svuint32_t codes2_odd_u32 = svlsr_n_u32_x(pg, packed_codes2, 4);
 
-        svuint32_t packed_codes1 = svld1ub_u32(predicate, &codes1[i / 2]);
-        svuint32_t packed_codes2 = svld1ub_u32(predicate, &codes2[i / 2]);
+        svfloat32_t codes1_even_f32 = svcvt_f32_u32_x(pg, codes1_even_u32);
+        svfloat32_t codes1_odd_f32 = svcvt_f32_u32_x(pg, codes1_odd_u32);
+        svfloat32_t codes2_even_f32 = svcvt_f32_u32_x(pg, codes2_even_u32);
+        svfloat32_t codes2_odd_f32 = svcvt_f32_u32_x(pg, codes2_odd_u32);
 
-        svuint32_t codes1_even_u32 = svand_n_u32_x(predicate, packed_codes1, 0x0F);
-        svuint32_t codes1_odd_u32 = svlsr_n_u32_x(predicate, packed_codes1, 4);
-        svuint32_t codes2_even_u32 = svand_n_u32_x(predicate, packed_codes2, 0x0F);
-        svuint32_t codes2_odd_u32 = svlsr_n_u32_x(predicate, packed_codes2, 4);
+        svfloat32x2_t lower_bound_pair = svld2_f32(pg, &lower_bound[i]);
+        svfloat32x2_t diff_pair = svld2_f32(pg, &diff[i]);
 
-        svfloat32_t codes1_even_f32 = svcvt_f32_u32_x(predicate, codes1_even_u32);
-        svfloat32_t codes1_odd_f32 = svcvt_f32_u32_x(predicate, codes1_odd_u32);
-        svfloat32_t codes2_even_f32 = svcvt_f32_u32_x(predicate, codes2_even_u32);
-        svfloat32_t codes2_odd_f32 = svcvt_f32_u32_x(predicate, codes2_odd_u32);
+        svfloat32_t dequantized1_even = svmla_f32_x(pg,
+                                                    svget2_f32(lower_bound_pair, 0),
+                                                    svmul_f32_x(pg, codes1_even_f32, scale_factor),
+                                                    svget2_f32(diff_pair, 0));
+        svfloat32_t dequantized1_odd = svmla_f32_x(pg,
+                                                   svget2_f32(lower_bound_pair, 1),
+                                                   svmul_f32_x(pg, codes1_odd_f32, scale_factor),
+                                                   svget2_f32(diff_pair, 1));
+        svfloat32_t dequantized2_even = svmla_f32_x(pg,
+                                                    svget2_f32(lower_bound_pair, 0),
+                                                    svmul_f32_x(pg, codes2_even_f32, scale_factor),
+                                                    svget2_f32(diff_pair, 0));
+        svfloat32_t dequantized2_odd = svmla_f32_x(pg,
+                                                   svget2_f32(lower_bound_pair, 1),
+                                                   svmul_f32_x(pg, codes2_odd_f32, scale_factor),
+                                                   svget2_f32(diff_pair, 1));
 
-        svfloat32_t dequantized1_even =
-            svmla_f32_x(predicate,
-                        lower_bound_even,
-                        svmul_f32_x(predicate, codes1_even_f32, scale_factor),
-                        diff_even);
-        svfloat32_t dequantized1_odd =
-            svmla_f32_x(predicate,
-                        lower_bound_odd,
-                        svmul_f32_x(predicate, codes1_odd_f32, scale_factor),
-                        diff_odd);
-        svfloat32_t dequantized2_even =
-            svmla_f32_x(predicate,
-                        lower_bound_even,
-                        svmul_f32_x(predicate, codes2_even_f32, scale_factor),
-                        diff_even);
-        svfloat32_t dequantized2_odd =
-            svmla_f32_x(predicate,
-                        lower_bound_odd,
-                        svmul_f32_x(predicate, codes2_odd_f32, scale_factor),
-                        diff_odd);
+        svfloat32_t delta_even = svsub_f32_x(pg, dequantized1_even, dequantized2_even);
+        svfloat32_t delta_odd = svsub_f32_x(pg, dequantized1_odd, dequantized2_odd);
 
-        svfloat32_t delta_even = svsub_f32_x(predicate, dequantized1_even, dequantized2_even);
-        svfloat32_t delta_odd = svsub_f32_x(predicate, dequantized1_odd, dequantized2_odd);
-
-        sum = svmla_f32_x(predicate, sum, delta_even, delta_even);
-        sum = svmla_f32_x(predicate, sum, delta_odd, delta_odd);
+        sum1 = svmla_f32_x(pg, sum1, delta_even, delta_even);
+        sum2 = svmla_f32_x(pg, sum2, delta_odd, delta_odd);
     }
+
+    float result = svaddv_f32(pg, svadd_f32_x(pg, sum1, sum2));
 
     if (i < dim) {
-        return svaddv_f32(predicate, sum) +
-               neon::SQ4ComputeCodesL2Sqr(
-                   &codes1[i / 2], &codes2[i / 2], &lower_bound[i], &diff[i], dim - i);
+        result += neon::SQ4ComputeCodesL2Sqr(
+            &codes1[i / 2], &codes2[i / 2], &lower_bound[i], &diff[i], dim - i);
     }
 
-    return svaddv_f32(predicate, sum);
+    return result;
 #else
     return neon::SQ4ComputeCodesL2Sqr(codes1, codes2, lower_bound, diff, dim);
 #endif

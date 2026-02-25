@@ -71,7 +71,8 @@ INT8InnerProductDistance(const void* pVect1v, const void* pVect2v, const void* q
 }
 
 #if defined(ENABLE_NEON)
-__inline float32x4x3_t __attribute__((__always_inline__)) vcvt3_f32_f16(const float16x4x3_t a) {
+__inline float32x4x3_t __attribute__((__always_inline__))
+vcvt3_f32_f16(const float16x4x3_t a) {
     float32x4x3_t c;
     c.val[0] = vcvt_f32_f16(a.val[0]);
     c.val[1] = vcvt_f32_f16(a.val[1]);
@@ -79,14 +80,16 @@ __inline float32x4x3_t __attribute__((__always_inline__)) vcvt3_f32_f16(const fl
     return c;
 }
 
-__inline float32x4x2_t __attribute__((__always_inline__)) vcvt2_f32_f16(const float16x4x2_t a) {
+__inline float32x4x2_t __attribute__((__always_inline__))
+vcvt2_f32_f16(const float16x4x2_t a) {
     float32x4x2_t c;
     c.val[0] = vcvt_f32_f16(a.val[0]);
     c.val[1] = vcvt_f32_f16(a.val[1]);
     return c;
 }
 
-__inline float32x4x3_t __attribute__((__always_inline__)) vcvt3_f32_half(const uint16x4x3_t x) {
+__inline float32x4x3_t __attribute__((__always_inline__))
+vcvt3_f32_half(const uint16x4x3_t x) {
     float32x4x3_t c;
     c.val[0] = vreinterpretq_f32_u32(vshlq_n_u32(vmovl_u16(x.val[0]), 16));
     c.val[1] = vreinterpretq_f32_u32(vshlq_n_u32(vmovl_u16(x.val[1]), 16));
@@ -94,13 +97,15 @@ __inline float32x4x3_t __attribute__((__always_inline__)) vcvt3_f32_half(const u
     return c;
 }
 
-__inline float32x4x2_t __attribute__((__always_inline__)) vcvt2_f32_half(const uint16x4x2_t x) {
+__inline float32x4x2_t __attribute__((__always_inline__))
+vcvt2_f32_half(const uint16x4x2_t x) {
     float32x4x2_t c;
     c.val[0] = vreinterpretq_f32_u32(vshlq_n_u32(vmovl_u16(x.val[0]), 16));
     c.val[1] = vreinterpretq_f32_u32(vshlq_n_u32(vmovl_u16(x.val[1]), 16));
     return c;
 }
-__inline float32x4_t __attribute__((__always_inline__)) vcvt_f32_half(const uint16x4_t x) {
+__inline float32x4_t __attribute__((__always_inline__))
+vcvt_f32_half(const uint16x4_t x) {
     return vreinterpretq_f32_u32(vshlq_n_u32(vmovl_u16(x), 16));
 }
 
@@ -500,7 +505,8 @@ FP32ReduceAdd(const float* x, uint64_t dim) {
 }
 
 #if defined(ENABLE_NEON)
-__inline uint16x8_t __attribute__((__always_inline__)) load_4_short(const uint16_t* data) {
+__inline uint16x8_t __attribute__((__always_inline__))
+load_4_short(const uint16_t* data) {
     uint16_t tmp[] = {data[3], 0, data[2], 0, data[1], 0, data[0], 0};
     return vld1q_u16(tmp);
 }
@@ -794,7 +800,8 @@ FP16ComputeL2Sqr(const uint8_t* RESTRICT query, const uint8_t* RESTRICT codes, u
 }
 
 #if defined(ENABLE_NEON)
-__inline float32x4_t __attribute__((__always_inline__)) load_4_uint8_to_float(const uint8_t* data) {
+__inline float32x4_t __attribute__((__always_inline__))
+load_4_uint8_to_float(const uint8_t* data) {
     uint32x4_t code_values = {data[0], data[1], data[2], data[3]};
     return vcvtq_f32_u32(code_values);
 }
@@ -809,7 +816,8 @@ load_8_uint8_to_float(const uint8_t* data, float32x4_t& low, float32x4_t& high) 
     high = vcvtq_f32_u32(code_32_high);
 }
 
-__inline void __attribute__((__always_inline__)) load_16_uint8_to_float(
+__inline void __attribute__((__always_inline__))
+load_16_uint8_to_float(
     const uint8_t* data, float32x4_t& f0, float32x4_t& f1, float32x4_t& f2, float32x4_t& f3) {
     uint8x16_t code_vec = vld1q_u8(data);
     uint16x8_t code_16_low = vmovl_u8(vget_low_u8(code_vec));
@@ -1451,50 +1459,93 @@ SQ4ComputeIP(const float* RESTRICT query,
              const float* RESTRICT diff,
              uint64_t dim) {
 #if defined(ENABLE_NEON)
-    float32x4_t sum = vdupq_n_f32(0.0f);
+    const float32x4_t v_inv15 = vdupq_n_f32(1.0f / 15.0f);
+
+    // 4 independent accumulators to hide FMA latency
+    float32x4_t sum0 = vdupq_n_f32(0.0f);
+    float32x4_t sum1 = vdupq_n_f32(0.0f);
+    float32x4_t sum2 = vdupq_n_f32(0.0f);
+    float32x4_t sum3 = vdupq_n_f32(0.0f);
+
     uint64_t d = 0;
+    const uint8x8_t mask_0f = vdup_n_u8(0x0F);
 
-    const float inv15 = 1.0f / 15.0f;
-    float32x4_t v_inv15 = vdupq_n_f32(inv15);
+    // Main loop: process 32 dims per iteration (16 code bytes)
+    for (; d + 31 < dim; d += 32) {
+        uint8x16_t code_bytes = vld1q_u8(codes + (d >> 1));
 
-    for (; d + 7 < dim; d += 8) {
-        uint8_t byte0 = codes[d >> 1];
-        uint8_t byte1 = codes[(d >> 1) + 1];
-        uint8_t byte2 = codes[(d >> 1) + 2];
-        uint8_t byte3 = codes[(d >> 1) + 3];
+        // Extract and interleave nibbles to sequential dim order
+        uint8x16_t lo_nibbles = vandq_u8(code_bytes, vdupq_n_u8(0x0F));
+        uint8x16_t hi_nibbles = vshrq_n_u8(code_bytes, 4);
+        uint8x16x2_t zipped = vzipq_u8(lo_nibbles, hi_nibbles);
 
-        float32x4_t code_low = {
-            static_cast<float>(byte0 & 0x0f),
-            static_cast<float>(byte0 >> 4),
-            static_cast<float>(byte1 & 0x0f),
-            static_cast<float>(byte1 >> 4),
-        };
+        // Convert uint8 -> float32 (8 groups of 4)
+        uint16x8_t u16_0 = vmovl_u8(vget_low_u8(zipped.val[0]));
+        float32x4_t f0 = vcvtq_f32_u32(vmovl_u16(vget_low_u16(u16_0)));
+        float32x4_t f1 = vcvtq_f32_u32(vmovl_u16(vget_high_u16(u16_0)));
+        uint16x8_t u16_1 = vmovl_u8(vget_high_u8(zipped.val[0]));
+        float32x4_t f2 = vcvtq_f32_u32(vmovl_u16(vget_low_u16(u16_1)));
+        float32x4_t f3 = vcvtq_f32_u32(vmovl_u16(vget_high_u16(u16_1)));
+        uint16x8_t u16_2 = vmovl_u8(vget_low_u8(zipped.val[1]));
+        float32x4_t f4 = vcvtq_f32_u32(vmovl_u16(vget_low_u16(u16_2)));
+        float32x4_t f5 = vcvtq_f32_u32(vmovl_u16(vget_high_u16(u16_2)));
+        uint16x8_t u16_3 = vmovl_u8(vget_high_u8(zipped.val[1]));
+        float32x4_t f6 = vcvtq_f32_u32(vmovl_u16(vget_low_u16(u16_3)));
+        float32x4_t f7 = vcvtq_f32_u32(vmovl_u16(vget_high_u16(u16_3)));
 
-        float32x4_t code_high = {
-            static_cast<float>(byte2 & 0x0f),
-            static_cast<float>(byte2 >> 4),
-            static_cast<float>(byte3 & 0x0f),
-            static_cast<float>(byte3 >> 4),
-        };
+        // Dequantize: y = (nibble * inv15) * diff + lower_bound
+        float32x4x4_t diff_lo = vld1q_f32_x4(diff + d);
+        float32x4x4_t diff_hi = vld1q_f32_x4(diff + d + 16);
+        float32x4x4_t lb_lo = vld1q_f32_x4(lower_bound + d);
+        float32x4x4_t lb_hi = vld1q_f32_x4(lower_bound + d + 16);
 
-        code_low = vmulq_f32(code_low, v_inv15);
-        code_high = vmulq_f32(code_high, v_inv15);
+        float32x4_t y0 = vfmaq_f32(lb_lo.val[0], vmulq_f32(f0, v_inv15), diff_lo.val[0]);
+        float32x4_t y1 = vfmaq_f32(lb_lo.val[1], vmulq_f32(f1, v_inv15), diff_lo.val[1]);
+        float32x4_t y2 = vfmaq_f32(lb_lo.val[2], vmulq_f32(f2, v_inv15), diff_lo.val[2]);
+        float32x4_t y3 = vfmaq_f32(lb_lo.val[3], vmulq_f32(f3, v_inv15), diff_lo.val[3]);
+        float32x4_t y4 = vfmaq_f32(lb_hi.val[0], vmulq_f32(f4, v_inv15), diff_hi.val[0]);
+        float32x4_t y5 = vfmaq_f32(lb_hi.val[1], vmulq_f32(f5, v_inv15), diff_hi.val[1]);
+        float32x4_t y6 = vfmaq_f32(lb_hi.val[2], vmulq_f32(f6, v_inv15), diff_hi.val[2]);
+        float32x4_t y7 = vfmaq_f32(lb_hi.val[3], vmulq_f32(f7, v_inv15), diff_hi.val[3]);
 
-        float32x4_t query_low = vld1q_f32(query + d);
-        float32x4_t query_high = vld1q_f32(query + d + 4);
-        float32x4_t diff_low = vld1q_f32(diff + d);
-        float32x4_t diff_high = vld1q_f32(diff + d + 4);
-        float32x4_t lb_low = vld1q_f32(lower_bound + d);
-        float32x4_t lb_high = vld1q_f32(lower_bound + d + 4);
+        // Load query and accumulate IP with 4 accumulators
+        float32x4x4_t q_lo = vld1q_f32_x4(query + d);
+        float32x4x4_t q_hi = vld1q_f32_x4(query + d + 16);
 
-        code_low = vmlaq_f32(lb_low, code_low, diff_low);
-        code_high = vmlaq_f32(lb_high, code_high, diff_high);
-
-        sum = vmlaq_f32(sum, query_low, code_low);
-        sum = vmlaq_f32(sum, query_high, code_high);
+        sum0 = vfmaq_f32(sum0, q_lo.val[0], y0);
+        sum1 = vfmaq_f32(sum1, q_lo.val[1], y1);
+        sum2 = vfmaq_f32(sum2, q_lo.val[2], y2);
+        sum3 = vfmaq_f32(sum3, q_lo.val[3], y3);
+        sum0 = vfmaq_f32(sum0, q_hi.val[0], y4);
+        sum1 = vfmaq_f32(sum1, q_hi.val[1], y5);
+        sum2 = vfmaq_f32(sum2, q_hi.val[2], y6);
+        sum3 = vfmaq_f32(sum3, q_hi.val[3], y7);
     }
 
-    float result = vaddvq_f32(sum);
+    // Secondary loop: process 8 dims per iteration
+    for (; d + 7 < dim; d += 8) {
+        uint8x8_t raw =
+            vreinterpret_u8_u32(vld1_dup_u32(reinterpret_cast<const uint32_t*>(codes + (d >> 1))));
+        uint8x8_t lo = vand_u8(raw, mask_0f);
+        uint8x8_t hi = vshr_n_u8(raw, 4);
+        uint8x8x2_t z = vzip_u8(lo, hi);
+
+        uint16x8_t u16 = vmovl_u8(z.val[0]);
+        float32x4_t fa = vcvtq_f32_u32(vmovl_u16(vget_low_u16(u16)));
+        float32x4_t fb = vcvtq_f32_u32(vmovl_u16(vget_high_u16(u16)));
+
+        float32x4_t ya =
+            vfmaq_f32(vld1q_f32(lower_bound + d), vmulq_f32(fa, v_inv15), vld1q_f32(diff + d));
+        float32x4_t yb = vfmaq_f32(
+            vld1q_f32(lower_bound + d + 4), vmulq_f32(fb, v_inv15), vld1q_f32(diff + d + 4));
+
+        sum0 = vfmaq_f32(sum0, vld1q_f32(query + d), ya);
+        sum1 = vfmaq_f32(sum1, vld1q_f32(query + d + 4), yb);
+    }
+
+    // Merge accumulators
+    sum0 = vaddq_f32(vaddq_f32(sum0, sum1), vaddq_f32(sum2, sum3));
+    float result = vaddvq_f32(sum0);
 
     if (d < dim) {
         result +=
@@ -1514,53 +1565,98 @@ SQ4ComputeL2Sqr(const float* RESTRICT query,
                 const float* RESTRICT diff,
                 uint64_t dim) {
 #if defined(ENABLE_NEON)
-    float32x4_t sum = vdupq_n_f32(0.0f);
+    const float32x4_t v_inv15 = vdupq_n_f32(1.0f / 15.0f);
+
+    float32x4_t sum0 = vdupq_n_f32(0.0f);
+    float32x4_t sum1 = vdupq_n_f32(0.0f);
+    float32x4_t sum2 = vdupq_n_f32(0.0f);
+    float32x4_t sum3 = vdupq_n_f32(0.0f);
+
     uint64_t d = 0;
+    const uint8x8_t mask_0f = vdup_n_u8(0x0F);
 
-    const float inv15 = 1.0f / 15.0f;
-    float32x4_t v_inv15 = vdupq_n_f32(inv15);
+    // Main loop: process 32 dims per iteration
+    for (; d + 31 < dim; d += 32) {
+        uint8x16_t code_bytes = vld1q_u8(codes + (d >> 1));
 
-    for (; d + 7 < dim; d += 8) {
-        uint8_t byte0 = codes[d >> 1];
-        uint8_t byte1 = codes[(d >> 1) + 1];
-        uint8_t byte2 = codes[(d >> 1) + 2];
-        uint8_t byte3 = codes[(d >> 1) + 3];
+        uint8x16_t lo_nibbles = vandq_u8(code_bytes, vdupq_n_u8(0x0F));
+        uint8x16_t hi_nibbles = vshrq_n_u8(code_bytes, 4);
+        uint8x16x2_t zipped = vzipq_u8(lo_nibbles, hi_nibbles);
 
-        float32x4_t code_low = {
-            static_cast<float>(byte0 & 0x0f),
-            static_cast<float>(byte0 >> 4),
-            static_cast<float>(byte1 & 0x0f),
-            static_cast<float>(byte1 >> 4),
-        };
+        uint16x8_t u16_0 = vmovl_u8(vget_low_u8(zipped.val[0]));
+        float32x4_t f0 = vcvtq_f32_u32(vmovl_u16(vget_low_u16(u16_0)));
+        float32x4_t f1 = vcvtq_f32_u32(vmovl_u16(vget_high_u16(u16_0)));
+        uint16x8_t u16_1 = vmovl_u8(vget_high_u8(zipped.val[0]));
+        float32x4_t f2 = vcvtq_f32_u32(vmovl_u16(vget_low_u16(u16_1)));
+        float32x4_t f3 = vcvtq_f32_u32(vmovl_u16(vget_high_u16(u16_1)));
+        uint16x8_t u16_2 = vmovl_u8(vget_low_u8(zipped.val[1]));
+        float32x4_t f4 = vcvtq_f32_u32(vmovl_u16(vget_low_u16(u16_2)));
+        float32x4_t f5 = vcvtq_f32_u32(vmovl_u16(vget_high_u16(u16_2)));
+        uint16x8_t u16_3 = vmovl_u8(vget_high_u8(zipped.val[1]));
+        float32x4_t f6 = vcvtq_f32_u32(vmovl_u16(vget_low_u16(u16_3)));
+        float32x4_t f7 = vcvtq_f32_u32(vmovl_u16(vget_high_u16(u16_3)));
 
-        float32x4_t code_high = {
-            static_cast<float>(byte2 & 0x0f),
-            static_cast<float>(byte2 >> 4),
-            static_cast<float>(byte3 & 0x0f),
-            static_cast<float>(byte3 >> 4),
-        };
+        float32x4x4_t diff_lo = vld1q_f32_x4(diff + d);
+        float32x4x4_t diff_hi = vld1q_f32_x4(diff + d + 16);
+        float32x4x4_t lb_lo = vld1q_f32_x4(lower_bound + d);
+        float32x4x4_t lb_hi = vld1q_f32_x4(lower_bound + d + 16);
 
-        code_low = vmulq_f32(code_low, v_inv15);
-        code_high = vmulq_f32(code_high, v_inv15);
+        float32x4_t y0 = vfmaq_f32(lb_lo.val[0], vmulq_f32(f0, v_inv15), diff_lo.val[0]);
+        float32x4_t y1 = vfmaq_f32(lb_lo.val[1], vmulq_f32(f1, v_inv15), diff_lo.val[1]);
+        float32x4_t y2 = vfmaq_f32(lb_lo.val[2], vmulq_f32(f2, v_inv15), diff_lo.val[2]);
+        float32x4_t y3 = vfmaq_f32(lb_lo.val[3], vmulq_f32(f3, v_inv15), diff_lo.val[3]);
+        float32x4_t y4 = vfmaq_f32(lb_hi.val[0], vmulq_f32(f4, v_inv15), diff_hi.val[0]);
+        float32x4_t y5 = vfmaq_f32(lb_hi.val[1], vmulq_f32(f5, v_inv15), diff_hi.val[1]);
+        float32x4_t y6 = vfmaq_f32(lb_hi.val[2], vmulq_f32(f6, v_inv15), diff_hi.val[2]);
+        float32x4_t y7 = vfmaq_f32(lb_hi.val[3], vmulq_f32(f7, v_inv15), diff_hi.val[3]);
 
-        float32x4_t query_low = vld1q_f32(query + d);
-        float32x4_t query_high = vld1q_f32(query + d + 4);
-        float32x4_t diff_low = vld1q_f32(diff + d);
-        float32x4_t diff_high = vld1q_f32(diff + d + 4);
-        float32x4_t lb_low = vld1q_f32(lower_bound + d);
-        float32x4_t lb_high = vld1q_f32(lower_bound + d + 4);
+        float32x4x4_t q_lo = vld1q_f32_x4(query + d);
+        float32x4x4_t q_hi = vld1q_f32_x4(query + d + 16);
 
-        code_low = vmlaq_f32(lb_low, code_low, diff_low);
-        code_high = vmlaq_f32(lb_high, code_high, diff_high);
+        float32x4_t d0 = vsubq_f32(q_lo.val[0], y0);
+        float32x4_t d1 = vsubq_f32(q_lo.val[1], y1);
+        float32x4_t d2 = vsubq_f32(q_lo.val[2], y2);
+        float32x4_t d3 = vsubq_f32(q_lo.val[3], y3);
+        float32x4_t d4 = vsubq_f32(q_hi.val[0], y4);
+        float32x4_t d5 = vsubq_f32(q_hi.val[1], y5);
+        float32x4_t d6 = vsubq_f32(q_hi.val[2], y6);
+        float32x4_t d7 = vsubq_f32(q_hi.val[3], y7);
 
-        float32x4_t diff_vec_low = vsubq_f32(query_low, code_low);
-        float32x4_t diff_vec_high = vsubq_f32(query_high, code_high);
-
-        sum = vmlaq_f32(sum, diff_vec_low, diff_vec_low);
-        sum = vmlaq_f32(sum, diff_vec_high, diff_vec_high);
+        sum0 = vfmaq_f32(sum0, d0, d0);
+        sum1 = vfmaq_f32(sum1, d1, d1);
+        sum2 = vfmaq_f32(sum2, d2, d2);
+        sum3 = vfmaq_f32(sum3, d3, d3);
+        sum0 = vfmaq_f32(sum0, d4, d4);
+        sum1 = vfmaq_f32(sum1, d5, d5);
+        sum2 = vfmaq_f32(sum2, d6, d6);
+        sum3 = vfmaq_f32(sum3, d7, d7);
     }
 
-    float result = vaddvq_f32(sum);
+    // Secondary loop: process 8 dims per iteration
+    for (; d + 7 < dim; d += 8) {
+        uint8x8_t raw =
+            vreinterpret_u8_u32(vld1_dup_u32(reinterpret_cast<const uint32_t*>(codes + (d >> 1))));
+        uint8x8_t lo = vand_u8(raw, mask_0f);
+        uint8x8_t hi = vshr_n_u8(raw, 4);
+        uint8x8x2_t z = vzip_u8(lo, hi);
+
+        uint16x8_t u16 = vmovl_u8(z.val[0]);
+        float32x4_t fa = vcvtq_f32_u32(vmovl_u16(vget_low_u16(u16)));
+        float32x4_t fb = vcvtq_f32_u32(vmovl_u16(vget_high_u16(u16)));
+
+        float32x4_t ya =
+            vfmaq_f32(vld1q_f32(lower_bound + d), vmulq_f32(fa, v_inv15), vld1q_f32(diff + d));
+        float32x4_t yb = vfmaq_f32(
+            vld1q_f32(lower_bound + d + 4), vmulq_f32(fb, v_inv15), vld1q_f32(diff + d + 4));
+
+        float32x4_t da = vsubq_f32(vld1q_f32(query + d), ya);
+        float32x4_t db = vsubq_f32(vld1q_f32(query + d + 4), yb);
+        sum0 = vfmaq_f32(sum0, da, da);
+        sum1 = vfmaq_f32(sum1, db, db);
+    }
+
+    sum0 = vaddq_f32(vaddq_f32(sum0, sum1), vaddq_f32(sum2, sum3));
+    float result = vaddvq_f32(sum0);
 
     if (d < dim) {
         result += generic::SQ4ComputeL2Sqr(
@@ -1580,62 +1676,98 @@ SQ4ComputeCodesIP(const uint8_t* RESTRICT codes1,
                   const float* RESTRICT diff,
                   uint64_t dim) {
 #if defined(ENABLE_NEON)
-    float32x4_t sum = vdupq_n_f32(0.0f);
+    const float32x4_t v_inv15 = vdupq_n_f32(1.0f / 15.0f);
+
+    float32x4_t sum0 = vdupq_n_f32(0.0f);
+    float32x4_t sum1 = vdupq_n_f32(0.0f);
+    float32x4_t sum2 = vdupq_n_f32(0.0f);
+    float32x4_t sum3 = vdupq_n_f32(0.0f);
+
     uint64_t d = 0;
-    const float inv15 = 1.0f / 15.0f;
-    float32x4_t v_inv15 = vdupq_n_f32(inv15);
+    const uint8x8_t mask_0f = vdup_n_u8(0x0F);
 
-    for (; d + 7 < dim; d += 8) {
-        uint8_t byte1_0 = codes1[d >> 1];
-        uint8_t byte1_1 = codes1[(d >> 1) + 1];
-        uint8_t byte1_2 = codes1[(d >> 1) + 2];
-        uint8_t byte1_3 = codes1[(d >> 1) + 3];
+    // Main loop: process 16 dims per iteration (8 code bytes per array)
+    for (; d + 15 < dim; d += 16) {
+        uint8x8_t raw1 = vld1_u8(codes1 + (d >> 1));
+        uint8x8_t raw2 = vld1_u8(codes2 + (d >> 1));
 
-        uint8_t byte2_0 = codes2[d >> 1];
-        uint8_t byte2_1 = codes2[(d >> 1) + 1];
-        uint8_t byte2_2 = codes2[(d >> 1) + 2];
-        uint8_t byte2_3 = codes2[(d >> 1) + 3];
+        // Decode codes1
+        uint8x8_t lo1 = vand_u8(raw1, mask_0f);
+        uint8x8_t hi1 = vshr_n_u8(raw1, 4);
+        uint8x8x2_t z1 = vzip_u8(lo1, hi1);
+        uint16x8_t u16_1a = vmovl_u8(z1.val[0]);
+        uint16x8_t u16_1b = vmovl_u8(z1.val[1]);
+        float32x4_t c1_0 = vcvtq_f32_u32(vmovl_u16(vget_low_u16(u16_1a)));
+        float32x4_t c1_1 = vcvtq_f32_u32(vmovl_u16(vget_high_u16(u16_1a)));
+        float32x4_t c1_2 = vcvtq_f32_u32(vmovl_u16(vget_low_u16(u16_1b)));
+        float32x4_t c1_3 = vcvtq_f32_u32(vmovl_u16(vget_high_u16(u16_1b)));
 
-        float32x4_t code1_low = {static_cast<float>(byte1_0 & 0x0f),
-                                 static_cast<float>(byte1_0 >> 4),
-                                 static_cast<float>(byte1_1 & 0x0f),
-                                 static_cast<float>(byte1_1 >> 4)};
+        // Decode codes2
+        uint8x8_t lo2 = vand_u8(raw2, mask_0f);
+        uint8x8_t hi2 = vshr_n_u8(raw2, 4);
+        uint8x8x2_t z2 = vzip_u8(lo2, hi2);
+        uint16x8_t u16_2a = vmovl_u8(z2.val[0]);
+        uint16x8_t u16_2b = vmovl_u8(z2.val[1]);
+        float32x4_t c2_0 = vcvtq_f32_u32(vmovl_u16(vget_low_u16(u16_2a)));
+        float32x4_t c2_1 = vcvtq_f32_u32(vmovl_u16(vget_high_u16(u16_2a)));
+        float32x4_t c2_2 = vcvtq_f32_u32(vmovl_u16(vget_low_u16(u16_2b)));
+        float32x4_t c2_3 = vcvtq_f32_u32(vmovl_u16(vget_high_u16(u16_2b)));
 
-        float32x4_t code1_high = {static_cast<float>(byte1_2 & 0x0f),
-                                  static_cast<float>(byte1_2 >> 4),
-                                  static_cast<float>(byte1_3 & 0x0f),
-                                  static_cast<float>(byte1_3 >> 4)};
+        // Load diff and lower_bound
+        float32x4x4_t diff_v = vld1q_f32_x4(diff + d);
+        float32x4x4_t lb_v = vld1q_f32_x4(lower_bound + d);
 
-        float32x4_t code2_low = {static_cast<float>(byte2_0 & 0x0f),
-                                 static_cast<float>(byte2_0 >> 4),
-                                 static_cast<float>(byte2_1 & 0x0f),
-                                 static_cast<float>(byte2_1 >> 4)};
+        // Dequantize both code sets
+        float32x4_t y1_0 = vfmaq_f32(lb_v.val[0], vmulq_f32(c1_0, v_inv15), diff_v.val[0]);
+        float32x4_t y1_1 = vfmaq_f32(lb_v.val[1], vmulq_f32(c1_1, v_inv15), diff_v.val[1]);
+        float32x4_t y1_2 = vfmaq_f32(lb_v.val[2], vmulq_f32(c1_2, v_inv15), diff_v.val[2]);
+        float32x4_t y1_3 = vfmaq_f32(lb_v.val[3], vmulq_f32(c1_3, v_inv15), diff_v.val[3]);
 
-        float32x4_t code2_high = {static_cast<float>(byte2_2 & 0x0f),
-                                  static_cast<float>(byte2_2 >> 4),
-                                  static_cast<float>(byte2_3 & 0x0f),
-                                  static_cast<float>(byte2_3 >> 4)};
+        float32x4_t y2_0 = vfmaq_f32(lb_v.val[0], vmulq_f32(c2_0, v_inv15), diff_v.val[0]);
+        float32x4_t y2_1 = vfmaq_f32(lb_v.val[1], vmulq_f32(c2_1, v_inv15), diff_v.val[1]);
+        float32x4_t y2_2 = vfmaq_f32(lb_v.val[2], vmulq_f32(c2_2, v_inv15), diff_v.val[2]);
+        float32x4_t y2_3 = vfmaq_f32(lb_v.val[3], vmulq_f32(c2_3, v_inv15), diff_v.val[3]);
 
-        code1_low = vmulq_f32(code1_low, v_inv15);
-        code1_high = vmulq_f32(code1_high, v_inv15);
-        code2_low = vmulq_f32(code2_low, v_inv15);
-        code2_high = vmulq_f32(code2_high, v_inv15);
-
-        float32x4_t diff_low = vld1q_f32(diff + d);
-        float32x4_t diff_high = vld1q_f32(diff + d + 4);
-        float32x4_t lb_low = vld1q_f32(lower_bound + d);
-        float32x4_t lb_high = vld1q_f32(lower_bound + d + 4);
-
-        code1_low = vmlaq_f32(lb_low, code1_low, diff_low);
-        code1_high = vmlaq_f32(lb_high, code1_high, diff_high);
-        code2_low = vmlaq_f32(lb_low, code2_low, diff_low);
-        code2_high = vmlaq_f32(lb_high, code2_high, diff_high);
-
-        sum = vmlaq_f32(sum, code1_low, code2_low);
-        sum = vmlaq_f32(sum, code1_high, code2_high);
+        sum0 = vfmaq_f32(sum0, y1_0, y2_0);
+        sum1 = vfmaq_f32(sum1, y1_1, y2_1);
+        sum2 = vfmaq_f32(sum2, y1_2, y2_2);
+        sum3 = vfmaq_f32(sum3, y1_3, y2_3);
     }
 
-    float result = vaddvq_f32(sum);
+    // Secondary loop: process 8 dims
+    for (; d + 7 < dim; d += 8) {
+        uint8x8_t raw1 =
+            vreinterpret_u8_u32(vld1_dup_u32(reinterpret_cast<const uint32_t*>(codes1 + (d >> 1))));
+        uint8x8_t raw2 =
+            vreinterpret_u8_u32(vld1_dup_u32(reinterpret_cast<const uint32_t*>(codes2 + (d >> 1))));
+
+        uint8x8x2_t z1 = vzip_u8(vand_u8(raw1, mask_0f), vshr_n_u8(raw1, 4));
+        uint8x8x2_t z2 = vzip_u8(vand_u8(raw2, mask_0f), vshr_n_u8(raw2, 4));
+
+        uint16x8_t u1 = vmovl_u8(z1.val[0]);
+        uint16x8_t u2 = vmovl_u8(z2.val[0]);
+
+        float32x4_t c1a = vcvtq_f32_u32(vmovl_u16(vget_low_u16(u1)));
+        float32x4_t c1b = vcvtq_f32_u32(vmovl_u16(vget_high_u16(u1)));
+        float32x4_t c2a = vcvtq_f32_u32(vmovl_u16(vget_low_u16(u2)));
+        float32x4_t c2b = vcvtq_f32_u32(vmovl_u16(vget_high_u16(u2)));
+
+        float32x4_t diff_a = vld1q_f32(diff + d);
+        float32x4_t diff_b = vld1q_f32(diff + d + 4);
+        float32x4_t lb_a = vld1q_f32(lower_bound + d);
+        float32x4_t lb_b = vld1q_f32(lower_bound + d + 4);
+
+        float32x4_t y1a = vfmaq_f32(lb_a, vmulq_f32(c1a, v_inv15), diff_a);
+        float32x4_t y1b = vfmaq_f32(lb_b, vmulq_f32(c1b, v_inv15), diff_b);
+        float32x4_t y2a = vfmaq_f32(lb_a, vmulq_f32(c2a, v_inv15), diff_a);
+        float32x4_t y2b = vfmaq_f32(lb_b, vmulq_f32(c2b, v_inv15), diff_b);
+
+        sum0 = vfmaq_f32(sum0, y1a, y2a);
+        sum1 = vfmaq_f32(sum1, y1b, y2b);
+    }
+
+    sum0 = vaddq_f32(vaddq_f32(sum0, sum1), vaddq_f32(sum2, sum3));
+    float result = vaddvq_f32(sum0);
 
     if (d < dim) {
         result += generic::SQ4ComputeCodesIP(
@@ -1655,66 +1787,98 @@ SQ4ComputeCodesL2Sqr(const uint8_t* RESTRICT codes1,
                      const float* RESTRICT diff,
                      uint64_t dim) {
 #if defined(ENABLE_NEON)
-    float32x4_t sum = vdupq_n_f32(0.0f);
+    const float32x4_t v_inv15 = vdupq_n_f32(1.0f / 15.0f);
+
+    float32x4_t sum0 = vdupq_n_f32(0.0f);
+    float32x4_t sum1 = vdupq_n_f32(0.0f);
+    float32x4_t sum2 = vdupq_n_f32(0.0f);
+    float32x4_t sum3 = vdupq_n_f32(0.0f);
+
     uint64_t d = 0;
+    const uint8x8_t mask_0f = vdup_n_u8(0x0F);
 
-    const float inv15 = 1.0f / 15.0f;
-    float32x4_t v_inv15 = vdupq_n_f32(inv15);
+    // Main loop: process 16 dims per iteration
+    for (; d + 15 < dim; d += 16) {
+        uint8x8_t raw1 = vld1_u8(codes1 + (d >> 1));
+        uint8x8_t raw2 = vld1_u8(codes2 + (d >> 1));
 
-    for (; d + 7 < dim; d += 8) {
-        uint8_t byte1_0 = codes1[d >> 1];
-        uint8_t byte1_1 = codes1[(d >> 1) + 1];
-        uint8_t byte1_2 = codes1[(d >> 1) + 2];
-        uint8_t byte1_3 = codes1[(d >> 1) + 3];
+        uint8x8x2_t z1 = vzip_u8(vand_u8(raw1, mask_0f), vshr_n_u8(raw1, 4));
+        uint8x8x2_t z2 = vzip_u8(vand_u8(raw2, mask_0f), vshr_n_u8(raw2, 4));
 
-        uint8_t byte2_0 = codes2[d >> 1];
-        uint8_t byte2_1 = codes2[(d >> 1) + 1];
-        uint8_t byte2_2 = codes2[(d >> 1) + 2];
-        uint8_t byte2_3 = codes2[(d >> 1) + 3];
+        uint16x8_t u16_1a = vmovl_u8(z1.val[0]);
+        uint16x8_t u16_1b = vmovl_u8(z1.val[1]);
+        float32x4_t c1_0 = vcvtq_f32_u32(vmovl_u16(vget_low_u16(u16_1a)));
+        float32x4_t c1_1 = vcvtq_f32_u32(vmovl_u16(vget_high_u16(u16_1a)));
+        float32x4_t c1_2 = vcvtq_f32_u32(vmovl_u16(vget_low_u16(u16_1b)));
+        float32x4_t c1_3 = vcvtq_f32_u32(vmovl_u16(vget_high_u16(u16_1b)));
 
-        float32x4_t code1_low = {static_cast<float>(byte1_0 & 0x0f),
-                                 static_cast<float>(byte1_0 >> 4),
-                                 static_cast<float>(byte1_1 & 0x0f),
-                                 static_cast<float>(byte1_1 >> 4)};
+        uint16x8_t u16_2a = vmovl_u8(z2.val[0]);
+        uint16x8_t u16_2b = vmovl_u8(z2.val[1]);
+        float32x4_t c2_0 = vcvtq_f32_u32(vmovl_u16(vget_low_u16(u16_2a)));
+        float32x4_t c2_1 = vcvtq_f32_u32(vmovl_u16(vget_high_u16(u16_2a)));
+        float32x4_t c2_2 = vcvtq_f32_u32(vmovl_u16(vget_low_u16(u16_2b)));
+        float32x4_t c2_3 = vcvtq_f32_u32(vmovl_u16(vget_high_u16(u16_2b)));
 
-        float32x4_t code1_high = {static_cast<float>(byte1_2 & 0x0f),
-                                  static_cast<float>(byte1_2 >> 4),
-                                  static_cast<float>(byte1_3 & 0x0f),
-                                  static_cast<float>(byte1_3 >> 4)};
+        float32x4x4_t diff_v = vld1q_f32_x4(diff + d);
+        float32x4x4_t lb_v = vld1q_f32_x4(lower_bound + d);
 
-        float32x4_t code2_low = {static_cast<float>(byte2_0 & 0x0f),
-                                 static_cast<float>(byte2_0 >> 4),
-                                 static_cast<float>(byte2_1 & 0x0f),
-                                 static_cast<float>(byte2_1 >> 4)};
+        float32x4_t y1_0 = vfmaq_f32(lb_v.val[0], vmulq_f32(c1_0, v_inv15), diff_v.val[0]);
+        float32x4_t y1_1 = vfmaq_f32(lb_v.val[1], vmulq_f32(c1_1, v_inv15), diff_v.val[1]);
+        float32x4_t y1_2 = vfmaq_f32(lb_v.val[2], vmulq_f32(c1_2, v_inv15), diff_v.val[2]);
+        float32x4_t y1_3 = vfmaq_f32(lb_v.val[3], vmulq_f32(c1_3, v_inv15), diff_v.val[3]);
 
-        float32x4_t code2_high = {static_cast<float>(byte2_2 & 0x0f),
-                                  static_cast<float>(byte2_2 >> 4),
-                                  static_cast<float>(byte2_3 & 0x0f),
-                                  static_cast<float>(byte2_3 >> 4)};
+        float32x4_t y2_0 = vfmaq_f32(lb_v.val[0], vmulq_f32(c2_0, v_inv15), diff_v.val[0]);
+        float32x4_t y2_1 = vfmaq_f32(lb_v.val[1], vmulq_f32(c2_1, v_inv15), diff_v.val[1]);
+        float32x4_t y2_2 = vfmaq_f32(lb_v.val[2], vmulq_f32(c2_2, v_inv15), diff_v.val[2]);
+        float32x4_t y2_3 = vfmaq_f32(lb_v.val[3], vmulq_f32(c2_3, v_inv15), diff_v.val[3]);
 
-        code1_low = vmulq_f32(code1_low, v_inv15);
-        code1_high = vmulq_f32(code1_high, v_inv15);
-        code2_low = vmulq_f32(code2_low, v_inv15);
-        code2_high = vmulq_f32(code2_high, v_inv15);
+        float32x4_t dd0 = vsubq_f32(y1_0, y2_0);
+        float32x4_t dd1 = vsubq_f32(y1_1, y2_1);
+        float32x4_t dd2 = vsubq_f32(y1_2, y2_2);
+        float32x4_t dd3 = vsubq_f32(y1_3, y2_3);
 
-        float32x4_t diff_low = vld1q_f32(diff + d);
-        float32x4_t diff_high = vld1q_f32(diff + d + 4);
-        float32x4_t lb_low = vld1q_f32(lower_bound + d);
-        float32x4_t lb_high = vld1q_f32(lower_bound + d + 4);
-
-        code1_low = vmlaq_f32(lb_low, code1_low, diff_low);
-        code1_high = vmlaq_f32(lb_high, code1_high, diff_high);
-        code2_low = vmlaq_f32(lb_low, code2_low, diff_low);
-        code2_high = vmlaq_f32(lb_high, code2_high, diff_high);
-
-        float32x4_t diff_vec_low = vsubq_f32(code1_low, code2_low);
-        float32x4_t diff_vec_high = vsubq_f32(code1_high, code2_high);
-
-        sum = vmlaq_f32(sum, diff_vec_low, diff_vec_low);
-        sum = vmlaq_f32(sum, diff_vec_high, diff_vec_high);
+        sum0 = vfmaq_f32(sum0, dd0, dd0);
+        sum1 = vfmaq_f32(sum1, dd1, dd1);
+        sum2 = vfmaq_f32(sum2, dd2, dd2);
+        sum3 = vfmaq_f32(sum3, dd3, dd3);
     }
 
-    float result = vaddvq_f32(sum);
+    // Secondary loop: process 8 dims
+    for (; d + 7 < dim; d += 8) {
+        uint8x8_t raw1 =
+            vreinterpret_u8_u32(vld1_dup_u32(reinterpret_cast<const uint32_t*>(codes1 + (d >> 1))));
+        uint8x8_t raw2 =
+            vreinterpret_u8_u32(vld1_dup_u32(reinterpret_cast<const uint32_t*>(codes2 + (d >> 1))));
+
+        uint8x8x2_t z1 = vzip_u8(vand_u8(raw1, mask_0f), vshr_n_u8(raw1, 4));
+        uint8x8x2_t z2 = vzip_u8(vand_u8(raw2, mask_0f), vshr_n_u8(raw2, 4));
+
+        uint16x8_t u1 = vmovl_u8(z1.val[0]);
+        uint16x8_t u2 = vmovl_u8(z2.val[0]);
+
+        float32x4_t c1a = vcvtq_f32_u32(vmovl_u16(vget_low_u16(u1)));
+        float32x4_t c1b = vcvtq_f32_u32(vmovl_u16(vget_high_u16(u1)));
+        float32x4_t c2a = vcvtq_f32_u32(vmovl_u16(vget_low_u16(u2)));
+        float32x4_t c2b = vcvtq_f32_u32(vmovl_u16(vget_high_u16(u2)));
+
+        float32x4_t diff_a = vld1q_f32(diff + d);
+        float32x4_t diff_b = vld1q_f32(diff + d + 4);
+        float32x4_t lb_a = vld1q_f32(lower_bound + d);
+        float32x4_t lb_b = vld1q_f32(lower_bound + d + 4);
+
+        float32x4_t y1a = vfmaq_f32(lb_a, vmulq_f32(c1a, v_inv15), diff_a);
+        float32x4_t y1b = vfmaq_f32(lb_b, vmulq_f32(c1b, v_inv15), diff_b);
+        float32x4_t y2a = vfmaq_f32(lb_a, vmulq_f32(c2a, v_inv15), diff_a);
+        float32x4_t y2b = vfmaq_f32(lb_b, vmulq_f32(c2b, v_inv15), diff_b);
+
+        float32x4_t da = vsubq_f32(y1a, y2a);
+        float32x4_t db = vsubq_f32(y1b, y2b);
+        sum0 = vfmaq_f32(sum0, da, da);
+        sum1 = vfmaq_f32(sum1, db, db);
+    }
+
+    sum0 = vaddq_f32(vaddq_f32(sum0, sum1), vaddq_f32(sum2, sum3));
+    float result = vaddvq_f32(sum0);
 
     if (d < dim) {
         result += generic::SQ4ComputeCodesL2Sqr(
@@ -1846,11 +2010,12 @@ SQ8UniformComputeCodesIP(const uint8_t* codes1, const uint8_t* codes2, uint64_t 
 }
 
 #if defined(ENABLE_NEON)
-__inline void __attribute__((__always_inline__)) extract_12_bits_to_mask(const uint8_t* bits,
-                                                                         uint64_t bit_offset,
-                                                                         uint32x4_t& mask0,
-                                                                         uint32x4_t& mask1,
-                                                                         uint32x4_t& mask2) {
+__inline void __attribute__((__always_inline__))
+extract_12_bits_to_mask(const uint8_t* bits,
+                        uint64_t bit_offset,
+                        uint32x4_t& mask0,
+                        uint32x4_t& mask1,
+                        uint32x4_t& mask2) {
     uint64_t byte_idx = bit_offset / 8;
     uint64_t bit_start = bit_offset % 8;
 
@@ -1882,10 +2047,11 @@ __inline void __attribute__((__always_inline__)) extract_12_bits_to_mask(const u
                          (mask_bits & 0x800) ? 0xFFFFFFFF : 0};
 }
 
-__inline void __attribute__((__always_inline__)) extract_8_bits_to_mask(const uint8_t* bits,
-                                                                        uint64_t bit_offset,
-                                                                        uint32x4_t& mask0,
-                                                                        uint32x4_t& mask1) {
+__inline void __attribute__((__always_inline__))
+extract_8_bits_to_mask(const uint8_t* bits,
+                       uint64_t bit_offset,
+                       uint32x4_t& mask0,
+                       uint32x4_t& mask1) {
     uint64_t byte_idx = bit_offset / 8;
     uint64_t bit_start = bit_offset % 8;
 
