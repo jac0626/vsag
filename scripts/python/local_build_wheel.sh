@@ -103,12 +103,12 @@ run_build() {
     if $use_uvx; then
       CIBW_BUILD="${cibw_build_pattern}" \
       CIBW_ARCHS="${ARCH}" \
-      CIBW_TEST_COMMAND="pip install numpy && ls -alF /project/ && python /project/tests/python/run_test.py" \
+      CIBW_TEST_COMMAND="pip install numpy pytest && ls -alF /project/ && python /project/tests/python/run_test.py" \
       uvx --python 3.12 --from "cibuildwheel==${cibw_version}" cibuildwheel --platform linux --output-dir wheelhouse python
     else
       CIBW_BUILD="${cibw_build_pattern}" \
       CIBW_ARCHS="${ARCH}" \
-      CIBW_TEST_COMMAND="pip install numpy && ls -alF /project/ && python /project/tests/python/run_test.py" \
+      CIBW_TEST_COMMAND="pip install numpy pytest && ls -alF /project/ && python /project/tests/python/run_test.py" \
       cibuildwheel --platform linux --output-dir wheelhouse python
     fi
   else 
