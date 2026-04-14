@@ -29,12 +29,13 @@ target_include_directories (vsag_diskann_headers INTERFACE
     ${CMAKE_CURRENT_BINARY_DIR}/boost/install/include
     extern/diskann
     extern/diskann/DiskANN/include)
+target_link_libraries (vsag_diskann_headers INTERFACE vsag_openmp)
 
 # not working without FMA
 #set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -mavx2 -mfma -msse2 -ftree-vectorize -fno-builtin-malloc -fno-builtin-calloc -fno-builtin-realloc -fno-builtin-free -fopenmp -fopenmp-simd -funroll-loops -Wfatal-errors -DUSE_AVX2")
 
 add_library (diskann STATIC ${DISKANN_SOURCES})
-target_link_libraries (diskann PUBLIC vsag_diskann_headers)
+target_link_libraries (diskann PUBLIC vsag_diskann_headers PRIVATE vsag_openmp)
 target_compile_options (diskann PRIVATE
     -fdata-sections
     -ffunction-sections
@@ -43,12 +44,15 @@ target_compile_options (diskann PRIVATE
     -fno-builtin-calloc
     -fno-builtin-realloc
     -fno-builtin-free
-    -fopenmp
     -fopenmp-simd
     -funroll-loops
     -Wfatal-errors)
 target_compile_definitions (diskann PRIVATE ENABLE_CUSTOM_LOGGER=1)
-target_link_options (diskann PRIVATE -Wl,--gc-sections)
+if (APPLE)
+    target_link_options (diskann PRIVATE -Wl,-dead_strip)
+else ()
+    target_link_options (diskann PRIVATE -Wl,--gc-sections)
+endif ()
 if (CMAKE_BUILD_TYPE STREQUAL "Release")
     target_compile_options (diskann PRIVATE -g1)
 endif ()

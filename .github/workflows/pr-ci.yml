@@ -64,6 +64,38 @@ jobs:
       - name: Run Clang format check
         run: ./scripts/format/check_format.sh
 
+  build-test-macos:
+    name: Build & Test macOS
+    needs: [changes, format]
+    if: needs.changes.outputs.cpp == 'true'
+    runs-on: macos-15
+    timeout-minutes: 120
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+      HOMEBREW_NO_INSTALL_CLEANUP: '1'
+      VSAG_TEST_BUILD_DIR: ./build-release
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare Env
+        run: bash ./scripts/deps/install_deps_macos.sh
+      - name: Make Release
+        run: make clean-release && make release COMPILE_JOBS=3
+      - name: Run Unittests
+        run: ./scripts/testing/test_parallel_by_name.sh unittests
+      - name: Run Functests
+        run: ./scripts/testing/test_parallel_by_name.sh functests
+      - name: Run Examples
+        run: |
+          cd ./build-release/examples/cpp
+          for example in ./*; do
+            filename=$(basename "$example")
+            if [[ $filename =~ ^[0-9]{3} ]]; then
+              chmod +x "$example"
+              echo "Run $example"
+              "$example"
+            fi
+          done
+
   build-asan-x86:
     name: ASan Build X86
     needs: [changes, format]

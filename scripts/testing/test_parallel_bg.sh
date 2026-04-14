@@ -1,5 +1,6 @@
 #!/bin/bash
 
+test_build_dir="${VSAG_TEST_BUILD_DIR:-./build}"
 pids=()
 exit_codes=()
 logger_files=()
@@ -20,20 +21,20 @@ else
 fi
 echo "addition_tag: ${addition_tag}"
 
-./build/tests/unittests -d yes ${UT_FILTER} -a --order rand --allow-running-no-tests -o "./log/unittest.log" &
+"${test_build_dir}/tests/unittests" -d yes ${UT_FILTER} -a --order rand --allow-running-no-tests -o "./log/unittest.log" &
 pids+=($!)
 logger_files+=("./log/unittest.log")
 
 for tag in ${parallel_tags}
 do
   othertag="~"${tag}${othertag}
-  ./build/tests/functests -d yes ${UT_FILTER} -a --order rand --allow-running-no-tests ${tag} ${addition_tag} -o ./log/${tag}.log &
+  "${test_build_dir}/tests/functests" -d yes ${UT_FILTER} -a --order rand --allow-running-no-tests ${tag} ${addition_tag} -o ./log/${tag}.log &
   pids+=($!)
   logname="./log/"${tag}".log"
   logger_files+=($logname)
 done
 
-./build/tests/functests -d yes ${UT_FILTER} -a --order rand --allow-running-no-tests ${othertag} ${addition_tag} -o ./log/other.log &
+"${test_build_dir}/tests/functests" -d yes ${UT_FILTER} -a --order rand --allow-running-no-tests ${othertag} ${addition_tag} -o ./log/other.log &
 pids+=($!)
 logger_files+=("./log/other.log")
 

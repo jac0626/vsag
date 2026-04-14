@@ -81,9 +81,9 @@ target_compile_options (simd PRIVATE
     -fno-builtin-calloc
     -fno-builtin-realloc
     -fno-builtin-free
-    -fopenmp
     -fopenmp-simd
     -funroll-loops)
+target_link_libraries (simd PRIVATE vsag_openmp)
 
 function (simd_add_definitions flag_variable definition)
     if (${flag_variable})

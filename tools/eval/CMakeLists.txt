@@ -31,10 +31,9 @@ set (eval_srcs
     eval_job.cpp)
 
 add_library (vsag_eval_common INTERFACE)
-target_compile_options (vsag_eval_common INTERFACE -fopenmp)
-target_link_options (vsag_eval_common INTERFACE -fopenmp)
 target_link_libraries (vsag_eval_common INTERFACE
-    pthread
+    Threads::Threads
+    vsag_openmp
     yaml-cpp
     argparse::argparse
     tabulate
@@ -56,5 +55,6 @@ target_link_libraries (eval_performance PRIVATE
     vsag_eval_common
     ${HDF5_CPP_STATIC_LIBRARY}
     ${HDF5_C_STATIC_LIBRARY}
-    z dl)
+    z
+    ${CMAKE_DL_LIBS})
 add_dependencies (eval_performance hdf5)

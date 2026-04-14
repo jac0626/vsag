@@ -68,5 +68,5 @@ add_executable (functests
 )
 target_include_directories (functests PRIVATE
         ${HDF5_INCLUDE_DIRS})
-target_link_libraries (functests PRIVATE Catch2::Catch2 vsag simd)
+target_link_libraries (functests PRIVATE Catch2::Catch2 vsag simd vsag_openmp)
 add_dependencies (functests Catch2)

@@ -3,48 +3,59 @@ set (name openblas)
 set (source_dir ${CMAKE_CURRENT_BINARY_DIR}/${name}/source)
 set (install_dir ${CMAKE_CURRENT_BINARY_DIR}/${name}/install)
 
-option (USE_SYSTEM_OPENBLAS "Use system-installed OpenBLAS instead of building from source" OFF)
+set (_default_use_system_openblas OFF)
+if (APPLE)
+    set (_default_use_system_openblas ON)
+endif ()
+option (USE_SYSTEM_OPENBLAS "Use system-installed OpenBLAS instead of building from source" ${_default_use_system_openblas})
 
 set (OPENBLAS_FOUND FALSE)
 
 if (USE_SYSTEM_OPENBLAS)
+    set (_openblas_lib_search_paths
+        /usr/lib
+        /usr/lib64
+        /usr/lib/x86_64-linux-gnu
+        /usr/lib/aarch64-linux-gnu
+        /usr/local/lib
+        /usr/local/lib64
+        /usr/local/opt/openblas/lib
+        /opt/homebrew/lib
+        /opt/homebrew/opt/openblas/lib)
+    if (DEFINED VSAG_HOMEBREW_OPENBLAS_PREFIX)
+        list (PREPEND _openblas_lib_search_paths "${VSAG_HOMEBREW_OPENBLAS_PREFIX}/lib")
+    endif ()
+
+    set (_openblas_include_search_paths
+        /usr/include
+        /usr/include/openblas
+        /usr/include/x86_64-linux-gnu
+        /usr/include/aarch64-linux-gnu
+        /usr/local/include
+        /usr/local/include/openblas
+        /usr/local/opt/openblas/include
+        /opt/homebrew/include
+        /opt/homebrew/opt/openblas/include)
+    if (DEFINED VSAG_HOMEBREW_OPENBLAS_PREFIX)
+        list (PREPEND _openblas_include_search_paths "${VSAG_HOMEBREW_OPENBLAS_PREFIX}/include")
+    endif ()
+
     # Try to find system-installed OpenBLAS
     find_library (OPENBLAS_LIB
         NAMES openblas
-        PATHS
-            /usr/lib
-            /usr/lib64
-            /usr/lib/x86_64-linux-gnu
-            /usr/lib/aarch64-linux-gnu
-            /usr/local/lib
-            /usr/local/lib64
-            /opt/homebrew/lib
+        PATHS ${_openblas_lib_search_paths}
         NO_DEFAULT_PATH
     )
 
     find_path (OPENBLAS_INCLUDE
         NAMES cblas.h
-        PATHS
-            /usr/include
-            /usr/include/openblas
-            /usr/include/x86_64-linux-gnu
-            /usr/include/aarch64-linux-gnu
-            /usr/local/include
-            /usr/local/include/openblas
-            /opt/homebrew/include
+        PATHS ${_openblas_include_search_paths}
         NO_DEFAULT_PATH
     )
 
     find_path (LAPACKE_INCLUDE
         NAMES lapacke.h
-        PATHS
-            /usr/include
-            /usr/include/openblas
-            /usr/include/x86_64-linux-gnu
-            /usr/include/aarch64-linux-gnu
-            /usr/local/include
-            /usr/local/include/openblas
-            /opt/homebrew/include
+        PATHS ${_openblas_include_search_paths}
         NO_DEFAULT_PATH
     )
 
@@ -57,14 +68,7 @@ if (USE_SYSTEM_OPENBLAS)
         # Try to find LAPACKE library (separate from OpenBLAS on some systems)
         find_library (LAPACKE_LIB
             NAMES lapacke
-            PATHS
-                /usr/lib
-                /usr/lib64
-                /usr/lib/x86_64-linux-gnu
-                /usr/lib/aarch64-linux-gnu
-                /usr/local/lib
-                /usr/local/lib64
-                /opt/homebrew/lib
+            PATHS ${_openblas_lib_search_paths}
             NO_DEFAULT_PATH
         )
 
@@ -107,26 +111,18 @@ if (USE_SYSTEM_OPENBLAS AND OPENBLAS_FOUND)
         list (APPEND BLAS_LIBRARIES "${GFORTRAN_LIB}")
     else ()
         list (APPEND BLAS_LIBRARIES gfortran)
-    endif()
-
-    if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-        list (PREPEND BLAS_LIBRARIES omp)
-    else ()
-        list (PREPEND BLAS_LIBRARIES gomp)
     endif ()
+    list (APPEND BLAS_LIBRARIES vsag_openmp)
 
     message (STATUS "Using system OpenBLAS as BLAS backend: ${OPENBLAS_LIB}")
 else ()
+    set (BLAS_LIBRARIES ${install_dir}/lib/libopenblas.a)
     if (APPLE AND DEFINED GFORTRAN_LIB AND EXISTS "${GFORTRAN_LIB}")
-        set (BLAS_LIBRARIES ${install_dir}/lib/libopenblas.a "${GFORTRAN_LIB}")
+        list (APPEND BLAS_LIBRARIES "${GFORTRAN_LIB}")
     else ()
-        set (BLAS_LIBRARIES ${install_dir}/lib/libopenblas.a gfortran)
+        list (APPEND BLAS_LIBRARIES gfortran)
     endif ()
-    if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-        list (PREPEND BLAS_LIBRARIES omp)
-    else ()
-        list (PREPEND BLAS_LIBRARIES gomp)
-    endif ()
+    list (APPEND BLAS_LIBRARIES vsag_openmp)
     set (OPENBLAS_INCLUDE_DIRS ${install_dir}/include)
     message (STATUS "Enable OpenBLAS as BLAS backend")
 endif ()

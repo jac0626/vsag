@@ -43,13 +43,13 @@ set_target_properties (vsag PROPERTIES
     VISIBILITY_INLINES_HIDDEN OFF)
 
 set (VSAG_DEP_LIBS antlr4-autogen antlr4-runtime diskann simd io quantizer storage utils factory analyzer
-      datacell ${IMPL_LIBS} ${ALGORITHM_LIBS} attr pthread m dl fmt::fmt nlohmann_json::nlohmann_json roaring ${BLAS_LIBRARIES})
+      datacell ${IMPL_LIBS} ${ALGORITHM_LIBS} attr ${VSAG_SYSTEM_LIBS} fmt::fmt nlohmann_json::nlohmann_json roaring ${BLAS_LIBRARIES})
 
 target_link_libraries (vsag
-    PUBLIC vsag_src_common
+    PUBLIC vsag_src_common vsag_openmp
     PRIVATE ${VSAG_DEP_LIBS} coverage_config)
 target_link_libraries (vsag_static
-    PUBLIC vsag_src_common
+    PUBLIC vsag_src_common vsag_openmp
     PRIVATE ${VSAG_DEP_LIBS} coverage_config)
 
 maybe_add_dependencies (vsag antlr4 roaring boost)

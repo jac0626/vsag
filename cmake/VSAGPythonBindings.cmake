@@ -35,7 +35,6 @@ pybind11_add_module (_pyvsag
     python_bindings/module.cpp
     python_bindings/index_binding.cpp
     python_bindings/logging_binding.cpp)
-target_compile_options (_pyvsag PRIVATE -fopenmp)
 target_link_libraries (_pyvsag PRIVATE pybind11::module vsag)
 if (NOT APPLE)
     target_link_options (_pyvsag PRIVATE -static-libgcc)

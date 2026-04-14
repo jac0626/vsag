@@ -13,27 +13,57 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+find_package (Threads REQUIRED)
+set (VSAG_SYSTEM_LIBS Threads::Threads m)
+if (CMAKE_DL_LIBS)
+    list (APPEND VSAG_SYSTEM_LIBS ${CMAKE_DL_LIBS})
+endif ()
+
 if (APPLE)
     set (ld_flags_workaround "-Wl,-rpath,@loader_path")
-    # Find OpenMP - will locate libomp on macOS
-    find_package (OpenMP REQUIRED)
+
+    find_program (BREW_EXECUTABLE NAMES brew PATHS /opt/homebrew/bin /usr/local/bin)
+    foreach (_formula libomp openblas gcc)
+        string (TOUPPER "${_formula}" _formula_upper)
+        if (BREW_EXECUTABLE)
+            execute_process (
+                COMMAND ${BREW_EXECUTABLE} --prefix ${_formula}
+                OUTPUT_VARIABLE _formula_prefix
+                OUTPUT_STRIP_TRAILING_WHITESPACE
+                RESULT_VARIABLE _formula_status
+            )
+            if (_formula_status EQUAL 0 AND EXISTS "${_formula_prefix}")
+                set (VSAG_HOMEBREW_${_formula_upper}_PREFIX "${_formula_prefix}")
+            endif ()
+        endif ()
+    endforeach ()
+
+    if (DEFINED VSAG_HOMEBREW_LIBOMP_PREFIX AND NOT OpenMP_ROOT)
+        set (OpenMP_ROOT "${VSAG_HOMEBREW_LIBOMP_PREFIX}")
+    endif ()
+
+    # Find OpenMP from Homebrew libomp on macOS.
+    find_package (OpenMP REQUIRED COMPONENTS CXX)
     if (OpenMP_CXX_FOUND)
-        message (STATUS "Found OpenMP: ${OpenMP_CXX_INCLUDE_DIRS}")
-        set (CMAKE_C_FLAGS "${CMAKE_C_FLAGS} ${OpenMP_C_FLAGS}")
-        set (CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} ${OpenMP_CXX_FLAGS}")
+        message (STATUS "Found OpenMP CXX flags: ${OpenMP_CXX_FLAGS}")
     endif ()
 
     # Find LAPACK - will automatically use Accelerate framework on macOS
     find_package (LAPACK)
     if (LAPACK_FOUND)
         message (STATUS "Found LAPACK (using Accelerate framework on macOS)")
-        # LAPACK libraries are in LAPACK_LIBRARIES variable
     else ()
         message (WARNING "LAPACK not found")
     endif ()
 
-    # Find gfortran and its library path for OpenBLAS
-    find_program (GFORTRAN_EXECUTABLE NAMES gfortran)
+    # Find gfortran and its library path for OpenBLAS.
+    set (_gfortran_search_paths "")
+    if (DEFINED VSAG_HOMEBREW_GCC_PREFIX)
+        list (APPEND _gfortran_search_paths
+              "${VSAG_HOMEBREW_GCC_PREFIX}/bin"
+              "${VSAG_HOMEBREW_GCC_PREFIX}/lib/gcc/current")
+    endif ()
+    find_program (GFORTRAN_EXECUTABLE NAMES gfortran PATHS ${_gfortran_search_paths})
     if (GFORTRAN_EXECUTABLE)
         execute_process (
             COMMAND ${GFORTRAN_EXECUTABLE} -print-file-name=libgfortran.dylib
@@ -57,9 +87,6 @@ if (APPLE)
     # a bare `gfortran` token (expands to -lgfortran). On macOS libgfortran is often not in the
     # default linker search paths, causing: `ld: library 'gfortran' not found`.
     function (vsag_darwin_fixup_blas_lapack_libs)
-        if (NOT APPLE)
-            return ()
-        endif ()
         if (NOT DEFINED GFORTRAN_LIB OR NOT EXISTS "${GFORTRAN_LIB}")
             return ()
         endif ()
@@ -84,4 +111,10 @@ if (APPLE)
     cmake_language (DEFER CALL vsag_darwin_fixup_blas_lapack_libs)
 else ()
     set (ld_flags_workaround "-Wl,-rpath=\\$\\$ORIGIN")
+    find_package (OpenMP REQUIRED COMPONENTS CXX)
 endif ()
+
+if (NOT TARGET vsag_openmp)
+    add_library (vsag_openmp INTERFACE)
+endif ()
+target_link_libraries (vsag_openmp INTERFACE OpenMP::OpenMP_CXX)

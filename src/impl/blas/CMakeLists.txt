@@ -15,6 +15,7 @@
 
 
 add_library (vsag_blas OBJECT blas_function.cpp)
+target_link_libraries (vsag_blas PRIVATE vsag_openmp)
 if (VSAG_BLAS_BACKEND STREQUAL "openblas")
     if (TARGET vsag_openblas_headers)
         target_link_libraries (vsag_blas PRIVATE vsag_openblas_headers)

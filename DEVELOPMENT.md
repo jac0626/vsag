@@ -24,6 +24,7 @@ docker pull vsaglib/vsag:ubuntu
 - Operating System:
   - Ubuntu 20.04 or later
   - or CentOS 7 or later
+  - or macOS 13 or later
 - Compiler:
   - GCC version 9.4.0 or later
   - or Clang version 13.0.0 or later
@@ -44,6 +45,9 @@ $ ./scripts/deps/install_deps_ubuntu.sh
 
 # for CentOS/AliOS
 $ ./scripts/deps/install_deps_centos.sh
+
+# for macOS
+$ ./scripts/deps/install_deps_macos.sh
 ```
 
 ## VSAG Build Tool

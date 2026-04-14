@@ -1,5 +1,6 @@
 #!/bin/bash
 
+test_build_dir="${VSAG_TEST_BUILD_DIR:-./build}"
 pids=()
 exit_codes=()
 logger_files=()
@@ -23,13 +24,13 @@ fi
 for tag in ${parallel_tags}
 do
   othertag="~"${tag}${othertag}
-  ./build/tests/${testname} -d yes ${UT_FILTER} -a --order rand --allow-running-no-tests ${tag} ${addition_tag} -o ./log/${tag}.log &
+  "${test_build_dir}/tests/${testname}" -d yes ${UT_FILTER} -a --order rand --allow-running-no-tests ${tag} ${addition_tag} -o ./log/${tag}.log &
   pids+=($!)
   logname="./log/"${tag}".log"
   logger_files+=($logname)
 done
 
-./build/tests/${testname} -d yes ${UT_FILTER} -a --order rand --allow-running-no-tests ${othertag} ${addition_tag} -o ./log/other.log &
+"${test_build_dir}/tests/${testname}" -d yes ${UT_FILTER} -a --order rand --allow-running-no-tests ${othertag} ${addition_tag} -o ./log/other.log &
 pids+=($!)
 logger_files+=("./log/other.log")
 

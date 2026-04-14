@@ -20,6 +20,10 @@ set (VSAG_EXTERNAL_C_FLAGS "")
 set (VSAG_EXTERNAL_CXX_FLAGS "")
 set (VSAG_EXTERNAL_EXE_LINKER_FLAGS "")
 set (VSAG_EXTERNAL_SHARED_LINKER_FLAGS "")
+set (VSAG_CXX_COMPILER_IS_CLANG FALSE)
+if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+    set (VSAG_CXX_COMPILER_IS_CLANG TRUE)
+endif ()
 
 if (ENABLE_FUZZ_TEST)
     message (WARNING "ENABLE_FUZZ_TEST is set, but no top-level fuzz targets are currently defined.")
@@ -44,7 +48,7 @@ if (NOT APPLE)
     vsag_add_linker_flag (-static-libstdc++)
 endif ()
 
-if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+if (VSAG_CXX_COMPILER_IS_CLANG)
     vsag_add_c_compile_flag (-gdwarf-4)
     vsag_add_cxx_compile_flag (-gdwarf-4)
 
@@ -79,7 +83,7 @@ if (ENABLE_LIBCXX OR APPLE)
             message (FATAL_ERROR "libc++ or libc++abi not found")
         endif ()
     endif ()
-elseif (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+elseif (VSAG_CXX_COMPILER_IS_CLANG)
     vsag_add_cxx_compile_flag (-stdlib=libstdc++)
 endif ()
 
@@ -107,7 +111,7 @@ elseif (CMAKE_BUILD_TYPE STREQUAL "Sanitize")
     vsag_add_compile_flag (-O2)
 endif ()
 
-if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
+if (VSAG_CXX_COMPILER_IS_CLANG)
     vsag_add_c_compile_flag (-Wno-incompatible-pointer-types-discards-qualifiers)
 endif ()
 
@@ -138,7 +142,7 @@ if (ENABLE_ASAN AND ENABLE_TSAN)
 endif ()
 
 if (ENABLE_ASAN)
-    if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang"
+    if (VSAG_CXX_COMPILER_IS_CLANG
         OR (CMAKE_CXX_COMPILER_ID STREQUAL "GNU" AND NOT CMAKE_CXX_COMPILER_VERSION VERSION_LESS 7.0))
         message (STATUS "Compiling with AddressSanitizer and UndefinedBehaviorSanitizer")
         set (VSAG_SANITIZER_FLAGS
