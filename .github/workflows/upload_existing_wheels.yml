@@ -1,0 +1,73 @@
+name: Upload Existing Wheels
+
+on:
+  workflow_dispatch:
+    inputs:
+      source-run-id:
+        description: "Actions run ID that already produced the wheel artifacts."
+        required: true
+        type: string
+      source-repo:
+        description: "Repository that owns the source run."
+        required: false
+        default: "jac0626/vsag"
+        type: string
+
+permissions:
+  actions: read
+  contents: read
+
+jobs:
+  upload:
+    name: Download and Publish Existing Wheels
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify GitHub CLI
+        run: gh --version
+
+      - name: Download wheel artifacts from source run
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          SOURCE_REPO: ${{ github.event.inputs.source-repo }}
+          SOURCE_RUN_ID: ${{ github.event.inputs.source-run-id }}
+        run: |
+          set -euo pipefail
+
+          mkdir -p dist/raw dist
+
+          artifact_names=$(gh api "repos/${SOURCE_REPO}/actions/runs/${SOURCE_RUN_ID}/artifacts" \
+            --jq '.artifacts[] | select((.expired | not) and (.name | startswith("wheels-"))) | .name')
+
+          if [[ -z "${artifact_names}" ]]; then
+            echo "No non-expired wheel artifacts found for run ${SOURCE_RUN_ID} in ${SOURCE_REPO}."
+            exit 1
+          fi
+
+          while IFS= read -r artifact_name; do
+            [[ -z "${artifact_name}" ]] && continue
+            echo "Downloading artifact: ${artifact_name}"
+            gh run download "${SOURCE_RUN_ID}" --repo "${SOURCE_REPO}" -n "${artifact_name}" -D dist/raw
+          done <<< "${artifact_names}"
+
+          find dist/raw -type f -name '*.whl' -exec cp {} dist/ \;
+
+          wheel_count=$(find dist -maxdepth 1 -type f -name '*.whl' | wc -l | tr -d ' ')
+          if [[ "${wheel_count}" == "0" ]]; then
+            echo "Artifacts were downloaded, but no wheel files were found."
+            exit 1
+          fi
+
+          echo "Collected ${wheel_count} wheel(s):"
+          ls -la dist
+
+      - name: Validate wheels
+        run: |
+          python3 -m pip install --upgrade pip twine
+          python3 -m twine check dist/*
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          skip-existing: true
+          verbose: true
