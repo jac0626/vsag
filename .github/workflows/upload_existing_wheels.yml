@@ -34,7 +34,7 @@ jobs:
         run: |
           set -euo pipefail
 
-          mkdir -p dist/raw dist
+          mkdir -p artifact-downloads dist
 
           artifact_names=$(gh api "repos/${SOURCE_REPO}/actions/runs/${SOURCE_RUN_ID}/artifacts" \
             --jq '.artifacts[] | select((.expired | not) and (.name | startswith("wheels-"))) | .name')
@@ -47,10 +47,10 @@ jobs:
           while IFS= read -r artifact_name; do
             [[ -z "${artifact_name}" ]] && continue
             echo "Downloading artifact: ${artifact_name}"
-            gh run download "${SOURCE_RUN_ID}" --repo "${SOURCE_REPO}" -n "${artifact_name}" -D dist/raw
+            gh run download "${SOURCE_RUN_ID}" --repo "${SOURCE_REPO}" -n "${artifact_name}" -D artifact-downloads
           done <<< "${artifact_names}"
 
-          find dist/raw -type f -name '*.whl' -exec cp {} dist/ \;
+          find artifact-downloads -type f -name '*.whl' -exec cp {} dist/ \;
 
           wheel_count=$(find dist -maxdepth 1 -type f -name '*.whl' | wc -l | tr -d ' ')
           if [[ "${wheel_count}" == "0" ]]; then
