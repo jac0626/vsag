@@ -26,7 +26,7 @@ class CMakeBuild(build_ext):
             "-DENABLE_PYBINDS=ON",
             "-DENABLE_TESTS=OFF",
             f"-DMKL_STATIC_LINK={mkl_static_link}",
-            "-DCMAKE_CXX_FLAGS_RELEASE=-O3 -DNDEBUG -s",
+            "-DCMAKE_CXX_FLAGS_RELEASE=-O3 -DNDEBUG",
         ]
 
         build_args = []

@@ -79,7 +79,7 @@ jobs:
       - name: Prepare Env
         run: bash ./scripts/deps/install_deps_macos.sh
       - name: Make Release
-        run: make clean-release && make release COMPILE_JOBS=3
+        run: make clean-release && make release COMPILE_JOBS=3 VSAG_ENABLE_TESTS=ON VSAG_ENABLE_EXAMPLES=ON
       - name: Run Unittests
         run: ./scripts/testing/test_parallel_by_name.sh unittests
       - name: Run Functests
@@ -95,6 +95,40 @@ jobs:
               "$example"
             fi
           done
+
+  compatibility-macos:
+    name: Check Compatibility macOS
+    needs: [changes, format]
+    if: needs.changes.outputs.cpp == 'true'
+    runs-on: macos-15
+    timeout-minutes: 120
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+      HOMEBREW_NO_INSTALL_CLEANUP: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare Env
+        run: bash ./scripts/deps/install_deps_macos.sh
+      - name: Install GitHub CLI
+        run: |
+          if ! command -v gh >/dev/null 2>&1; then
+            brew install gh
+          fi
+      - name: Download Compatibility Indexes from Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release download compatibility-indexes \
+            --repo antgroup/vsag \
+            --dir /tmp \
+            --pattern "*.index" \
+            --pattern "*.bin" \
+            --pattern "*.json" \
+            || echo "Warning: Failed to download compatibility indexes"
+      - name: Compile Check Compatibility Tools
+        run: make clean-release && make release COMPILE_JOBS=3 VSAG_ENABLE_TOOLS=ON
+      - name: Run Check Compatibility
+        run: bash ./scripts/check_compatibility.sh
 
   build-asan-x86:
     name: ASan Build X86
@@ -169,6 +203,39 @@ jobs:
           compression-level: 1
           retention-days: 1
           overwrite: 'true'
+
+  python-build-test-macos:
+    name: Python Build & Test macOS
+    needs: [changes, format]
+    if: needs.changes.outputs.python == 'true' || needs.changes.outputs.cmake == 'true'
+    runs-on: macos-15
+    timeout-minutes: 120
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: '1'
+      HOMEBREW_NO_INSTALL_CLEANUP: '1'
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare Env
+        run: bash ./scripts/deps/install_deps_macos.sh
+      - name: Make Python Wheel
+        run: make pyvsag
+      - name: Save Wheel
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          path: ./wheelhouse
+          name: wheelhouse-macos-${{ github.run_id }}
+          compression-level: 1
+          retention-days: 1
+          overwrite: 'true'
+      - name: Upload Test Logs
+        if: always()
+        uses: actions/upload-artifact@v5
+        with:
+          name: pytest-logs-macos-${{ github.run_id }}
+          path: ./tests/python/test-output.log
+          retention-days: 30
+          if-no-files-found: ignore
 
   test-asan-x86-unittests:
     name: Test X86 Unittests

@@ -243,11 +243,52 @@ EqualDataset(const vsag::DatasetPtr& data1, const vsag::DatasetPtr& data2) {
     return true;
 }
 
-template <typename T>
 bool
-AreAllPointersDifferent(T* original, T* copy, uint64_t num_elements) {
+AreSparseVectorsDeepCopied(const vsag::SparseVector* original,
+                           const vsag::SparseVector* copy,
+                           uint64_t num_elements) {
+    if (original == copy) {
+        return false;
+    }
     for (uint64_t i = 0; i < num_elements; ++i) {
-        if (std::memcmp(original + i, copy + i, sizeof(T)) == 0) {
+        if (original[i].len_ != 0 &&
+            (original[i].ids_ == copy[i].ids_ || original[i].vals_ == copy[i].vals_)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool
+AreAttributeSetsDeepCopied(const vsag::AttributeSet* original,
+                           const vsag::AttributeSet* copy,
+                           uint64_t num_elements) {
+    if (original == copy) {
+        return false;
+    }
+    for (uint64_t i = 0; i < num_elements; ++i) {
+        if (original[i].attrs_.size() != copy[i].attrs_.size()) {
+            return false;
+        }
+        for (size_t j = 0; j < original[i].attrs_.size(); ++j) {
+            if (original[i].attrs_[j] == copy[i].attrs_[j]) {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
+bool
+ArePathsDeepCopied(const std::string* original, const std::string* copy, uint64_t num_elements) {
+    if (original == copy) {
+        return false;
+    }
+    for (uint64_t i = 0; i < num_elements; ++i) {
+        if (&original[i] == &copy[i]) {
+            return false;
+        }
+        if (not original[i].empty() and original[i].data() == copy[i].data()) {
             return false;
         }
     }
@@ -272,16 +313,16 @@ TEST_CASE("Dataset Copy and Append Test", "[ut][Dataset]") {
     SECTION("Deep Copy") {
         auto use_copy_allocator = GENERATE(true, false);
         std::shared_ptr<vsag::Allocator> copy_allocator =
-            use_allocator ? vsag::Engine::CreateDefaultAllocator() : nullptr;
+            use_copy_allocator ? vsag::Engine::CreateDefaultAllocator() : nullptr;
         auto copy = original->DeepCopy(copy_allocator.get());
         REQUIRE(EqualDataset(original, copy));
-        REQUIRE(AreAllPointersDifferent(
-            original->GetSparseVectors(), copy->GetSparseVectors(), num_elements));
+        REQUIRE(
+            AreSparseVectorsDeepCopied(original->GetSparseVectors(), copy->GetSparseVectors(), num_elements));
 
-        REQUIRE(AreAllPointersDifferent(
+        REQUIRE(AreAttributeSetsDeepCopied(
             original->GetAttributeSets(), copy->GetAttributeSets(), num_elements));
 
-        REQUIRE(AreAllPointersDifferent(original->GetPaths(), copy->GetPaths(), num_elements));
+        REQUIRE(ArePathsDeepCopied(original->GetPaths(), copy->GetPaths(), num_elements));
     }
     SECTION("Append") {
         auto copy = original->DeepCopy();

@@ -40,7 +40,11 @@ IOParameter::GetIOParameterByJson(const JsonType& json) {
             io_ptr = std::make_shared<BufferIOParameter>();
             io_ptr->FromJson(json);
         } else if (type_name == IO_TYPE_VALUE_ASYNC_IO) {
+#if HAVE_LIBAIO
             io_ptr = std::make_shared<AsyncIOParameter>();
+#else
+            io_ptr = std::make_shared<BufferIOParameter>();
+#endif
             io_ptr->FromJson(json);
         } else if (type_name == IO_TYPE_VALUE_MMAP_IO) {
             io_ptr = std::make_shared<MMapIOParameter>();
