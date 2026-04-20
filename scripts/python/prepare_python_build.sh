@@ -14,6 +14,7 @@ if [ -z "$1" ]; then
 fi
 
 PY_VERSION=$1
+VERSION_OVERRIDE=${PYVSAG_VERSION_OVERRIDE:-}
 echo "🚀 Preparing build for Python ${PY_VERSION}..."
 
 # --- Main Logic ---
@@ -23,15 +24,23 @@ echo "   - Installing setuptools_scm to generate version..."
 pip install -q setuptools_scm
 
 echo "   - Generating python/pyvsag/_version.py..."
+if [ -n "$VERSION_OVERRIDE" ]; then
+  echo "   - Using overridden version: ${VERSION_OVERRIDE}"
+fi
 python3 -c "
 import setuptools_scm
+import os
+override = os.environ.get('PYVSAG_VERSION_OVERRIDE')
 try:
-    # Explicitly configure setuptools_scm since pyproject.toml is in a subdir
-    version = setuptools_scm.get_version(
-        root='.',
-        version_scheme='release-branch-semver',
-        local_scheme='no-local-version'
-    )
+    if override:
+        version = override
+    else:
+        # Explicitly configure setuptools_scm since pyproject.toml is in a subdir
+        version = setuptools_scm.get_version(
+            root='.',
+            version_scheme='release-branch-semver',
+            local_scheme='no-local-version'
+        )
 except Exception:
     version = '0.0.0'
 

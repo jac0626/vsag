@@ -3,6 +3,10 @@ name: Build and Publish Wheels
 on:
   workflow_dispatch:
     inputs:
+      package-version:
+        description: 'Package version to publish (e.g., 0.18.5).'
+        required: true
+        type: string
       python-version:
         description: 'Python version to build (e.g., 3.10). If empty, builds all.'
         required: false
@@ -97,6 +101,8 @@ jobs:
           fetch-depth: 0
 
       - name: Prepare build environment
+        env:
+          PYVSAG_VERSION_OVERRIDE: ${{ github.event.inputs.package-version }}
         run: bash ./scripts/python/prepare_python_build.sh ${{ matrix.python-version }}
 
       - name: Build wheels
@@ -132,6 +138,8 @@ jobs:
           fetch-depth: 0
 
       - name: Prepare build environment for Python 3.6
+        env:
+          PYVSAG_VERSION_OVERRIDE: ${{ github.event.inputs.package-version }}
         run: bash ./scripts/python/prepare_python_build.sh 3.6
 
       - name: Build wheels for Python 3.6
@@ -155,7 +163,7 @@ jobs:
     runs-on: ubuntu-latest
     # The `if: always()` ensures this job runs even if one of the build jobs is skipped
     # because its matrix was empty. We check for files later.
-    if: always() && (github.event_name == 'release' || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+    if: always() && (github.event_name == 'workflow_dispatch' || github.event_name == 'release' || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
     steps:
       - uses: actions/download-artifact@v5
         with:
@@ -184,10 +192,11 @@ jobs:
           verbose: true
 
       - name: Publish to PyPI
-        if: steps.list_files.outputs.should_publish == 'true' && github.event_name == 'release' && github.event.action == 'published'
+        if: steps.list_files.outputs.should_publish == 'true' && (github.event_name == 'workflow_dispatch' || (github.event_name == 'release' && github.event.action == 'published'))
         uses: pypa/gh-action-pypi-publish@v1
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
+          skip-existing: true
           verbose: true
 
       - name: Upload to GitHub Release
@@ -195,4 +204,3 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           files: dist/*.whl
-
