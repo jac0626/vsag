@@ -104,6 +104,14 @@ make release
 
 pyvsag 是 VSAG 的 Python 版本。通过 `pip install pyvsag` 下载安装的 wheel 包就是通过 `make pyvsag` 命令构建出来的。
 
+当前的 Python 打包流程会先组装一个临时的发布目录，再从这个目录构建 wheel 与源码包。这样做可以确保 Python 发布产物同时包含 C++ 源码、CMake 文件、Python 绑定代码以及 Python 测试文件。
+
+如果当前机器可以使用 Docker，那么 `make pyvsag` 会优先通过 `cibuildwheel --platform linux` 预检 Linux wheel 的构建链路：
+
+- 在 Linux 开发机上，这等价于本地预检正式发布所用的 manylinux 构建流程；
+- 在 macOS 开发机上，这会把 macOS 机器当作开发环境，优先预检当前架构对应的 Linux wheel，例如 Apple Silicon 默认预检 `linux/aarch64`；
+- 如果 Docker 不可用，则命令会退回到当前主机的原生 wheel 构建流程，这适合快速调试，但不等同于正式发布验证。
+
 ## 环境变量
 
 在 Makefile 文件的开始可以看到一些 VSAG 编译系统定义的环境变量。这些变量可以通过命令行运行 `export` 命令或者 `.bashrc` / `.zshrc` 等文件中的配置修改。
@@ -115,4 +123,3 @@ pyvsag 是 VSAG 的 Python 版本。通过 `pip install pyvsag` 下载安装的 
 - `COMPILE_JOBS` ：编译并行度，默认是 6 并行编译，建议设置成你的 CPU 数以提高编译速度；
 - `DEBUG_BUILD_DIR` ：开发模式产物目录，非必要不修改；
 - `RELEASE_BUILD_DIR` ：发布模式产物目录，非必要不修改；
-

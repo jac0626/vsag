@@ -86,6 +86,13 @@ Build target behavior:
 - `make dev` builds the full developer configuration with tests, examples, tools, Python bindings, and `mockimpl` enabled.
 - `make test`, `make asan`, `make tsan`, and the related parallel test targets automatically enable tests and `mockimpl`.
 - `make release` follows the same minimal defaults as `make debug`. Enable optional components explicitly when needed, for example `make release VSAG_ENABLE_TOOLS=ON`.
+- `make pyvsag` stages a release-style source tree before building. When Docker is available, it uses `cibuildwheel --platform linux` so local preflight follows the same Linux wheel path used for release builds.
+
+Python packaging notes:
+
+- Python releases are built from a staged source tree so wheels and source distributions include the C++ sources, CMake files, Python bindings, and Python tests needed to rebuild the package.
+- Official Python publication remains Linux-only and is performed in GitHub Actions from `v*` tags.
+- macOS is treated as a development host. On Apple Silicon, `make pyvsag` preflights the `linux/aarch64` wheel path locally via Docker; `linux/amd64` remains CI-gated unless you opt into emulation tooling.
 
 ## CMake Build Options
 

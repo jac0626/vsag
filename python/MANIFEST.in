@@ -1,0 +1,15 @@
+include CMakeLists.txt
+include LICENSE
+include README.md
+recursive-include pyvsag *.py
+recursive-include cmake *.cmake
+recursive-include include *
+recursive-include src *
+recursive-include extern *
+recursive-include python_bindings *
+recursive-include scripts/deps *.sh
+recursive-include tests/python *.py *.sh
+global-exclude __pycache__ *.py[cod] .DS_Store
+prune build
+prune build-release
+prune wheelhouse
