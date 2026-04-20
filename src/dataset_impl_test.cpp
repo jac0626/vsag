@@ -316,8 +316,8 @@ TEST_CASE("Dataset Copy and Append Test", "[ut][Dataset]") {
             use_copy_allocator ? vsag::Engine::CreateDefaultAllocator() : nullptr;
         auto copy = original->DeepCopy(copy_allocator.get());
         REQUIRE(EqualDataset(original, copy));
-        REQUIRE(
-            AreSparseVectorsDeepCopied(original->GetSparseVectors(), copy->GetSparseVectors(), num_elements));
+        REQUIRE(AreSparseVectorsDeepCopied(
+            original->GetSparseVectors(), copy->GetSparseVectors(), num_elements));
 
         REQUIRE(AreAttributeSetsDeepCopied(
             original->GetAttributeSets(), copy->GetAttributeSets(), num_elements));
