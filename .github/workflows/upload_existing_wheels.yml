@@ -64,7 +64,7 @@ jobs:
       - name: Validate wheels
         run: |
           python3 -m pip install --upgrade pip twine
-          python3 -m twine check dist/*
+          python3 -m twine check dist/*.whl
 
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
