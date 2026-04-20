@@ -84,6 +84,9 @@ BufferIO::DirectReadImpl(uint64_t size, uint64_t offset, bool& need_release) con
         return nullptr;
     }
     need_release = true;
+    if (size == 0) {
+        return nullptr;
+    }
     auto* buf = reinterpret_cast<uint8_t*>(allocator_->Allocate(size));
     ReadImpl(size, offset, buf);
     return buf;
