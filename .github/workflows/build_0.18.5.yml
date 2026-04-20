@@ -1,0 +1,157 @@
+name: Build and Publish Wheels 0.18.5
+
+on:
+  release:
+    types: [published]
+
+jobs:
+  setup-matrix:
+    name: Determine Build Matrix
+    runs-on: ubuntu-latest
+    outputs:
+      modern_matrix: ${{ steps.set-matrix.outputs.modern_matrix }}
+      py36_matrix: ${{ steps.set-matrix.outputs.py36_matrix }}
+      tag_matches: ${{ steps.set-matrix.outputs.tag_matches }}
+    steps:
+      - id: set-matrix
+        name: Generate Matrix Configuration
+        run: |
+          release_tag="${{ github.event.release.tag_name }}"
+          if [[ "$release_tag" != "v0.18.5" ]]; then
+            echo "Skipping dedicated 0.18.5 workflow for tag '$release_tag'."
+            echo "tag_matches=false" >> $GITHUB_OUTPUT
+            echo "modern_matrix=[]" >> $GITHUB_OUTPUT
+            echo "py36_matrix=[]" >> $GITHUB_OUTPUT
+            exit 0
+          fi
+
+          echo "tag_matches=true" >> $GITHUB_OUTPUT
+          sudo apt-get update && sudo apt-get install -y jq
+
+          full_modern_matrix='[
+            {"python-version": "3.12", "arch": "x86_64", "runner": "ubuntu-latest", "cibw-build-id": "cp312-*"},
+            {"python-version": "3.11", "arch": "x86_64", "runner": "ubuntu-latest", "cibw-build-id": "cp311-*"},
+            {"python-version": "3.10", "arch": "x86_64", "runner": "ubuntu-latest", "cibw-build-id": "cp310-*"},
+            {"python-version": "3.9", "arch": "x86_64", "runner": "ubuntu-latest", "cibw-build-id": "cp39-*"},
+            {"python-version": "3.8", "arch": "x86_64", "runner": "ubuntu-latest", "cibw-build-id": "cp38-*"},
+            {"python-version": "3.7", "arch": "x86_64", "runner": "ubuntu-latest", "cibw-build-id": "cp37-*"},
+            {"python-version": "3.12", "arch": "aarch64", "runner": "ubuntu-22.04-arm", "cibw-build-id": "cp312-*"},
+            {"python-version": "3.11", "arch": "aarch64", "runner": "ubuntu-22.04-arm", "cibw-build-id": "cp311-*"},
+            {"python-version": "3.10", "arch": "aarch64", "runner": "ubuntu-22.04-arm", "cibw-build-id": "cp310-*"},
+            {"python-version": "3.9", "arch": "aarch64", "runner": "ubuntu-22.04-arm", "cibw-build-id": "cp39-*"},
+            {"python-version": "3.8", "arch": "aarch64", "runner": "ubuntu-22.04-arm", "cibw-build-id": "cp38-*"},
+            {"python-version": "3.7", "arch": "aarch64", "runner": "ubuntu-22.04-arm", "cibw-build-id": "cp37-*"}
+          ]'
+
+          full_py36_matrix='[
+            {"arch": "x86_64", "runner": "ubuntu-latest"},
+            {"arch": "aarch64", "runner": "ubuntu-22.04-arm"}
+          ]'
+
+          echo "modern_matrix=$(echo $full_modern_matrix | jq -c .)" >> $GITHUB_OUTPUT
+          echo "py36_matrix=$(echo $full_py36_matrix | jq -c .)" >> $GITHUB_OUTPUT
+
+  build_wheels_modern:
+    name: Build wheels for Python ${{ matrix.python-version }} on ${{ matrix.arch }}
+    needs: setup-matrix
+    if: ${{ needs.setup-matrix.outputs.tag_matches == 'true' && fromJson(needs.setup-matrix.outputs.modern_matrix) != '[]' }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.setup-matrix.outputs.modern_matrix) }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Prepare build environment
+        run: bash ./scripts/python/prepare_python_build.sh ${{ matrix.python-version }}
+
+      - name: Build wheels
+        uses: pypa/cibuildwheel@v2.19.1
+        with:
+          package-dir: python
+        env:
+          CIBW_ARCHS: ${{ matrix.arch }}
+          CIBW_BUILD: ${{ matrix.cibw-build-id }}
+          CIBW_TEST_COMMAND: "pip install numpy && ls -alF /project/ && python /project/tests/python/run_test.py"
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: wheels-${{ matrix.python-version }}-${{ matrix.arch }}
+          path: ./wheelhouse/*.whl
+          if-no-files-found: error
+
+  build_wheels_py36:
+    name: Build wheels for Python 3.6 on ${{ matrix.arch }}
+    needs: setup-matrix
+    if: ${{ needs.setup-matrix.outputs.tag_matches == 'true' && fromJson(needs.setup-matrix.outputs.py36_matrix) != '[]' }}
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include: ${{ fromJson(needs.setup-matrix.outputs.py36_matrix) }}
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.release.tag_name }}
+
+      - name: Prepare build environment for Python 3.6
+        run: bash ./scripts/python/prepare_python_build.sh 3.6
+
+      - name: Build wheels for Python 3.6
+        uses: pypa/cibuildwheel@v2.11.4
+        with:
+          package-dir: python
+        env:
+          CIBW_ARCHS: ${{ matrix.arch }}
+          CIBW_BUILD: "cp36-*"
+          CIBW_TEST_COMMAND: "pip install numpy && ls -alF /project/ && python /project/tests/python/run_test.py"
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: wheels-3.6-${{ matrix.arch }}
+          path: ./wheelhouse/*.whl
+          if-no-files-found: error
+
+  publish:
+    name: Publish packages
+    needs: [setup-matrix, build_wheels_modern, build_wheels_py36]
+    runs-on: ubuntu-latest
+    if: ${{ always() && needs.setup-matrix.outputs.tag_matches == 'true' }}
+    steps:
+      - uses: actions/download-artifact@v5
+        with:
+          path: dist
+          merge-multiple: true
+
+      - name: List distribution files
+        id: list_files
+        run: |
+          if [ -z "$(ls -A dist)" ]; then
+            echo "No build artifacts found. Skipping publish."
+            echo "should_publish=false" >> $GITHUB_OUTPUT
+          else
+            echo "Found artifacts to publish."
+            ls -la dist/
+            echo "should_publish=true" >> $GITHUB_OUTPUT
+          fi
+
+      - name: Publish to PyPI
+        if: steps.list_files.outputs.should_publish == 'true'
+        uses: pypa/gh-action-pypi-publish@v1
+        with:
+          password: ${{ secrets.PYPI_API_TOKEN }}
+          skip-existing: true
+          verbose: true
+
+      - name: Upload to GitHub Release
+        if: steps.list_files.outputs.should_publish == 'true'
+        uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*.whl
