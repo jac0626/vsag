@@ -21,11 +21,11 @@ set (VSAG_UNITTEST_LIBS
 
 set (VSAG_UNITTEST_FORCE_LOAD_LIBS ${VSAG_UNITTEST_LIBS})
 
-if (CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64|x86_64h)$")
+if (TARGET simd_test)
         list (PREPEND VSAG_UNITTEST_LIBS simd_test)
         list (PREPEND VSAG_UNITTEST_FORCE_LOAD_LIBS simd_test)
 else ()
-        message (STATUS "Skipping simd_test linkage in unittests on ${CMAKE_SYSTEM_PROCESSOR}")
+        message (STATUS "Skipping simd_test linkage in unittests because simd_test target is unavailable")
 endif ()
 
 
@@ -59,7 +59,7 @@ if (APPLE)
         "-Wl,-force_load,$<TARGET_FILE:utils_test>"
         "-Wl,-force_load,$<TARGET_FILE:impl_test>"
         )
-        if (TARGET simd_test AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64|x86_64h)$")
+        if (TARGET simd_test)
                 target_link_options (unittests PRIVATE "-Wl,-force_load,$<TARGET_FILE:simd_test>")
         endif ()
 else()
@@ -85,7 +85,7 @@ add_dependencies (unittests
         impl_test
         vsag)
 
-if (TARGET simd_test AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64|x86_64h)$")
+if (TARGET simd_test)
         add_dependencies (unittests simd_test)
 endif ()
 

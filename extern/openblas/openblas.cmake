@@ -135,8 +135,10 @@ if (USE_SYSTEM_OPENBLAS AND OPENBLAS_FOUND)
         list (APPEND BLAS_LIBRARIES ${OPENBLAS_LAPACKE_LIB})
     endif ()
 
-    if (APPLE AND DEFINED GFORTRAN_LIB AND EXISTS "${GFORTRAN_LIB}")
-        list (APPEND BLAS_LIBRARIES "${GFORTRAN_LIB}")
+    if (APPLE)
+        # Homebrew's shared libopenblas already records its libgfortran/libquadmath
+        # dependencies, so adding a bare `gfortran` here only makes ld search for
+        # an extra -lgfortran on macOS and can fail on CI.
     else ()
         list (APPEND BLAS_LIBRARIES gfortran)
     endif()
