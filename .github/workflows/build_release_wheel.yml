@@ -156,7 +156,7 @@ jobs:
     name: Publish packages
     needs: [build_wheels_modern, build_wheels_py36]
     runs-on: ubuntu-latest
-    if: always() && github.event_name == 'release' && github.event.action == 'published'
+    if: ${{ github.event_name == 'release' && github.event.action == 'published' && !contains(needs.*.result, 'failure') && !contains(needs.*.result, 'cancelled') }}
     steps:
       - uses: actions/download-artifact@v5
         with:
