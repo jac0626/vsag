@@ -1,8 +1,40 @@
 name: Build and Publish Wheels
 
 on:
+  workflow_call:
+    inputs:
+      ref:
+        description: Git ref to build from
+        required: false
+        type: string
+      python_version:
+        description: Python version to build. If empty, builds all.
+        required: false
+        type: string
+      arch:
+        description: Architecture to build. If empty, builds all.
+        required: false
+        type: string
+      publish_target:
+        description: Publish destination
+        required: false
+        default: none
+        type: string
+      upload_to_release:
+        description: Whether to upload built wheels to a GitHub release
+        required: false
+        default: false
+        type: boolean
+      release_tag:
+        description: Existing GitHub release tag to attach wheel assets to
+        required: false
+        type: string
   workflow_dispatch:
     inputs:
+      ref:
+        description: 'Git ref to build from (branch, tag, or SHA). Defaults to the triggering ref.'
+        required: false
+        type: string
       python-version:
         description: 'Python version to build (e.g., 3.10). If empty, builds all.'
         required: false
@@ -11,6 +43,12 @@ on:
         description: 'Architecture to build (x86_64 or aarch64). If empty, builds all.'
         required: false
         type: string
+  release:
+    types:
+      - published
+
+permissions:
+  contents: write
 
 jobs:
   setup-matrix:
@@ -20,14 +58,56 @@ jobs:
       modern_matrix: ${{ steps.set-matrix.outputs.modern_matrix }}
       legacy_matrix: ${{ steps.set-matrix.outputs.legacy_matrix }}
       py36_matrix: ${{ steps.set-matrix.outputs.py36_matrix }}
+      checkout_ref: ${{ steps.set-matrix.outputs.checkout_ref }}
+      publish_target: ${{ steps.set-matrix.outputs.publish_target }}
+      upload_to_release: ${{ steps.set-matrix.outputs.upload_to_release }}
+      release_tag: ${{ steps.set-matrix.outputs.release_tag }}
     steps:
       - id: set-matrix
         name: Generate Matrix Configuration
         run: |
           sudo apt-get update && sudo apt-get install -y jq
 
-          py_ver="${{ github.event.inputs.python-version }}"
-          arch="${{ github.event.inputs.arch }}"
+          event_name="${{ github.event_name }}"
+          py_ver=""
+          arch=""
+          checkout_ref=""
+          publish_target="none"
+          upload_to_release="false"
+          release_tag=""
+
+          if [[ "$event_name" == "workflow_call" ]]; then
+            py_ver="${{ inputs.python_version }}"
+            arch="${{ inputs.arch }}"
+            checkout_ref="${{ inputs.ref }}"
+            publish_target="${{ inputs.publish_target }}"
+            upload_to_release="${{ inputs.upload_to_release }}"
+            release_tag="${{ inputs.release_tag }}"
+          elif [[ "$event_name" == "workflow_dispatch" ]]; then
+            py_ver="${{ github.event.inputs['python-version'] }}"
+            arch="${{ github.event.inputs.arch }}"
+            checkout_ref="${{ github.event.inputs.ref }}"
+          elif [[ "$event_name" == "release" ]]; then
+            checkout_ref="${{ github.event.release.tag_name }}"
+            publish_target="pypi"
+            upload_to_release="true"
+            release_tag="${{ github.event.release.tag_name }}"
+          fi
+
+          if [[ -z "$checkout_ref" ]]; then
+            checkout_ref="${{ github.sha }}"
+          fi
+          if [[ -z "$publish_target" ]]; then
+            publish_target="none"
+          fi
+          if [[ -z "$upload_to_release" ]]; then
+            upload_to_release="false"
+          fi
+
+          echo "checkout_ref=$checkout_ref" >> $GITHUB_OUTPUT
+          echo "publish_target=$publish_target" >> $GITHUB_OUTPUT
+          echo "upload_to_release=$upload_to_release" >> $GITHUB_OUTPUT
+          echo "release_tag=$release_tag" >> $GITHUB_OUTPUT
 
           # --- Define Full Matrix for Modern Python ---
           # --- Modern: Python 3.8-3.14 (cibuildwheel 3.x) ---
@@ -69,7 +149,7 @@ jobs:
             echo "$matrix_json" | jq -c "$expr"
           }
 
-          if [[ "${{ github.event_name }}" != "workflow_dispatch" || ( -z "$py_ver" && -z "$arch" ) ]]; then
+          if [[ "$event_name" != "workflow_dispatch" && "$event_name" != "workflow_call" ]] || [[ -z "$py_ver" && -z "$arch" ]]; then
             echo "Running full matrix for all versions."
             echo "modern_matrix=$(echo $full_modern_matrix | jq -c .)" >> $GITHUB_OUTPUT
             echo "legacy_matrix=$(echo $full_legacy_matrix | jq -c .)" >> $GITHUB_OUTPUT
@@ -117,6 +197,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ needs.setup-matrix.outputs.checkout_ref }}
 
       - name: Prepare build environment
         run: bash ./scripts/python/prepare_python_build.sh ${{ matrix.python-version }}
@@ -150,6 +231,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ needs.setup-matrix.outputs.checkout_ref }}
 
       - name: Prepare build environment
         run: bash ./scripts/python/prepare_python_build.sh ${{ matrix.python-version }}
@@ -197,6 +279,7 @@ jobs:
       - uses: actions/checkout@v4
         with:
           fetch-depth: 0
+          ref: ${{ needs.setup-matrix.outputs.checkout_ref }}
 
       - name: Prepare build environment for Python 3.6
         run: bash ./scripts/python/prepare_python_build.sh 3.6
@@ -232,11 +315,15 @@ jobs:
 
   publish:
     name: Publish packages
-    needs: [build_wheels_modern, build_wheels_legacy, build_wheels_py36]
+    needs: [setup-matrix, build_wheels_modern, build_wheels_legacy, build_wheels_py36]
     runs-on: ubuntu-latest
-    # The `if: always()` ensures this job runs even if one of the build jobs is skipped
-    # because its matrix was empty. We check for files later.
-    if: always() && (github.event_name == 'release' || (github.event_name == 'push' && github.ref == 'refs/heads/main'))
+    if: >-
+      ${{
+        always() &&
+        !failure() &&
+        !cancelled() &&
+        needs.setup-matrix.outputs.publish_target != 'none'
+      }}
     steps:
       - uses: actions/download-artifact@v5
         with:
@@ -256,7 +343,7 @@ jobs:
           fi
 
       - name: Publish to TestPyPI
-        if: steps.list_files.outputs.should_publish == 'true' && github.event_name == 'push'
+        if: steps.list_files.outputs.should_publish == 'true' && needs.setup-matrix.outputs.publish_target == 'testpypi'
         uses: pypa/gh-action-pypi-publish@v1
         with:
           repository-url: https://test.pypi.org/legacy/
@@ -265,15 +352,20 @@ jobs:
           verbose: true
 
       - name: Publish to PyPI
-        if: steps.list_files.outputs.should_publish == 'true' && github.event_name == 'release' && github.event.action == 'published'
+        if: steps.list_files.outputs.should_publish == 'true' && needs.setup-matrix.outputs.publish_target == 'pypi'
         uses: pypa/gh-action-pypi-publish@v1
         with:
           password: ${{ secrets.PYPI_API_TOKEN }}
           verbose: true
 
       - name: Upload to GitHub Release
-        if: steps.list_files.outputs.should_publish == 'true' && github.event_name == 'release' && github.event.action == 'published'
+        if: >-
+          ${{
+            steps.list_files.outputs.should_publish == 'true' &&
+            needs.setup-matrix.outputs.upload_to_release == 'true' &&
+            needs.setup-matrix.outputs.release_tag != ''
+          }}
         uses: softprops/action-gh-release@v2
         with:
+          tag_name: ${{ needs.setup-matrix.outputs.release_tag }}
           files: dist/*.whl
-

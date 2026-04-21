@@ -13,6 +13,26 @@ on:
         description: 'The tag for the new release (e.g., v1.0.0)'
         required: true
         type: string
+      python_publish_target:
+        description: 'Where to publish Python wheels during this release.'
+        required: false
+        default: 'pypi'
+        type: choice
+        options:
+          - pypi
+          - testpypi
+          - none
+      python-version:
+        description: 'Optional Python version filter for wheel publishing tests.'
+        required: false
+        type: string
+      arch:
+        description: 'Optional architecture filter for wheel publishing tests.'
+        required: false
+        type: string
+
+permissions:
+  contents: write
 
 jobs:
   build-and-release:
@@ -53,3 +73,17 @@ jobs:
           prerelease: false
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  publish-python-packages:
+    name: Publish Python packages
+    needs: build-and-release
+    if: ${{ github.event.inputs.python_publish_target != 'none' }}
+    uses: ./.github/workflows/build_release_wheel.yml
+    with:
+      ref: ${{ github.event.inputs.tag_name }}
+      python_version: ${{ github.event.inputs['python-version'] }}
+      arch: ${{ github.event.inputs.arch }}
+      publish_target: ${{ github.event.inputs.python_publish_target }}
+      upload_to_release: true
+      release_tag: ${{ github.event.inputs.tag_name }}
+    secrets: inherit
