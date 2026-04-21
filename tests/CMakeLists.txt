@@ -21,11 +21,11 @@ set (VSAG_UNITTEST_LIBS
 
 set (VSAG_UNITTEST_FORCE_LOAD_LIBS ${VSAG_UNITTEST_LIBS})
 
-if (TARGET simd_test)
+if (CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64|x86_64h)$")
         list (PREPEND VSAG_UNITTEST_LIBS simd_test)
         list (PREPEND VSAG_UNITTEST_FORCE_LOAD_LIBS simd_test)
 else ()
-        message (STATUS "Skipping simd_test linkage in unittests because simd_test target is unavailable")
+        message (STATUS "Skipping simd_test linkage in unittests on ${CMAKE_SYSTEM_PROCESSOR}")
 endif ()
 
 
@@ -48,6 +48,7 @@ target_link_libraries (unittests
 if (APPLE)
         # Ensure static test libraries are not dead-stripped on macOS.
         target_link_options (unittests PRIVATE
+        "-Wl,-no_warn_duplicate_libraries"
         "-Wl,-force_load,$<TARGET_FILE:vsag_test>"
         "-Wl,-force_load,$<TARGET_FILE:algorithm_test>"
         "-Wl,-force_load,$<TARGET_FILE:factory_test>"
@@ -59,7 +60,7 @@ if (APPLE)
         "-Wl,-force_load,$<TARGET_FILE:utils_test>"
         "-Wl,-force_load,$<TARGET_FILE:impl_test>"
         )
-        if (TARGET simd_test)
+        if (TARGET simd_test AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64|x86_64h)$")
                 target_link_options (unittests PRIVATE "-Wl,-force_load,$<TARGET_FILE:simd_test>")
         endif ()
 else()
@@ -85,7 +86,7 @@ add_dependencies (unittests
         impl_test
         vsag)
 
-if (TARGET simd_test)
+if (TARGET simd_test AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64|x86_64h)$")
         add_dependencies (unittests simd_test)
 endif ()
 
@@ -104,4 +105,7 @@ target_link_libraries (functests PRIVATE
         vsag 
         simd
 )
+if (APPLE)
+        target_link_options (functests PRIVATE "-Wl,-no_warn_duplicate_libraries")
+endif ()
 add_dependencies (functests Catch2)

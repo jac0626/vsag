@@ -64,8 +64,8 @@ jobs:
       - name: Run Clang format check
         run: ./scripts/format/check_format.sh
 
-  build-test-macos:
-    name: macOS Build & Test
+  build-macos:
+    name: Build macOS
     needs: [changes, format]
     if: needs.changes.outputs.cpp == 'true'
     runs-on: macos-15
@@ -79,9 +79,110 @@ jobs:
       - name: Check Environment
         run: bash ./scripts/check_environment.sh
       - name: Make Debug
-        run: make debug COMPILE_JOBS=3
-      - name: Make Test
-        run: make test COMPILE_JOBS=3
+        run: make debug COMPILE_JOBS=3 VSAG_ENABLE_TESTS=ON VSAG_ENABLE_EXAMPLES=ON VSAG_ENABLE_MOCKIMPL=ON
+      - name: Save Build
+        uses: actions/upload-artifact@v5
+        with:
+          path: ./build
+          name: build-macos-${{ github.run_id }}
+          compression-level: 1
+          retention-days: 1
+          overwrite: 'true'
+
+  test-macos-unittests:
+    name: Test macOS Unittests
+    needs: [changes, build-macos]
+    if: needs.changes.outputs.cpp == 'true'
+    runs-on: macos-15
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: 1
+      HOMEBREW_NO_INSTALL_CLEANUP: 1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare Env
+        run: bash ./scripts/deps/install_deps_macos.sh
+      - name: Clean Env
+        run: rm -rf ./build ./log
+      - name: Download Build
+        uses: actions/download-artifact@v5
+        with:
+          name: build-macos-${{ github.run_id }}
+          path: ./build
+      - name: Run Unittests
+        run: |
+          chmod +x ./build/tests/unittests
+          ./scripts/testing/test_parallel_by_name.sh unittests
+      - name: Upload Log
+        uses: actions/upload-artifact@v5
+        with:
+          path: ./log
+          name: log-macos-unittests-${{ github.run_id }}
+          compression-level: 1
+          retention-days: 3
+          overwrite: 'true'
+
+  test-macos-functests:
+    name: Test macOS Functests
+    needs: [changes, build-macos]
+    if: needs.changes.outputs.cpp == 'true'
+    runs-on: macos-15
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: 1
+      HOMEBREW_NO_INSTALL_CLEANUP: 1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare Env
+        run: bash ./scripts/deps/install_deps_macos.sh
+      - name: Clean Env
+        run: rm -rf ./build ./log
+      - name: Download Build
+        uses: actions/download-artifact@v5
+        with:
+          name: build-macos-${{ github.run_id }}
+          path: ./build
+      - name: Run Functests
+        run: |
+          chmod +x ./build/tests/functests
+          ./scripts/testing/test_parallel_by_name.sh functests
+      - name: Upload Log
+        uses: actions/upload-artifact@v5
+        with:
+          path: ./log
+          name: log-macos-functests-${{ github.run_id }}
+          compression-level: 1
+          retention-days: 3
+          overwrite: 'true'
+
+  test-example-macos:
+    name: Test Example macOS
+    needs: [changes, build-macos]
+    if: needs.changes.outputs.cpp == 'true'
+    runs-on: macos-15
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: 1
+      HOMEBREW_NO_INSTALL_CLEANUP: 1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare Env
+        run: bash ./scripts/deps/install_deps_macos.sh
+      - name: Clean Env
+        run: rm -rf ./build
+      - name: Download Build
+        uses: actions/download-artifact@v5
+        with:
+          name: build-macos-${{ github.run_id }}
+          path: ./build
+      - name: Run Examples
+        run: |
+          cd ./build/examples/cpp
+          for example in ./*; do
+            filename=$(basename "$example")
+            if [[ $filename =~ ^[0-9]{3} ]]; then
+              chmod +x $example
+              echo "Run $example"
+              $example
+            fi
+          done
 
   build-asan-x86:
     name: ASan Build X86
