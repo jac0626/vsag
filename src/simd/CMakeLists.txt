@@ -81,8 +81,6 @@ target_compile_options (simd PRIVATE
     -fno-builtin-calloc
     -fno-builtin-realloc
     -fno-builtin-free
-    -fopenmp
-    -fopenmp-simd
     -funroll-loops)
 
 function (simd_add_definitions flag_variable definition)
@@ -100,7 +98,7 @@ simd_add_definitions (DIST_CONTAINS_NEON -DENABLE_NEON=1)
 simd_add_definitions (DIST_CONTAINS_SVE -DENABLE_SVE=1)
 
 target_link_libraries (simd
-    PRIVATE cpuinfo
+    PRIVATE cpuinfo OpenMP::OpenMP_CXX
     INTERFACE coverage_config)
 add_dependencies (simd cpuinfo)
 install (TARGETS simd ARCHIVE DESTINATION lib)

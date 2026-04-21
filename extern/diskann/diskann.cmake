@@ -43,12 +43,14 @@ target_compile_options (diskann PRIVATE
     -fno-builtin-calloc
     -fno-builtin-realloc
     -fno-builtin-free
-    -fopenmp
-    -fopenmp-simd
     -funroll-loops
     -Wfatal-errors)
 target_compile_definitions (diskann PRIVATE ENABLE_CUSTOM_LOGGER=1)
-target_link_options (diskann PRIVATE -Wl,--gc-sections)
+if (APPLE)
+    target_link_options (diskann PRIVATE -Wl,-dead_strip)
+else ()
+    target_link_options (diskann PRIVATE -Wl,--gc-sections)
+endif ()
 if (CMAKE_BUILD_TYPE STREQUAL "Release")
     target_compile_options (diskann PRIVATE -g1)
 endif ()
@@ -71,7 +73,7 @@ else ()
 endif ()
 set_property (TARGET diskann PROPERTY CXX_STANDARD 17)
 add_dependencies (diskann boost)
-target_link_libraries (diskann PRIVATE ${BLAS_LIBRARIES})
+target_link_libraries (diskann PRIVATE OpenMP::OpenMP_CXX ${BLAS_LIBRARIES})
 
 install (
     TARGETS diskann

@@ -20,9 +20,24 @@
 
 #include <filesystem>
 
+#include "async_io_parameter.h"
 #include "io_syscall.h"
 
 namespace vsag {
+namespace {
+std::string
+resolve_buffer_io_path(const IOParamPtr& param) {
+    if (auto buffer_param = std::dynamic_pointer_cast<BufferIOParameter>(param)) {
+        return buffer_param->path_;
+    }
+#if !HAVE_LIBAIO
+    if (auto async_param = std::dynamic_pointer_cast<AsyncIOParameter>(param)) {
+        return async_param->path_;
+    }
+#endif
+    throw VsagException(ErrorType::INTERNAL_ERROR, "invalid io parameter for BufferIO");
+}
+}  // namespace
 
 BufferIO::BufferIO(std::string filename, Allocator* allocator)
     : BasicIO<BufferIO>(allocator), filepath_(std::move(filename)) {
@@ -42,7 +57,7 @@ BufferIO::BufferIO(const BufferIOParameterPtr& io_param, const IndexCommonParam&
     : BufferIO(io_param->path_, common_param.allocator_.get()){};
 
 BufferIO::BufferIO(const IOParamPtr& param, const IndexCommonParam& common_param)
-    : BufferIO(std::dynamic_pointer_cast<BufferIOParameter>(param), common_param){};
+    : BufferIO(resolve_buffer_io_path(param), common_param.allocator_.get()){};
 
 void
 BufferIO::WriteImpl(const uint8_t* data, uint64_t size, uint64_t offset) {
@@ -84,6 +99,9 @@ BufferIO::DirectReadImpl(uint64_t size, uint64_t offset, bool& need_release) con
         return nullptr;
     }
     need_release = true;
+    if (size == 0) {
+        return nullptr;
+    }
     auto* buf = reinterpret_cast<uint8_t*>(allocator_->Allocate(size));
     ReadImpl(size, offset, buf);
     return buf;

@@ -24,9 +24,11 @@ docker pull vsaglib/vsag:ubuntu
 - Operating System:
   - Ubuntu 20.04 or later
   - or CentOS 7 or later
+  - or macOS with Xcode Command Line Tools installed
 - Compiler:
   - GCC version 9.4.0 or later
   - or Clang version 13.0.0 or later
+  - or Apple Clang from Xcode Command Line Tools on macOS
 - Build Tools: 
   - CMake version 3.18.0 or later
   - clang-tidy version 15 EXACTLY (not higher, not lower - required for consistent lint diagnostics)
@@ -44,7 +46,43 @@ $ ./scripts/deps/install_deps_ubuntu.sh
 
 # for CentOS/AliOS
 $ ./scripts/deps/install_deps_centos.sh
+
+# for macOS
+$ ./scripts/deps/install_deps_macos.sh
 ```
+
+### macOS Development Notes
+
+VSAG's macOS development flow is validated in PR CI on GitHub Actions `macos-15`.
+
+Before installing Homebrew dependencies, install Xcode Command Line Tools:
+
+```bash
+xcode-select --install
+```
+
+Then install dependencies, inspect the detected environment, and run the validated build path:
+
+```bash
+./scripts/deps/install_deps_macos.sh
+./scripts/check_environment.sh
+make debug
+make test
+```
+
+On macOS, `make test` mirrors PR CI validation: it runs the debug suite in parallel and skips Catch2
+`[daily]` cases by default. If you need exhaustive daily coverage, invoke `./build/tests/unittests`
+and `./build/tests/functests` directly after `make debug`.
+
+macOS-specific limitations that remain unchanged in this flow:
+
+- `libaio` is disabled.
+- Intel MKL is not supported.
+- `mockimpl` targets are skipped.
+- coverage, ASan, and TSan are not part of the validated macOS path.
+- local `fmt`/`lint` are not part of the validated macOS path in CI.
+
+When Homebrew `openblas` is installed, macOS builds use that package automatically.
 
 ## VSAG Build Tool
 VSAG project use the Unix Makefiles to compile, package and install the library. Here is the commands below:

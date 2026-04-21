@@ -7,6 +7,30 @@ option (USE_SYSTEM_OPENBLAS "Use system-installed OpenBLAS instead of building f
 
 set (OPENBLAS_FOUND FALSE)
 
+function (vsag_prepend_openmp_runtime out_var)
+    set (_libs ${ARGN})
+
+    if (CMAKE_CXX_COMPILER_ID MATCHES "Clang")
+        if (APPLE)
+            if (TARGET OpenMP::OpenMP_CXX)
+                list (PREPEND _libs OpenMP::OpenMP_CXX)
+            elseif (OpenMP_libomp_LIBRARY)
+                list (PREPEND _libs "${OpenMP_libomp_LIBRARY}")
+            elseif (OpenMP_CXX_LIBRARIES)
+                list (PREPEND _libs ${OpenMP_CXX_LIBRARIES})
+            else ()
+                list (PREPEND _libs omp)
+            endif ()
+        else ()
+            list (PREPEND _libs omp)
+        endif ()
+    else ()
+        list (PREPEND _libs gomp)
+    endif ()
+
+    set (${out_var} "${_libs}" PARENT_SCOPE)
+endfunction ()
+
 if (USE_SYSTEM_OPENBLAS)
     # Try to find system-installed OpenBLAS
     find_library (OPENBLAS_LIB
@@ -17,7 +41,9 @@ if (USE_SYSTEM_OPENBLAS)
             /usr/lib/x86_64-linux-gnu
             /usr/lib/aarch64-linux-gnu
             /usr/local/lib
+            /usr/local/opt/openblas/lib
             /usr/local/lib64
+            /opt/homebrew/opt/openblas/lib
             /opt/homebrew/lib
         NO_DEFAULT_PATH
     )
@@ -31,6 +57,8 @@ if (USE_SYSTEM_OPENBLAS)
             /usr/include/aarch64-linux-gnu
             /usr/local/include
             /usr/local/include/openblas
+            /usr/local/opt/openblas/include
+            /opt/homebrew/opt/openblas/include
             /opt/homebrew/include
         NO_DEFAULT_PATH
     )
@@ -44,6 +72,8 @@ if (USE_SYSTEM_OPENBLAS)
             /usr/include/aarch64-linux-gnu
             /usr/local/include
             /usr/local/include/openblas
+            /usr/local/opt/openblas/include
+            /opt/homebrew/opt/openblas/include
             /opt/homebrew/include
         NO_DEFAULT_PATH
     )
@@ -63,7 +93,9 @@ if (USE_SYSTEM_OPENBLAS)
                 /usr/lib/x86_64-linux-gnu
                 /usr/lib/aarch64-linux-gnu
                 /usr/local/lib
+                /usr/local/opt/openblas/lib
                 /usr/local/lib64
+                /opt/homebrew/opt/openblas/lib
                 /opt/homebrew/lib
             NO_DEFAULT_PATH
         )
@@ -109,11 +141,7 @@ if (USE_SYSTEM_OPENBLAS AND OPENBLAS_FOUND)
         list (APPEND BLAS_LIBRARIES gfortran)
     endif()
 
-    if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-        list (PREPEND BLAS_LIBRARIES omp)
-    else ()
-        list (PREPEND BLAS_LIBRARIES gomp)
-    endif ()
+    vsag_prepend_openmp_runtime (BLAS_LIBRARIES ${BLAS_LIBRARIES})
 
     message (STATUS "Using system OpenBLAS as BLAS backend: ${OPENBLAS_LIB}")
 else ()
@@ -122,11 +150,7 @@ else ()
     else ()
         set (BLAS_LIBRARIES ${install_dir}/lib/libopenblas.a gfortran)
     endif ()
-    if (CMAKE_CXX_COMPILER_ID STREQUAL "Clang")
-        list (PREPEND BLAS_LIBRARIES omp)
-    else ()
-        list (PREPEND BLAS_LIBRARIES gomp)
-    endif ()
+    vsag_prepend_openmp_runtime (BLAS_LIBRARIES ${BLAS_LIBRARIES})
     set (OPENBLAS_INCLUDE_DIRS ${install_dir}/include)
     message (STATUS "Enable OpenBLAS as BLAS backend")
 endif ()

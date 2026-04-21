@@ -15,6 +15,19 @@
 
 # fixtures is already added by top-level CMakeLists.txt before src
 
+set (VSAG_UNITTEST_LIBS
+        vsag_test algorithm_test factory_test attr_test
+        datacell_test quantizer_test storage_test io_test utils_test impl_test)
+
+set (VSAG_UNITTEST_FORCE_LOAD_LIBS ${VSAG_UNITTEST_LIBS})
+
+if (CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64|x86_64h)$")
+        list (PREPEND VSAG_UNITTEST_LIBS simd_test)
+        list (PREPEND VSAG_UNITTEST_FORCE_LOAD_LIBS simd_test)
+else ()
+        message (STATUS "Skipping simd_test linkage in unittests on ${CMAKE_SYSTEM_PROCESSOR}")
+endif ()
+
 
 #  unittests
 add_executable (unittests
@@ -28,15 +41,13 @@ add_executable (unittests
 target_link_libraries (unittests
         PRIVATE
         Catch2::Catch2 
-        simd_test vsag_test algorithm_test factory_test attr_test
-        datacell_test quantizer_test storage_test io_test utils_test impl_test
+        ${VSAG_UNITTEST_LIBS}
         vsag_static
 )
 
 if (APPLE)
         # Ensure static test libraries are not dead-stripped on macOS.
         target_link_options (unittests PRIVATE
-        "-Wl,-force_load,$<TARGET_FILE:simd_test>"
         "-Wl,-force_load,$<TARGET_FILE:vsag_test>"
         "-Wl,-force_load,$<TARGET_FILE:algorithm_test>"
         "-Wl,-force_load,$<TARGET_FILE:factory_test>"
@@ -48,17 +59,35 @@ if (APPLE)
         "-Wl,-force_load,$<TARGET_FILE:utils_test>"
         "-Wl,-force_load,$<TARGET_FILE:impl_test>"
         )
+        if (TARGET simd_test AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64|x86_64h)$")
+                target_link_options (unittests PRIVATE "-Wl,-force_load,$<TARGET_FILE:simd_test>")
+        endif ()
 else()
         target_link_libraries (unittests
                         PRIVATE
                         "-Wl,--whole-archive"
-                        simd_test vsag_test algorithm_test factory_test attr_test
-                        datacell_test quantizer_test storage_test io_test utils_test impl_test
+                        ${VSAG_UNITTEST_LIBS}
                         "-Wl,--no-whole-archive"
         )
 endif()
 
-add_dependencies (unittests Catch2 vsag)
+add_dependencies (unittests
+        Catch2
+        vsag_test
+        algorithm_test
+        factory_test
+        attr_test
+        datacell_test
+        quantizer_test
+        storage_test
+        io_test
+        utils_test
+        impl_test
+        vsag)
+
+if (TARGET simd_test AND CMAKE_SYSTEM_PROCESSOR MATCHES "^(x86_64|amd64|AMD64|x86_64h)$")
+        add_dependencies (unittests simd_test)
+endif ()
 
 # function tests
 file (GLOB FUNCTION_TESTS "test_*.cpp")

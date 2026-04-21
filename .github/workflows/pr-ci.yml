@@ -64,6 +64,25 @@ jobs:
       - name: Run Clang format check
         run: ./scripts/format/check_format.sh
 
+  build-test-macos:
+    name: macOS Build & Test
+    needs: [changes, format]
+    if: needs.changes.outputs.cpp == 'true'
+    runs-on: macos-15
+    env:
+      HOMEBREW_NO_AUTO_UPDATE: 1
+      HOMEBREW_NO_INSTALL_CLEANUP: 1
+    steps:
+      - uses: actions/checkout@v4
+      - name: Prepare Env
+        run: bash ./scripts/deps/install_deps_macos.sh
+      - name: Check Environment
+        run: bash ./scripts/check_environment.sh
+      - name: Make Debug
+        run: make debug COMPILE_JOBS=3
+      - name: Make Test
+        run: make test COMPILE_JOBS=3
+
   build-asan-x86:
     name: ASan Build X86
     needs: [changes, format]

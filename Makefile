@@ -26,7 +26,21 @@ VSAG_CMAKE_ARGS := ${VSAG_CMAKE_ARGS} -G ${CMAKE_GENERATOR} -S.
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
-  VSAG_CMAKE_ARGS := ${VSAG_CMAKE_ARGS} -DENABLE_LIBCXX=ON -DENABLE_WERROR=OFF -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
+  VSAG_CMAKE_ARGS := ${VSAG_CMAKE_ARGS} -DENABLE_LIBCXX=ON -DENABLE_WERROR=OFF -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++ -DENABLE_LIBAIO=OFF -DUSE_SYSTEM_OPENBLAS=ON
+endif
+
+RUN_DEBUG_MOCKIMPL_TESTS = ./build/mockimpl/tests_mockimpl -d yes ${UT_FILTER} --allow-running-no-tests ${UT_SHARD}
+RUN_RELEASE_MOCKIMPL_TESTS = @${RELEASE_BUILD_DIR}/mockimpl/tests_mockimpl -d yes "~[daily]"
+RUN_DEBUG_TESTS = ./build/tests/unittests -d yes ${UT_FILTER} --allow-running-no-tests ${UT_SHARD}
+RUN_DEBUG_FUNCTESTS = ./build/tests/functests -d yes ${UT_FILTER} --allow-running-no-tests ${UT_SHARD}
+RUN_MACOS_PARALLEL_TESTS = UT_FILTER=${UT_FILTER} ./scripts/testing/test_parallel_bg.sh "~[daily]"
+ifeq ($(UNAME_S),Darwin)
+  RUN_DEBUG_MOCKIMPL_TESTS = @echo "Skipping mockimpl tests on macOS."
+  RUN_RELEASE_MOCKIMPL_TESTS = @echo "Skipping mockimpl tests on macOS."
+  ifeq ($(strip $(CASE)$(SHARD)),)
+    RUN_DEBUG_TESTS = ${RUN_MACOS_PARALLEL_TESTS}
+    RUN_DEBUG_FUNCTESTS = @true
+  endif
 endif
 
 UT_FILTER = ""
@@ -62,9 +76,9 @@ dev:                     ## Build full developer configuration.
 test:                    ## Build and run unit tests.
 	cmake ${VSAG_CMAKE_ARGS} -B${DEBUG_BUILD_DIR} -DCMAKE_BUILD_TYPE=Debug -DENABLE_ASAN=OFF -DENABLE_CCACHE=ON -DENABLE_TESTS=ON -DENABLE_MOCKIMPL=ON
 	cmake --build ${DEBUG_BUILD_DIR} --parallel ${COMPILE_JOBS}
-	./build/tests/unittests -d yes ${UT_FILTER} --allow-running-no-tests ${UT_SHARD}
-	./build/tests/functests -d yes ${UT_FILTER} --allow-running-no-tests ${UT_SHARD}
-	./build/mockimpl/tests_mockimpl -d yes ${UT_FILTER} --allow-running-no-tests ${UT_SHARD}
+	$(RUN_DEBUG_TESTS)
+	$(RUN_DEBUG_FUNCTESTS)
+	$(RUN_DEBUG_MOCKIMPL_TESTS)
 
 .PHONY: asan
 asan:                    ## Build with AddressSanitizer option.
@@ -73,9 +87,9 @@ asan:                    ## Build with AddressSanitizer option.
 
 .PHONY: test_asan
 test_asan: asan          ## Run unit tests with AddressSanitizer option.
-	./build/tests/unittests -d yes ${UT_FILTER} --allow-running-no-tests ${UT_SHARD}
-	./build/tests/functests -d yes ${UT_FILTER} --allow-running-no-tests ${UT_SHARD}
-	./build/mockimpl/tests_mockimpl -d yes ${UT_FILTER} --allow-running-no-tests ${UT_SHARD}
+	$(RUN_DEBUG_TESTS)
+	$(RUN_DEBUG_FUNCTESTS)
+	$(RUN_DEBUG_MOCKIMPL_TESTS)
 
 .PHONY: tsan
 tsan:                    ## Build with ThreadSanitizer option.
@@ -84,9 +98,9 @@ tsan:                    ## Build with ThreadSanitizer option.
 
 .PHONY: test_tsan
 test_tsan: tsan          ## Run unit tests with ThreadSanitizer option.
-	./build/tests/unittests -d yes ${UT_FILTER} --allow-running-no-tests ${UT_SHARD}
-	./build/tests/functests -d yes ${UT_FILTER} --allow-running-no-tests ${UT_SHARD}
-	./build/mockimpl/tests_mockimpl -d yes ${UT_FILTER} --allow-running-no-tests ${UT_SHARD}
+	$(RUN_DEBUG_TESTS)
+	$(RUN_DEBUG_FUNCTESTS)
+	$(RUN_DEBUG_MOCKIMPL_TESTS)
 
 .PHONY: clean
 clean:                   ## Clear build/ directory.
@@ -116,17 +130,17 @@ test_parallel:           ## Run all tests parallel (used in CI).
 	cmake ${VSAG_CMAKE_ARGS} -B${DEBUG_BUILD_DIR} -DCMAKE_BUILD_TYPE=Sanitize -DENABLE_ASAN=OFF -DENABLE_CCACHE=OFF -DENABLE_TESTS=ON -DENABLE_MOCKIMPL=ON
 	cmake --build ${DEBUG_BUILD_DIR} --parallel ${COMPILE_JOBS}
 	@./scripts/testing/test_parallel_bg.sh
-	./build/mockimpl/tests_mockimpl -d yes ${UT_FILTER} --allow-running-no-tests ${UT_SHARD}
+	$(RUN_DEBUG_MOCKIMPL_TESTS)
 
 .PHONY: test_asan_parallel
 test_asan_parallel: asan ## Run unit tests parallel with AddressSanitizer option.
 	@./scripts/testing/test_parallel_bg.sh
-	./build/mockimpl/tests_mockimpl -d yes ${UT_FILTER} --allow-running-no-tests ${UT_SHARD}
+	$(RUN_DEBUG_MOCKIMPL_TESTS)
 
 .PHONY: test_tsan_parallel
 test_tsan_parallel: tsan ## Run unit tests parallel with ThreadSanitizer option.
 	@./scripts/testing/test_parallel_bg.sh
-	./build/mockimpl/tests_mockimpl -d yes ${UT_FILTER} --allow-running-no-tests ${UT_SHARD}
+	$(RUN_DEBUG_MOCKIMPL_TESTS)
 
 ##
 ## ================ distribution ================
@@ -140,7 +154,7 @@ run-dist-tests:          ## Run distribution tests.
 	@echo "running tests..."
 	@${RELEASE_BUILD_DIR}/tests/unittests -d yes "~[daily]"
 	@${RELEASE_BUILD_DIR}/tests/functests -d yes "~[daily]"
-	@${RELEASE_BUILD_DIR}/mockimpl/tests_mockimpl -d yes "~[daily]"
+	$(RUN_RELEASE_MOCKIMPL_TESTS)
 
 .PHONY: dist-pre-cxx11-abi
 dist-pre-cxx11-abi:      ## Build vsag with distribution options.
