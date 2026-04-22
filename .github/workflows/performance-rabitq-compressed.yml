@@ -11,18 +11,20 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - case_id: sift-rabitq-reorder-flat
-            case_name: HGRAPH/SIFT/rabitq-reorder-flat/90
+          - case_id: sift-rabitq-reorder-flat-bufferio
+            case_name: HGRAPH/SIFT/rabitq-reorder-flat-bufferio/90
             datapath: /tmp/data/sift-128-euclidean.hdf5
-            create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"rabitq","graph_type":"odescent","max_degree":64,"alpha":1.2,"graph_iter_turn":50,"neighbor_sample_rate":0.2,"use_reorder":true,"precise_quantization_type":"fp32","rabitq_use_fht":true}}'
+            precise_path: /tmp/eval/hgraph-rabitq-compressed-90/sift-128-euclidean/rabitq-reorder-flat-bufferio/precise_codes
+            create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"rabitq","graph_type":"odescent","max_degree":64,"alpha":1.2,"graph_iter_turn":50,"neighbor_sample_rate":0.2,"use_reorder":true,"precise_quantization_type":"fp32","precise_io_type":"buffer_io","precise_file_path":"/tmp/eval/hgraph-rabitq-compressed-90/sift-128-euclidean/rabitq-reorder-flat-bufferio/precise_codes","rabitq_use_fht":true}}'
             search_params: '{"hgraph":{"ef_search":256}}'
-            index_path: /tmp/eval/hgraph-rabitq-compressed-90/sift-128-euclidean/rabitq-reorder-flat
-          - case_id: sift-rabitq-reorder-compressed
-            case_name: HGRAPH/SIFT/rabitq-reorder-compressed/90
+            index_path: /tmp/eval/hgraph-rabitq-compressed-90/sift-128-euclidean/rabitq-reorder-flat-bufferio
+          - case_id: sift-rabitq-reorder-compressed-bufferio
+            case_name: HGRAPH/SIFT/rabitq-reorder-compressed-bufferio/90
             datapath: /tmp/data/sift-128-euclidean.hdf5
-            create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"rabitq","graph_type":"odescent","graph_storage_type":"compressed","max_degree":64,"alpha":1.2,"graph_iter_turn":50,"neighbor_sample_rate":0.2,"use_reorder":true,"precise_quantization_type":"fp32","rabitq_use_fht":true}}'
+            precise_path: /tmp/eval/hgraph-rabitq-compressed-90/sift-128-euclidean/rabitq-reorder-compressed-bufferio/precise_codes
+            create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"rabitq","graph_type":"odescent","graph_storage_type":"compressed","max_degree":64,"alpha":1.2,"graph_iter_turn":50,"neighbor_sample_rate":0.2,"use_reorder":true,"precise_quantization_type":"fp32","precise_io_type":"buffer_io","precise_file_path":"/tmp/eval/hgraph-rabitq-compressed-90/sift-128-euclidean/rabitq-reorder-compressed-bufferio/precise_codes","rabitq_use_fht":true}}'
             search_params: '{"hgraph":{"ef_search":256}}'
-            index_path: /tmp/eval/hgraph-rabitq-compressed-90/sift-128-euclidean/rabitq-reorder-compressed
+            index_path: /tmp/eval/hgraph-rabitq-compressed-90/sift-128-euclidean/rabitq-reorder-compressed-bufferio
     concurrency:
       group: performance-rabitq-compressed-${{ github.ref }}-${{ matrix.case_id }}
       cancel-in-progress: true
@@ -45,6 +47,11 @@ jobs:
         run: |
           export CMAKE_GENERATOR="Ninja"
           make release VSAG_ENABLE_TOOLS=ON
+
+      - name: Prepare Output Dirs
+        run: |
+          mkdir -p "$(dirname "${{ matrix.index_path }}")"
+          mkdir -p "$(dirname "${{ matrix.precise_path }}")"
 
       - name: Generate Perf Config
         run: |
