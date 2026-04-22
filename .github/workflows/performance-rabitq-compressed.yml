@@ -15,84 +15,96 @@ jobs:
             case_name: HGRAPH/SIFT/fp32-flat/90
             datapath: /tmp/data/sift-128-euclidean.hdf5
             precise_path: /tmp/eval/hgraph-rabitq-compressed-90/sift-128-euclidean/fp32-flat/unused_precise_codes
-            create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"fp32","graph_type":"odescent","max_degree":64,"alpha":1.2,"graph_iter_turn":50,"neighbor_sample_rate":0.2}}'
+            build_create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"fp32","graph_type":"odescent","max_degree":64,"alpha":1.2,"graph_iter_turn":50,"neighbor_sample_rate":0.2}}'
+            search_create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"fp32","graph_type":"odescent","max_degree":64,"alpha":1.2,"graph_iter_turn":50,"neighbor_sample_rate":0.2}}'
             search_params: '{"hgraph":{"ef_search":17}}'
             index_path: /tmp/eval/hgraph-rabitq-compressed-90/sift-128-euclidean/fp32-flat
           - case_id: sift-fp32-compressed
             case_name: HGRAPH/SIFT/fp32-compressed/90
             datapath: /tmp/data/sift-128-euclidean.hdf5
             precise_path: /tmp/eval/hgraph-rabitq-compressed-90/sift-128-euclidean/fp32-compressed/unused_precise_codes
-            create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"fp32","graph_type":"odescent","graph_storage_type":"compressed","max_degree":64,"alpha":1.2,"graph_iter_turn":50,"neighbor_sample_rate":0.2}}'
+            build_create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"fp32","graph_type":"odescent","graph_storage_type":"compressed","max_degree":64,"alpha":1.2,"graph_iter_turn":50,"neighbor_sample_rate":0.2}}'
+            search_create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"fp32","graph_type":"odescent","graph_storage_type":"compressed","max_degree":64,"alpha":1.2,"graph_iter_turn":50,"neighbor_sample_rate":0.2}}'
             search_params: '{"hgraph":{"ef_search":17}}'
             index_path: /tmp/eval/hgraph-rabitq-compressed-90/sift-128-euclidean/fp32-compressed
           - case_id: sift-rabitq-reorder-flat-bufferio
             case_name: HGRAPH/SIFT/rabitq-reorder-flat-bufferio/90
             datapath: /tmp/data/sift-128-euclidean.hdf5
             precise_path: /tmp/eval/hgraph-rabitq-compressed-90/sift-128-euclidean/rabitq-reorder-flat-bufferio/precise_codes
-            create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"rabitq","graph_type":"odescent","max_degree":64,"alpha":1.2,"graph_iter_turn":50,"neighbor_sample_rate":0.2,"use_reorder":true,"precise_quantization_type":"fp32","precise_io_type":"buffer_io","precise_file_path":"/tmp/eval/hgraph-rabitq-compressed-90/sift-128-euclidean/rabitq-reorder-flat-bufferio/precise_codes","rabitq_use_fht":true}}'
+            build_create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"rabitq","graph_type":"odescent","max_degree":64,"alpha":1.2,"graph_iter_turn":50,"neighbor_sample_rate":0.2,"use_reorder":true,"precise_quantization_type":"fp32","rabitq_use_fht":true}}'
+            search_create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"rabitq","graph_type":"odescent","max_degree":64,"alpha":1.2,"graph_iter_turn":50,"neighbor_sample_rate":0.2,"use_reorder":true,"precise_quantization_type":"fp32","precise_io_type":"buffer_io","precise_file_path":"/tmp/eval/hgraph-rabitq-compressed-90/sift-128-euclidean/rabitq-reorder-flat-bufferio/precise_codes","rabitq_use_fht":true}}'
             search_params: '{"hgraph":{"ef_search":256}}'
             index_path: /tmp/eval/hgraph-rabitq-compressed-90/sift-128-euclidean/rabitq-reorder-flat-bufferio
           - case_id: sift-rabitq-reorder-compressed-bufferio
             case_name: HGRAPH/SIFT/rabitq-reorder-compressed-bufferio/90
             datapath: /tmp/data/sift-128-euclidean.hdf5
             precise_path: /tmp/eval/hgraph-rabitq-compressed-90/sift-128-euclidean/rabitq-reorder-compressed-bufferio/precise_codes
-            create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"rabitq","graph_type":"odescent","graph_storage_type":"compressed","max_degree":64,"alpha":1.2,"graph_iter_turn":50,"neighbor_sample_rate":0.2,"use_reorder":true,"precise_quantization_type":"fp32","precise_io_type":"buffer_io","precise_file_path":"/tmp/eval/hgraph-rabitq-compressed-90/sift-128-euclidean/rabitq-reorder-compressed-bufferio/precise_codes","rabitq_use_fht":true}}'
+            build_create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"rabitq","graph_type":"odescent","graph_storage_type":"compressed","max_degree":64,"alpha":1.2,"graph_iter_turn":50,"neighbor_sample_rate":0.2,"use_reorder":true,"precise_quantization_type":"fp32","rabitq_use_fht":true}}'
+            search_create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"rabitq","graph_type":"odescent","graph_storage_type":"compressed","max_degree":64,"alpha":1.2,"graph_iter_turn":50,"neighbor_sample_rate":0.2,"use_reorder":true,"precise_quantization_type":"fp32","precise_io_type":"buffer_io","precise_file_path":"/tmp/eval/hgraph-rabitq-compressed-90/sift-128-euclidean/rabitq-reorder-compressed-bufferio/precise_codes","rabitq_use_fht":true}}'
             search_params: '{"hgraph":{"ef_search":256}}'
             index_path: /tmp/eval/hgraph-rabitq-compressed-90/sift-128-euclidean/rabitq-reorder-compressed-bufferio
           - case_id: nytimes-fp32-flat
             case_name: HGRAPH/NYTIMES/fp32-flat/90
             datapath: /tmp/data/nytimes-256-angular.hdf5
             precise_path: /tmp/eval/hgraph-rabitq-compressed-90/nytimes-256-angular/fp32-flat/unused_precise_codes
-            create_params: '{"dim":256,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"fp32","max_degree":48,"ef_construction":400}}'
+            build_create_params: '{"dim":256,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"fp32","max_degree":48,"ef_construction":400}}'
+            search_create_params: '{"dim":256,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"fp32","max_degree":48,"ef_construction":400}}'
             search_params: '{"hgraph":{"ef_search":90}}'
             index_path: /tmp/eval/hgraph-rabitq-compressed-90/nytimes-256-angular/fp32-flat
           - case_id: nytimes-fp32-compressed
             case_name: HGRAPH/NYTIMES/fp32-compressed/90
             datapath: /tmp/data/nytimes-256-angular.hdf5
             precise_path: /tmp/eval/hgraph-rabitq-compressed-90/nytimes-256-angular/fp32-compressed/unused_precise_codes
-            create_params: '{"dim":256,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"fp32","graph_storage_type":"compressed","max_degree":48,"ef_construction":400}}'
+            build_create_params: '{"dim":256,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"fp32","graph_storage_type":"compressed","max_degree":48,"ef_construction":400}}'
+            search_create_params: '{"dim":256,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"fp32","graph_storage_type":"compressed","max_degree":48,"ef_construction":400}}'
             search_params: '{"hgraph":{"ef_search":90}}'
             index_path: /tmp/eval/hgraph-rabitq-compressed-90/nytimes-256-angular/fp32-compressed
           - case_id: nytimes-rabitq-reorder-flat-bufferio
             case_name: HGRAPH/NYTIMES/rabitq-reorder-flat-bufferio/90
             datapath: /tmp/data/nytimes-256-angular.hdf5
             precise_path: /tmp/eval/hgraph-rabitq-compressed-90/nytimes-256-angular/rabitq-reorder-flat-bufferio/precise_codes
-            create_params: '{"dim":256,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"rabitq","max_degree":48,"ef_construction":400,"use_reorder":true,"precise_quantization_type":"fp32","precise_io_type":"buffer_io","precise_file_path":"/tmp/eval/hgraph-rabitq-compressed-90/nytimes-256-angular/rabitq-reorder-flat-bufferio/precise_codes","rabitq_use_fht":true}}'
+            build_create_params: '{"dim":256,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"rabitq","max_degree":48,"ef_construction":400,"use_reorder":true,"precise_quantization_type":"fp32","rabitq_use_fht":true}}'
+            search_create_params: '{"dim":256,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"rabitq","max_degree":48,"ef_construction":400,"use_reorder":true,"precise_quantization_type":"fp32","precise_io_type":"buffer_io","precise_file_path":"/tmp/eval/hgraph-rabitq-compressed-90/nytimes-256-angular/rabitq-reorder-flat-bufferio/precise_codes","rabitq_use_fht":true}}'
             search_params: '{"hgraph":{"ef_search":120}}'
             index_path: /tmp/eval/hgraph-rabitq-compressed-90/nytimes-256-angular/rabitq-reorder-flat-bufferio
           - case_id: nytimes-rabitq-reorder-compressed-bufferio
             case_name: HGRAPH/NYTIMES/rabitq-reorder-compressed-bufferio/90
             datapath: /tmp/data/nytimes-256-angular.hdf5
             precise_path: /tmp/eval/hgraph-rabitq-compressed-90/nytimes-256-angular/rabitq-reorder-compressed-bufferio/precise_codes
-            create_params: '{"dim":256,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"rabitq","graph_storage_type":"compressed","max_degree":48,"ef_construction":400,"use_reorder":true,"precise_quantization_type":"fp32","precise_io_type":"buffer_io","precise_file_path":"/tmp/eval/hgraph-rabitq-compressed-90/nytimes-256-angular/rabitq-reorder-compressed-bufferio/precise_codes","rabitq_use_fht":true}}'
+            build_create_params: '{"dim":256,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"rabitq","graph_storage_type":"compressed","max_degree":48,"ef_construction":400,"use_reorder":true,"precise_quantization_type":"fp32","rabitq_use_fht":true}}'
+            search_create_params: '{"dim":256,"dtype":"float32","metric_type":"cosine","index_param":{"base_quantization_type":"rabitq","graph_storage_type":"compressed","max_degree":48,"ef_construction":400,"use_reorder":true,"precise_quantization_type":"fp32","precise_io_type":"buffer_io","precise_file_path":"/tmp/eval/hgraph-rabitq-compressed-90/nytimes-256-angular/rabitq-reorder-compressed-bufferio/precise_codes","rabitq_use_fht":true}}'
             search_params: '{"hgraph":{"ef_search":120}}'
             index_path: /tmp/eval/hgraph-rabitq-compressed-90/nytimes-256-angular/rabitq-reorder-compressed-bufferio
           - case_id: gist-fp32-flat
             case_name: HGRAPH/GIST/fp32-flat/90
             datapath: /tmp/data/gist-960-euclidean.hdf5
             precise_path: /tmp/eval/hgraph-rabitq-compressed-90/gist-960-euclidean/fp32-flat/unused_precise_codes
-            create_params: '{"dim":960,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"fp32","graph_type":"odescent","max_degree":64,"alpha":1.2,"graph_iter_turn":60,"neighbor_sample_rate":0.2}}'
+            build_create_params: '{"dim":960,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"fp32","graph_type":"odescent","max_degree":64,"alpha":1.2,"graph_iter_turn":60,"neighbor_sample_rate":0.2}}'
+            search_create_params: '{"dim":960,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"fp32","graph_type":"odescent","max_degree":64,"alpha":1.2,"graph_iter_turn":60,"neighbor_sample_rate":0.2}}'
             search_params: '{"hgraph":{"ef_search":60}}'
             index_path: /tmp/eval/hgraph-rabitq-compressed-90/gist-960-euclidean/fp32-flat
           - case_id: gist-fp32-compressed
             case_name: HGRAPH/GIST/fp32-compressed/90
             datapath: /tmp/data/gist-960-euclidean.hdf5
             precise_path: /tmp/eval/hgraph-rabitq-compressed-90/gist-960-euclidean/fp32-compressed/unused_precise_codes
-            create_params: '{"dim":960,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"fp32","graph_type":"odescent","graph_storage_type":"compressed","max_degree":64,"alpha":1.2,"graph_iter_turn":60,"neighbor_sample_rate":0.2}}'
+            build_create_params: '{"dim":960,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"fp32","graph_type":"odescent","graph_storage_type":"compressed","max_degree":64,"alpha":1.2,"graph_iter_turn":60,"neighbor_sample_rate":0.2}}'
+            search_create_params: '{"dim":960,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"fp32","graph_type":"odescent","graph_storage_type":"compressed","max_degree":64,"alpha":1.2,"graph_iter_turn":60,"neighbor_sample_rate":0.2}}'
             search_params: '{"hgraph":{"ef_search":60}}'
             index_path: /tmp/eval/hgraph-rabitq-compressed-90/gist-960-euclidean/fp32-compressed
           - case_id: gist-rabitq-reorder-flat-bufferio
             case_name: HGRAPH/GIST/rabitq-reorder-flat-bufferio/90
             datapath: /tmp/data/gist-960-euclidean.hdf5
             precise_path: /tmp/eval/hgraph-rabitq-compressed-90/gist-960-euclidean/rabitq-reorder-flat-bufferio/precise_codes
-            create_params: '{"dim":960,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"rabitq","graph_type":"odescent","max_degree":64,"alpha":1.2,"graph_iter_turn":60,"neighbor_sample_rate":0.2,"use_reorder":true,"precise_quantization_type":"fp32","precise_io_type":"buffer_io","precise_file_path":"/tmp/eval/hgraph-rabitq-compressed-90/gist-960-euclidean/rabitq-reorder-flat-bufferio/precise_codes","rabitq_use_fht":true}}'
+            build_create_params: '{"dim":960,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"rabitq","graph_type":"odescent","max_degree":64,"alpha":1.2,"graph_iter_turn":60,"neighbor_sample_rate":0.2,"use_reorder":true,"precise_quantization_type":"fp32","rabitq_use_fht":true}}'
+            search_create_params: '{"dim":960,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"rabitq","graph_type":"odescent","max_degree":64,"alpha":1.2,"graph_iter_turn":60,"neighbor_sample_rate":0.2,"use_reorder":true,"precise_quantization_type":"fp32","precise_io_type":"buffer_io","precise_file_path":"/tmp/eval/hgraph-rabitq-compressed-90/gist-960-euclidean/rabitq-reorder-flat-bufferio/precise_codes","rabitq_use_fht":true}}'
             search_params: '{"hgraph":{"ef_search":90}}'
             index_path: /tmp/eval/hgraph-rabitq-compressed-90/gist-960-euclidean/rabitq-reorder-flat-bufferio
           - case_id: gist-rabitq-reorder-compressed-bufferio
             case_name: HGRAPH/GIST/rabitq-reorder-compressed-bufferio/90
             datapath: /tmp/data/gist-960-euclidean.hdf5
             precise_path: /tmp/eval/hgraph-rabitq-compressed-90/gist-960-euclidean/rabitq-reorder-compressed-bufferio/precise_codes
-            create_params: '{"dim":960,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"rabitq","graph_type":"odescent","graph_storage_type":"compressed","max_degree":64,"alpha":1.2,"graph_iter_turn":60,"neighbor_sample_rate":0.2,"use_reorder":true,"precise_quantization_type":"fp32","precise_io_type":"buffer_io","precise_file_path":"/tmp/eval/hgraph-rabitq-compressed-90/gist-960-euclidean/rabitq-reorder-compressed-bufferio/precise_codes","rabitq_use_fht":true}}'
+            build_create_params: '{"dim":960,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"rabitq","graph_type":"odescent","graph_storage_type":"compressed","max_degree":64,"alpha":1.2,"graph_iter_turn":60,"neighbor_sample_rate":0.2,"use_reorder":true,"precise_quantization_type":"fp32","rabitq_use_fht":true}}'
+            search_create_params: '{"dim":960,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"rabitq","graph_type":"odescent","graph_storage_type":"compressed","max_degree":64,"alpha":1.2,"graph_iter_turn":60,"neighbor_sample_rate":0.2,"use_reorder":true,"precise_quantization_type":"fp32","precise_io_type":"buffer_io","precise_file_path":"/tmp/eval/hgraph-rabitq-compressed-90/gist-960-euclidean/rabitq-reorder-compressed-bufferio/precise_codes","rabitq_use_fht":true}}'
             search_params: '{"hgraph":{"ef_search":90}}'
             index_path: /tmp/eval/hgraph-rabitq-compressed-90/gist-960-euclidean/rabitq-reorder-compressed-bufferio
     concurrency:
@@ -137,11 +149,18 @@ jobs:
             num_threads_building: 16
             num_threads_searching: 16
 
-          "${{ matrix.case_name }}":
+          "${{ matrix.case_name }}/build":
             datapath: "${{ matrix.datapath }}"
-            type: "build,search"
+            type: "build"
             index_name: "hgraph"
-            create_params: '${{ matrix.create_params }}'
+            create_params: '${{ matrix.build_create_params }}'
+            index_path: "${{ matrix.index_path }}"
+
+          "${{ matrix.case_name }}/search":
+            datapath: "${{ matrix.datapath }}"
+            type: "search"
+            index_name: "hgraph"
+            create_params: '${{ matrix.search_create_params }}'
             search_params: '${{ matrix.search_params }}'
             index_path: "${{ matrix.index_path }}"
             topk: 10
