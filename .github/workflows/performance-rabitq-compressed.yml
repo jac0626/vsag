@@ -102,7 +102,9 @@ jobs:
         run: bash ./scripts/download_annbench_datasets.sh
 
       - name: Build Release
-        run: make release
+        run: |
+          export CMAKE_GENERATOR="Ninja"
+          make release VSAG_ENABLE_TOOLS=ON
 
       - name: Generate Perf Config
         run: |
