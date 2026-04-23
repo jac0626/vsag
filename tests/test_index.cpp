@@ -1308,6 +1308,7 @@ void
 TestIndex::TestConcurrentDestruct(TestIndex::IndexPtr& index,
                                   const TestDatasetPtr& dataset,
                                   const std::string& search_param) {
+    fixtures::logger::LoggerReplacer _;
     std::vector<std::future<bool>> futures;
     fixtures::ThreadPool pool(32);
     std::shared_mutex index_mutex;
@@ -1400,6 +1401,10 @@ TestIndex::TestConcurrentDestruct(TestIndex::IndexPtr& index,
 
     for (uint64_t i = 0; i < dataset->base_->GetNumElements(); i++) {
         futures.emplace_back(pool.enqueue(func, i));
+    }
+
+    for (auto& future : futures) {
+        REQUIRE_NOTHROW(static_cast<void>(future.get()));
     }
 }
 

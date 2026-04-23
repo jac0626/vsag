@@ -250,6 +250,23 @@ AreAllPointersDifferent(T* original, T* copy, uint64_t num_elements) {
     return true;
 }
 
+template <>
+bool
+AreAllPointersDifferent(std::string* original, std::string* copy, uint64_t num_elements) {
+    if (original == copy) {
+        return false;
+    }
+    for (uint64_t i = 0; i < num_elements; ++i) {
+        if (&original[i] == &copy[i]) {
+            return false;
+        }
+        if (!original[i].empty() && original[i].data() == copy[i].data()) {
+            return false;
+        }
+    }
+    return true;
+}
+
 TEST_CASE("Dataset Copy and Append Test", "[ut][Dataset]") {
     std::random_device rd;
     std::mt19937 gen(rd());
