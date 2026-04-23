@@ -26,6 +26,7 @@ VSAG_CMAKE_ARGS := ${VSAG_CMAKE_ARGS} -G ${CMAKE_GENERATOR} -S.
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Darwin)
+  VSAG_CMAKE_ARGS := ${VSAG_CMAKE_ARGS} -DENABLE_LIBAIO=OFF -DUSE_SYSTEM_OPENBLAS=ON
   VSAG_CMAKE_ARGS := ${VSAG_CMAKE_ARGS} -DENABLE_LIBCXX=ON -DENABLE_WERROR=OFF -DCMAKE_C_COMPILER=clang -DCMAKE_CXX_COMPILER=clang++
 endif
 
@@ -37,6 +38,7 @@ UT_SHARD = ""
 ifdef SHARD
   UT_SHARD = $(SHARD)
 endif
+TEST_ADDITION_TAG ?= "~[daily]"
 
 
 .PHONY: help
@@ -115,18 +117,18 @@ fix-lint:                ## Fix coding style issues in-place via clang-apply-rep
 test_parallel:           ## Run all tests parallel (used in CI).
 	cmake ${VSAG_CMAKE_ARGS} -B${DEBUG_BUILD_DIR} -DCMAKE_BUILD_TYPE=Sanitize -DENABLE_ASAN=OFF -DENABLE_CCACHE=OFF -DENABLE_TESTS=ON -DENABLE_MOCKIMPL=ON
 	cmake --build ${DEBUG_BUILD_DIR} --parallel ${COMPILE_JOBS}
-	@./scripts/testing/test_parallel_bg.sh
-	./build/mockimpl/tests_mockimpl -d yes ${UT_FILTER} --allow-running-no-tests ${UT_SHARD}
+	@./scripts/testing/test_parallel_bg.sh ${TEST_ADDITION_TAG}
+	./build/mockimpl/tests_mockimpl -d yes ${UT_FILTER} ${TEST_ADDITION_TAG} --allow-running-no-tests ${UT_SHARD}
 
 .PHONY: test_asan_parallel
 test_asan_parallel: asan ## Run unit tests parallel with AddressSanitizer option.
-	@./scripts/testing/test_parallel_bg.sh
-	./build/mockimpl/tests_mockimpl -d yes ${UT_FILTER} --allow-running-no-tests ${UT_SHARD}
+	@./scripts/testing/test_parallel_bg.sh ${TEST_ADDITION_TAG}
+	./build/mockimpl/tests_mockimpl -d yes ${UT_FILTER} ${TEST_ADDITION_TAG} --allow-running-no-tests ${UT_SHARD}
 
 .PHONY: test_tsan_parallel
 test_tsan_parallel: tsan ## Run unit tests parallel with ThreadSanitizer option.
-	@./scripts/testing/test_parallel_bg.sh
-	./build/mockimpl/tests_mockimpl -d yes ${UT_FILTER} --allow-running-no-tests ${UT_SHARD}
+	@./scripts/testing/test_parallel_bg.sh ${TEST_ADDITION_TAG}
+	./build/mockimpl/tests_mockimpl -d yes ${UT_FILTER} ${TEST_ADDITION_TAG} --allow-running-no-tests ${UT_SHARD}
 
 ##
 ## ================ distribution ================

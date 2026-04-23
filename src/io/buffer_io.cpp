@@ -20,9 +20,25 @@
 
 #include <filesystem>
 
+#include "async_io_parameter.h"
 #include "io_syscall.h"
 
 namespace vsag {
+
+namespace {
+std::string
+resolve_buffer_io_path(const IOParamPtr& param) {
+    if (auto buffer_param = std::dynamic_pointer_cast<BufferIOParameter>(param)) {
+        return buffer_param->path_;
+    }
+    if (auto async_param = std::dynamic_pointer_cast<AsyncIOParameter>(param)) {
+        return async_param->path_;
+    }
+    auto type_name = param ? param->GetTypeName() : "<null>";
+    throw VsagException(ErrorType::INTERNAL_ERROR,
+                        fmt::format("unsupported io parameter type '{}' for BufferIO", type_name));
+}
+}  // namespace
 
 BufferIO::BufferIO(std::string filename, Allocator* allocator)
     : BasicIO<BufferIO>(allocator), filepath_(std::move(filename)) {
@@ -42,7 +58,7 @@ BufferIO::BufferIO(const BufferIOParameterPtr& io_param, const IndexCommonParam&
     : BufferIO(io_param->path_, common_param.allocator_.get()){};
 
 BufferIO::BufferIO(const IOParamPtr& param, const IndexCommonParam& common_param)
-    : BufferIO(std::dynamic_pointer_cast<BufferIOParameter>(param), common_param){};
+    : BufferIO(resolve_buffer_io_path(param), common_param.allocator_.get()){};
 
 void
 BufferIO::WriteImpl(const uint8_t* data, uint64_t size, uint64_t offset) {
@@ -81,6 +97,10 @@ BufferIO::ReadImpl(uint64_t size, uint64_t offset, uint8_t* data) const {
 [[nodiscard]] const uint8_t*
 BufferIO::DirectReadImpl(uint64_t size, uint64_t offset, bool& need_release) const {
     if (not check_valid_offset(size + offset)) {
+        return nullptr;
+    }
+    if (size == 0) {
+        need_release = false;
         return nullptr;
     }
     need_release = true;

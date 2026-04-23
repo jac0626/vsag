@@ -2,6 +2,10 @@
 
 VSAG 是一个 C++ 项目，使用 CMake 构建。项目源码使用 C++17 标准编写，请确保你使用的编译器支持 C++17 的语法。我们建议你使用 GCC 9.4.0 或者 Clang 13.0.0 以后的版本，因为这些版本在我们的开发中工作良好。
 
+当前从源码构建支持 Linux `x86_64` / `aarch64`，以及 macOS `arm64` 的 C++ 核心库。Linux
+和 macOS 共享同一套“依赖安装脚本 + `make`”入口；当前 macOS 已验证 `make debug`、
+`make release` 与 `make test`。
+
 在 CMake 配置中，有许多参数和编译目标。为了方便使用，我们将常用的编译目标（或命令）写到了 Makefile 中，使用 Unix Makefiles 进行管理，已避免记忆各种配置或者从命令行输入大段参数。这些编译目标（或命令）可以通过在项目根目录运行 `make help` 查看：
 
 ```bash
@@ -39,6 +43,14 @@ pyvsag-all:              ## Build wheels for all supported versions. Usage: make
 clean-release:           ## Clear build-release/ directory.
 install:                 ## Build and install the release version of vsag.
 ```
+
+如果不使用 Docker，可以先通过统一入口脚本安装依赖：
+
+```bash
+./scripts/deps/install_deps.sh
+```
+
+如果需要绕过自动识别，也可以直接调用 `scripts/deps/` 下的平台脚本。
 
 ## 编译 VSAG 库
 
@@ -137,4 +149,3 @@ make pyvsag-all
 - `RELEASE_BUILD_DIR`：发布模式产物目录，非必要不修改；
 - `VSAG_ENABLE_INTEL_MKL`：是否启用 Intel MKL 作为 BLAS 后端，默认 `OFF`；关闭时使用 OpenBLAS；
 - `VSAG_ENABLE_LIBAIO`：是否启用 `libaio`，默认 `ON`。
-

@@ -54,7 +54,7 @@ jobs:
         with:
           ref: main
       - name: Prepare Env
-        run: sudo bash ./scripts/deps/install_deps_ubuntu.sh
+        run: bash ./scripts/deps/install_deps.sh
       - name: Load Cache
         uses: hendrikmuhs/ccache-action@v1.2
         with:
@@ -133,7 +133,7 @@ jobs:
         with:
           ref: main
       - name: Prepare Env
-        run: sudo bash ./scripts/deps/install_deps_ubuntu.sh
+        run: bash ./scripts/deps/install_deps.sh
       - name: Clean Build
         run: rm -rf ./build
       - name: Download Test
@@ -156,9 +156,27 @@ jobs:
           retention-days: 3
           overwrite: 'true'
 
+  daily_test_macos_arm64:
+    name: Test macOS arm64
+    runs-on: macos-14
+    concurrency:
+      group: daily_test_macos_arm64
+      cancel-in-progress: true
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main
+      - name: Install Dependencies
+        run: bash ./scripts/deps/install_deps.sh
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALLED_DEPENDENTS_CHECK: "1"
+      - name: Run Daily Test Set
+        run: make test_parallel COMPILE_JOBS=3 TEST_ADDITION_TAG="~[pr]"
+
   asan_test_clean_up:
     name: Clean Up
-    needs: [ daily_test_asan_x86, daily_test_asan_aarch64 ]
+    needs: [ daily_test_asan_x86, daily_test_asan_aarch64, daily_test_macos_arm64 ]
     runs-on: ubuntu-22.04
     steps:
       - name: Create Empty File

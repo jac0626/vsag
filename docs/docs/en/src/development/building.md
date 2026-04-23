@@ -4,7 +4,7 @@ This page documents how to build VSAG from source.
 
 ## Prerequisites
 
-- **OS**: Ubuntu 20.04+ or CentOS 7+
+- **OS**: Ubuntu 20.04+, CentOS 7+, or macOS 14+ (arm64 for the current macOS path)
 - **Compiler**: GCC 9.4.0+ or Clang 13.0.0+
 - **CMake**: 3.18.0+
 - **clang-format / clang-tidy**: exactly version 15 (enforced)
@@ -15,6 +15,15 @@ We recommend using the official Docker dev image, which already contains the mat
 ```bash
 docker pull vsaglib/vsag:ubuntu
 ```
+
+If you build locally instead of using Docker, install dependencies through the shared entry point:
+
+```bash
+./scripts/deps/install_deps.sh
+```
+
+If you need to bypass auto-detection, the platform-specific scripts are still available under
+`scripts/deps/`.
 
 ## Makefile Targets
 
@@ -49,11 +58,14 @@ make release
 
 Resulting binaries from a plain `make release`:
 
-- Library: `build-release/src/libvsag.{a,so}`
+- Libraries: `build-release/src/libvsag_static.a` and `build-release/src/libvsag.{so,dylib}`
 
 Examples and tools are not built by default. To include them, either use `make dev`, or enable
 the corresponding Makefile variables (`VSAG_ENABLE_EXAMPLES=ON`, `VSAG_ENABLE_TOOLS=ON`) or the
 underlying CMake cache options (`-DENABLE_EXAMPLES=ON`, `-DENABLE_TOOLS=ON`).
+
+Linux and macOS share the same dependency-script plus `make` workflow for the core C++ build.
+The current macOS validation scope is arm64 `make debug`, `make release`, and `make test`.
 
 ## Environment Variables / CMake Options
 

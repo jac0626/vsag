@@ -57,7 +57,7 @@ jobs:
         run: rm -rf /opt/hostedtoolcache
       - uses: actions/checkout@v4
       - name: Prepare Env
-        run: sudo bash ./scripts/deps/install_deps_ubuntu.sh
+        run: bash ./scripts/deps/install_deps.sh
       - name: Load Cache
         uses: hendrikmuhs/ccache-action@v1.2
         with:
@@ -133,7 +133,7 @@ jobs:
         run: rm -rf /opt/hostedtoolcache
       - uses: actions/checkout@v4
       - name: Prepare Env
-        run: sudo bash ./scripts/deps/install_deps_ubuntu.sh
+        run: bash ./scripts/deps/install_deps.sh
       - name: Clean Build
         run: rm -rf ./build
       - name: Download Test

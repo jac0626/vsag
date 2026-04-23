@@ -52,6 +52,11 @@ target_link_libraries (vsag_static
     PUBLIC vsag_src_common
     PRIVATE ${VSAG_DEP_LIBS} coverage_config)
 
+if (TARGET vsag_openmp)
+    target_link_libraries (vsag PRIVATE vsag_openmp)
+    target_link_libraries (vsag_static PRIVATE vsag_openmp)
+endif ()
+
 maybe_add_dependencies (vsag antlr4 roaring boost)
 maybe_add_dependencies (vsag_static antlr4 roaring boost)
 if (VSAG_BLAS_BACKEND STREQUAL "openblas")

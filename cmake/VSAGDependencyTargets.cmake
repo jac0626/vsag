@@ -20,6 +20,10 @@ target_link_libraries (vsag_src_common INTERFACE
     nlohmann_json::nlohmann_json
     tsl::robin_map)
 
+if (TARGET vsag_openmp)
+    target_link_libraries (vsag_src_common INTERFACE vsag_openmp)
+endif ()
+
 if (TARGET vsag_cpuinfo_headers)
     target_link_libraries (vsag_src_common INTERFACE vsag_cpuinfo_headers)
 endif ()

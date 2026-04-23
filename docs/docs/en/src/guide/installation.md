@@ -17,7 +17,7 @@ docker run -it --rm -v $(pwd):/work -w /work vsaglib/vsag:ubuntu bash
 
 ### Requirements
 
-- **Operating System**: Ubuntu 20.04+ or CentOS 7+
+- **Operating System**: Ubuntu 20.04+, CentOS 7+, or macOS 14+ (arm64 for the current macOS source-build path)
 - **Compiler**: GCC 9.4.0+ or Clang 13.0.0+
 - **CMake**: 3.18.0+
 - **clang-format / clang-tidy**: exactly version **15** (enforced by `make fmt` / `make lint`)
@@ -27,6 +27,7 @@ docker run -it --rm -v $(pwd):/work -w /work vsaglib/vsag:ubuntu bash
 ```bash
 git clone https://github.com/antgroup/vsag.git
 cd vsag
+./scripts/deps/install_deps.sh
 make release
 ```
 
@@ -40,6 +41,10 @@ Other common Makefile targets:
 - `make pyvsag PY_VERSION=3.10` — build the Python wheel.
 - `make dist-pre-cxx11-abi` / `dist-cxx11-abi` / `dist-libcxx` — build redistributable tarballs.
 
+The core C++ source build now uses the same dependency-script plus `make` flow on Linux and macOS.
+The current macOS validation scope is arm64 `make debug`, `make release`, and `make test`;
+Linux-only features such as `libaio` remain disabled automatically on macOS.
+
 See [Building](../development/building.md) for details.
 
 ## Python (pyvsag)
@@ -47,6 +52,9 @@ See [Building](../development/building.md) for details.
 ```bash
 pip install pyvsag
 ```
+
+Published `pyvsag` wheels are currently Linux-focused; the macOS support added in this phase covers
+the C++ source build path.
 
 ## Node.js / TypeScript
 
