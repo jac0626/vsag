@@ -113,6 +113,8 @@ jobs:
     if: needs.changes.outputs.cpp == 'true'
     runs-on: macos-15
     steps:
+      - name: Free Disk Space
+        run: rm -rf "${RUNNER_TOOL_CACHE:-/Users/runner/hostedtoolcache}"
       - uses: actions/checkout@v4
       - name: Install Dependencies
         run: bash ./scripts/deps/install_deps.sh
@@ -155,6 +157,8 @@ jobs:
     if: needs.changes.outputs.cpp == 'true'
     runs-on: macos-15
     steps:
+      - name: Free Disk Space
+        run: rm -rf "${RUNNER_TOOL_CACHE:-/Users/runner/hostedtoolcache}"
       - uses: actions/checkout@v4
       - name: Install Dependencies
         run: bash ./scripts/deps/install_deps.sh
