@@ -15,6 +15,7 @@
 
 #include "hnswalg.h"
 
+#include <cstring>
 #include <memory>
 
 #include "datacell/graph_interface.h"
@@ -313,8 +314,8 @@ HierarchicalNSW::setBatchNeigohborsNoLock(InnerIdType internal_id,
                                           const InnerIdType* neighbors,
                                           uint64_t neigbor_count) {
     linklistsizeint* ll_cur = getLinklistAtLevel(internal_id, level);
-    for (int i = 1; i <= neigbor_count; ++i) {
-        ll_cur[i] = neighbors[i - 1];
+    for (uint64_t i = 0; i < neigbor_count; ++i) {
+        setLinklistNeighbor(ll_cur, i, neighbors[i]);
     }
 
     setListCount(ll_cur, neigbor_count);
@@ -337,7 +338,7 @@ HierarchicalNSW::appendNeigohborNoLock(InnerIdType internal_id,
     linklistsizeint* ll_cur = getLinklistAtLevel(internal_id, level);
     uint64_t neigbor_count = getListCount(ll_cur) + 1;
     if (neigbor_count <= max_degree) {
-        ll_cur[neigbor_count] = neighbor;
+        setLinklistNeighbor(ll_cur, neigbor_count - 1, neighbor);
         setListCount(ll_cur, neigbor_count);
     }
 }
@@ -1086,15 +1087,19 @@ HierarchicalNSW::DeserializeImpl(StreamReader& reader, SpaceInterface* s, uint64
 
     // step 1, try to parse/read with the newer serial format
     reader.Read(raw_buffer, newer_format_size);
-    enterpoint_node_ = *(InnerIdType*)(raw_buffer);
-    maxM_ = *(uint64_t*)(raw_buffer + sizeof(InnerIdType));
+    InnerIdType newer_enterpoint_node = 0;
+    std::memcpy(&newer_enterpoint_node, raw_buffer, sizeof(newer_enterpoint_node));
+    std::memcpy(&maxM_, raw_buffer + sizeof(InnerIdType), sizeof(maxM_));
+    enterpoint_node_ = newer_enterpoint_node;
     bool is_newer_format = (M_ == maxM_);
 
     // step 2, try to read with the older serial format
     if (not is_newer_format) {
         reader.Read(raw_buffer + newer_format_size, buffer_size - newer_format_size);
-        enterpoint_node_ = *(int64_t*)(raw_buffer);
-        maxM_ = *(uint64_t*)(raw_buffer + sizeof(int64_t));
+        int64_t older_enterpoint_node = 0;
+        std::memcpy(&older_enterpoint_node, raw_buffer, sizeof(older_enterpoint_node));
+        std::memcpy(&maxM_, raw_buffer + sizeof(int64_t), sizeof(maxM_));
+        enterpoint_node_ = static_cast<InnerIdType>(older_enterpoint_node);
         if (M_ != maxM_) {
             // this condition will be true only when the parameter used in create_index is not equal
             // to the parameter of the serialized index
@@ -1285,10 +1290,9 @@ HierarchicalNSW::modifyOutEdge(InnerIdType old_internal_id, InnerIdType new_inte
         for (const auto& in_node : edges) {
             auto data = getLinklistAtLevel(in_node, level);
             uint64_t link_size = getListCount(data);
-            auto* links = (InnerIdType*)(data + 1);
-            for (int i = 0; i < link_size; ++i) {
-                if (links[i] == old_internal_id) {
-                    links[i] = new_internal_id;
+            for (uint64_t i = 0; i < link_size; ++i) {
+                if (getLinklistNeighbor(data, i) == old_internal_id) {
+                    setLinklistNeighbor(data, i, new_internal_id);
                     break;
                 }
             }
@@ -1303,9 +1307,8 @@ HierarchicalNSW::modifyInEdges(InnerIdType right_internal_id,
     for (int level = 0; level <= element_levels_[right_internal_id]; ++level) {
         auto data = getLinklistAtLevel(right_internal_id, level);
         uint64_t link_size = getListCount(data);
-        auto* links = (InnerIdType*)(data + 1);
-        for (int i = 0; i < link_size; ++i) {
-            auto& in_edges = getEdges(links[i], level);
+        for (uint64_t i = 0; i < link_size; ++i) {
+            auto& in_edges = getEdges(getLinklistNeighbor(data, i), level);
             if (is_erase) {
                 in_edges.erase(wrong_internal_id);
             } else {
@@ -1368,19 +1371,18 @@ HierarchicalNSW::dealNoInEdge(InnerIdType id, int level, int m_curmax, int skip_
     // Establish edges from the neighbors of the id pointing to the id.
     auto alone_data = getLinklistAtLevel(id, level);
     int alone_size = getListCount(alone_data);
-    auto alone_link = (unsigned int*)(alone_data + 1);
     auto& in_edges = getEdges(id, level);
     for (int j = 0; j < alone_size; ++j) {
-        if (alone_link[j] == skip_c) {
+        auto alone_link = getLinklistNeighbor(alone_data, j);
+        if (alone_link == skip_c) {
             continue;
         }
-        auto to_edge_data_cur = (unsigned int*)getLinklistAtLevel(alone_link[j], level);
+        auto to_edge_data_cur = getLinklistAtLevel(alone_link, level);
         int to_edge_size_cur = getListCount(to_edge_data_cur);
-        auto to_edge_data_link_cur = (unsigned int*)(to_edge_data_cur + 1);
         if (to_edge_size_cur < m_curmax) {
-            to_edge_data_link_cur[to_edge_size_cur] = id;
+            setLinklistNeighbor(to_edge_data_cur, to_edge_size_cur, id);
             setListCount(to_edge_data_cur, to_edge_size_cur + 1);
-            in_edges.insert(alone_link[j]);
+            in_edges.insert(alone_link);
         }
     }
 }
@@ -1475,11 +1477,11 @@ HierarchicalNSW::removePoint(LabelType label) {
     // If the node to be deleted is an entry node, find another top-level node.
     if (cur_c == enterpoint_node_) {
         for (int level = max_level_; level >= 0; level--) {
-            auto data = (unsigned int*)getLinklistAtLevel(enterpoint_node_, level);
+            auto data = getLinklistAtLevel(enterpoint_node_, level);
             int size = getListCount(data);
             if (size != 0) {
                 max_level_ = level;
-                enterpoint_node_ = *(data + 1);
+                enterpoint_node_ = getLinklistNeighbor(data, 0);
                 break;
             }
         }
@@ -1492,7 +1494,6 @@ HierarchicalNSW::removePoint(LabelType label) {
         const auto in_edges_cur = getEdges(cur_c, level);
         auto data_cur = getLinklistAtLevel(cur_c, level);
         int size_cur = getListCount(data_cur);
-        auto data_link_cur = (unsigned int*)(data_cur + 1);
 
         for (const auto in_edge : in_edges_cur) {
             MaxHeap candidates(allocator_);
@@ -1500,30 +1501,31 @@ HierarchicalNSW::removePoint(LabelType label) {
 
             // Add the original neighbors of the indegree node to the candidate queue.
             for (int i = 0; i < size_cur; ++i) {
-                if (data_link_cur[i] == cur_c || data_link_cur[i] == in_edge) {
+                auto data_link_cur = getLinklistNeighbor(data_cur, i);
+                if (data_link_cur == cur_c || data_link_cur == in_edge) {
                     continue;
                 }
-                unique_ids.insert(data_link_cur[i]);
-                candidates.emplace(fstdistfunc_(getDataByInternalId(data_link_cur[i]),
+                unique_ids.insert(data_link_cur);
+                candidates.emplace(fstdistfunc_(getDataByInternalId(data_link_cur),
                                                 getDataByInternalId(in_edge),
                                                 dist_func_param_),
-                                   data_link_cur[i]);
+                                   data_link_cur);
             }
 
             // Add the neighbors of the node to be deleted to the candidate queue.
-            auto in_edge_data_cur = (unsigned int*)getLinklistAtLevel(in_edge, level);
+            auto in_edge_data_cur = getLinklistAtLevel(in_edge, level);
             int in_edge_size_cur = getListCount(in_edge_data_cur);
-            auto in_edge_data_link_cur = (unsigned int*)(in_edge_data_cur + 1);
             for (int i = 0; i < in_edge_size_cur; ++i) {
-                if (in_edge_data_link_cur[i] == cur_c ||
-                    unique_ids.find(in_edge_data_link_cur[i]) != unique_ids.end()) {
+                auto in_edge_data_link_cur = getLinklistNeighbor(in_edge_data_cur, i);
+                if (in_edge_data_link_cur == cur_c ||
+                    unique_ids.find(in_edge_data_link_cur) != unique_ids.end()) {
                     continue;
                 }
-                unique_ids.insert(in_edge_data_link_cur[i]);
-                candidates.emplace(fstdistfunc_(getDataByInternalId(in_edge_data_link_cur[i]),
+                unique_ids.insert(in_edge_data_link_cur);
+                candidates.emplace(fstdistfunc_(getDataByInternalId(in_edge_data_link_cur),
                                                 getDataByInternalId(in_edge),
                                                 dist_func_param_),
-                                   in_edge_data_link_cur[i]);
+                                   in_edge_data_link_cur);
             }
 
             if (candidates.empty()) {
@@ -1544,7 +1546,7 @@ HierarchicalNSW::removePoint(LabelType label) {
         }
 
         for (int i = 0; i < size_cur; ++i) {
-            getEdges(data_link_cur[i], level).erase(cur_c);
+            getEdges(getLinklistNeighbor(data_cur, i), level).erase(cur_c);
         }
     }
 }

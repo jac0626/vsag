@@ -14,6 +14,7 @@
 // limitations under the License.
 
 #include <catch2/catch_test_macros.hpp>
+#include <cmath>
 #include <fstream>
 #include <memory>
 
@@ -214,7 +215,7 @@ TestComputeCodesSame(Quantizer<T>& quantizer,
                      bool retrain = true) {
     auto data = fixtures::generate_vectors(count, dim, false);
     for (auto& val : data) {
-        val = uint8_t(val * code_max);
+        val = std::floor(val * code_max);
     }
     if (retrain) {
         quantizer.ReTrain(data.data(), count);

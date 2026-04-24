@@ -119,8 +119,10 @@ TEST_CASE_METHOD(fixtures::DiskANNTestIndex, "diskann cal distance by id", "[ft]
             query->NumElements(1)
                 ->Dim(queries->GetDim())
                 ->Float32Vectors(queries->GetFloat32Vectors() + i * queries->GetDim())
-                ->SparseVectors(queries->GetSparseVectors() + i)
                 ->Owner(false);
+            if (queries->GetSparseVectors() != nullptr) {
+                query->SparseVectors(queries->GetSparseVectors() + i);
+            }
             if (queries->GetPaths() != nullptr) {
                 query->Paths(queries->GetPaths() + i);
             }

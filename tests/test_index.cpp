@@ -37,17 +37,26 @@ Intersection(const int64_t* x, int64_t x_count, const int64_t* y, int64_t y_coun
     return result;
 }
 
+static void
+SetOptionalOneVectorFields(const vsag::DatasetPtr& target,
+                           const vsag::DatasetPtr& source,
+                           uint64_t offset) {
+    if (source->GetPaths() != nullptr) {
+        target->Paths(source->GetPaths() + offset);
+    }
+    if (source->GetSparseVectors() != nullptr) {
+        target->SparseVectors(source->GetSparseVectors() + offset);
+    }
+}
+
 vsag::DatasetPtr
 get_one_query(const vsag::DatasetPtr& queries, int i) {
     auto query = vsag::Dataset::Make();
     query->NumElements(1)
         ->Dim(queries->GetDim())
         ->Float32Vectors(queries->GetFloat32Vectors() + i * queries->GetDim())
-        ->SparseVectors(queries->GetSparseVectors() + i)
         ->Owner(false);
-    if (queries->GetPaths() != nullptr) {
-        query->Paths(queries->GetPaths() + i);
-    }
+    SetOptionalOneVectorFields(query, queries, i);
     return query;
 }
 
@@ -116,11 +125,10 @@ TestIndex::TestUpdateId(const IndexPtr& index,
         // round 0 for update, round 1 for validate update results
         for (int i = 0; i < num_vectors; i++) {
             auto query = vsag::Dataset::Make();
-            query->NumElements(1)
-                ->Dim(dim)
-                ->Float32Vectors(base + i * dim)
-                ->SparseVectors(dataset->base_->GetSparseVectors() + i)
-                ->Owner(false);
+            query->NumElements(1)->Dim(dim)->Float32Vectors(base + i * dim)->Owner(false);
+            if (dataset->base_->GetSparseVectors() != nullptr) {
+                query->SparseVectors(dataset->base_->GetSparseVectors() + i);
+            }
 
             auto result = index->KnnSearch(query, gt_topK, search_param);
             REQUIRE(result.has_value());
@@ -341,9 +349,8 @@ TestIndex::TestContinueAdd(const IndexPtr& index,
             ->Ids(dataset->base_->GetIds() + j)
             ->NumElements(1)
             ->Float32Vectors(dataset->base_->GetFloat32Vectors() + j * dim)
-            ->Paths(dataset->base_->GetPaths() + j)
-            ->SparseVectors(dataset->base_->GetSparseVectors() + j)
             ->Owner(false);
+        SetOptionalOneVectorFields(data_one, dataset->base_, j);
         auto add_index = index->Add(data_one);
         if (expected_success) {
             REQUIRE(add_index.has_value());
@@ -380,9 +387,8 @@ TestIndex::TestTrainAndAdd(const TestIndex::IndexPtr& index,
             ->Ids(dataset->base_->GetIds() + j)
             ->NumElements(1)
             ->Float32Vectors(dataset->base_->GetFloat32Vectors() + j * dim)
-            ->Paths(dataset->base_->GetPaths() + j)
-            ->SparseVectors(dataset->base_->GetSparseVectors() + j)
             ->Owner(false);
+        SetOptionalOneVectorFields(data_one, dataset->base_, j);
         auto add_index = index->Add(data_one);
         if (expected_success) {
             REQUIRE(add_index.has_value());
@@ -1162,10 +1168,9 @@ TestIndex::TestConcurrentAddSearch(const TestIndex::IndexPtr& index,
         data_one->Dim(dim)
             ->Ids(dataset->base_->GetIds() + i)
             ->NumElements(1)
-            ->Paths(dataset->base_->GetPaths() + i)
             ->Float32Vectors(dataset->base_->GetFloat32Vectors() + i * dim)
-            ->SparseVectors(dataset->base_->GetSparseVectors() + i)
             ->Owner(false);
+        SetOptionalOneVectorFields(data_one, dataset->base_, i);
 
         auto add_res = index->Add(data_one);
         auto search_res = index->KnnSearch(data_one, topk, search_param);
@@ -1225,10 +1230,9 @@ TestIndex::TestConcurrentAdd(const TestIndex::IndexPtr& index,
         data_one->Dim(dim)
             ->Ids(dataset->base_->GetIds() + i)
             ->NumElements(1)
-            ->Paths(dataset->base_->GetPaths() + i)
             ->Float32Vectors(dataset->base_->GetFloat32Vectors() + i * dim)
-            ->SparseVectors(dataset->base_->GetSparseVectors() + i)
             ->Owner(false);
+        SetOptionalOneVectorFields(data_one, dataset->base_, i);
         auto add_index = index->Add(data_one);
         return add_index;
     };
@@ -1428,9 +1432,11 @@ TestIndex::TestContinueAddIgnoreRequire(const TestIndex::IndexPtr& index,
         data_one->Dim(dim)
             ->Ids(dataset->base_->GetIds() + j)
             ->NumElements(1)
-            ->Paths(dataset->base_->GetPaths() + j)
             ->Float32Vectors(dataset->base_->GetFloat32Vectors() + j * dim)
             ->Owner(false);
+        if (dataset->base_->GetPaths() != nullptr) {
+            data_one->Paths(dataset->base_->GetPaths() + j);
+        }
         auto add_index = index->Add(data_one);
     }
 }
@@ -2583,9 +2589,8 @@ TestIndex::TestSearchOvertime(const IndexPtr& index,
         query->NumElements(1)
             ->Dim(dim)
             ->Float32Vectors(queries->GetFloat32Vectors() + i * dim)
-            ->SparseVectors(queries->GetSparseVectors() + i)
-            ->Paths(queries->GetPaths() + i)
             ->Owner(false);
+        SetOptionalOneVectorFields(query, queries, i);
         auto res = index->KnnSearch(query, 10, search_param);
         REQUIRE(res.has_value());
         auto result = res.value();
@@ -2751,10 +2756,9 @@ TestIndex::TestConcurrentAddSearchRemove(const TestIndex::IndexPtr& index,
         data_one->Dim(dim)
             ->Ids(dataset->base_->GetIds() + i)
             ->NumElements(1)
-            ->Paths(dataset->base_->GetPaths() + i)
             ->Float32Vectors(dataset->base_->GetFloat32Vectors() + i * dim)
-            ->SparseVectors(dataset->base_->GetSparseVectors() + i)
             ->Owner(false);
+        SetOptionalOneVectorFields(data_one, dataset->base_, i);
         auto add_index = index->Add(data_one);
         auto search_index = index->KnnSearch(data_one, 1, search_param);
         auto remove_index = index->Remove(*(dataset->base_->GetIds() + i));

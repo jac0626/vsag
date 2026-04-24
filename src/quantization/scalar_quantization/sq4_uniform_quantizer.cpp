@@ -16,6 +16,7 @@
 #include "sq4_uniform_quantizer.h"
 
 #include <cstddef>
+#include <cstring>
 
 #include "index_common_param.h"
 #include "scalar_quantization_trainer.h"
@@ -26,6 +27,23 @@
 #include "utils/util_functions.h"
 
 namespace vsag {
+namespace {
+
+template <typename T>
+T
+LoadUnaligned(const uint8_t* data) {
+    T value;
+    std::memcpy(&value, data, sizeof(T));
+    return value;
+}
+
+template <typename T>
+void
+StoreUnaligned(uint8_t* data, T value) {
+    std::memcpy(data, &value, sizeof(T));
+}
+
+}  // namespace
 
 using norm_type = uint64_t;
 
@@ -123,7 +141,7 @@ SQ4UniformQuantizer<metric>::EncodeOneImpl(const DataType* data, uint8_t* codes)
     }
 
     for (uint64_t d = 0; d < this->dim_; d++) {
-        delta = 1.0F * (data[d] - lower_bound_) / diff_;
+        delta = (diff_ == 0.0F) ? 0.0F : 1.0F * (data[d] - lower_bound_) / diff_;
         if (delta < 0.0F) {
             delta = 0.0F;
         } else if (delta > 0.999F) {
@@ -143,13 +161,13 @@ SQ4UniformQuantizer<metric>::EncodeOneImpl(const DataType* data, uint8_t* codes)
     }
 
     if constexpr (metric == MetricType::METRIC_TYPE_L2SQR) {
-        *(norm_type*)(codes + offset_norm_) = norm;
+        StoreUnaligned(codes + offset_norm_, norm);
     }
 
     if constexpr (metric == MetricType::METRIC_TYPE_IP or
                   metric == MetricType::METRIC_TYPE_COSINE) {
-        *(sum_type*)(codes + offset_sum_) = sum;
-        *(sum_type*)(codes + offset_codes_sum_) = codes_sum;
+        StoreUnaligned(codes + offset_sum_, sum);
+        StoreUnaligned(codes + offset_codes_sum_, codes_sum);
     }
 
     return true;
@@ -176,8 +194,8 @@ SQ4UniformQuantizer<metric>::ComputeImpl(const uint8_t* codes1, const uint8_t* c
     if constexpr (metric == MetricType::METRIC_TYPE_L2SQR) {
         result = SQ4UniformComputeCodesIP(codes1, codes2, this->dim_);
 
-        norm_type norm1 = *((norm_type*)(codes1 + offset_norm_));
-        norm_type norm2 = *((norm_type*)(codes2 + offset_norm_));
+        norm_type norm1 = LoadUnaligned<norm_type>(codes1 + offset_norm_);
+        norm_type norm2 = LoadUnaligned<norm_type>(codes2 + offset_norm_);
 
         result =
             (static_cast<float>(norm1) + static_cast<float>(norm2) - 2 * result) * scalar_rate_;
@@ -185,8 +203,8 @@ SQ4UniformQuantizer<metric>::ComputeImpl(const uint8_t* codes1, const uint8_t* c
                          metric == MetricType::METRIC_TYPE_COSINE) {
         result = SQ4UniformComputeCodesIP(codes1, codes2, this->dim_);
 
-        sum_type sum1 = *((sum_type*)(codes1 + offset_sum_));
-        sum_type sum2 = *((sum_type*)(codes2 + offset_sum_));
+        sum_type sum1 = LoadUnaligned<sum_type>(codes1 + offset_sum_);
+        sum_type sum2 = LoadUnaligned<sum_type>(codes2 + offset_sum_);
 
         result = lower_bound_ * (sum1 + sum2) + scalar_rate_ * result + lower_bound_ * lower_bound_;
 

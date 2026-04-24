@@ -419,12 +419,32 @@ public:
 
     static inline unsigned short int
     getListCount(const linklistsizeint* ptr) {
-        return *((unsigned short int*)ptr);
+        unsigned short int size = 0;
+        std::memcpy(&size, reinterpret_cast<const char*>(ptr), sizeof(size));
+        return size;
     }
 
     static inline void
     setListCount(linklistsizeint* ptr, unsigned short int size) {
-        *((unsigned short int*)(ptr)) = size;
+        std::memcpy(reinterpret_cast<char*>(ptr), &size, sizeof(size));
+    }
+
+    static inline InnerIdType
+    getLinklistNeighbor(const linklistsizeint* ptr, uint64_t index) {
+        InnerIdType neighbor = 0;
+        std::memcpy(&neighbor,
+                    reinterpret_cast<const char*>(ptr) + sizeof(linklistsizeint) +
+                        index * sizeof(InnerIdType),
+                    sizeof(neighbor));
+        return neighbor;
+    }
+
+    static inline void
+    setLinklistNeighbor(linklistsizeint* ptr, uint64_t index, InnerIdType neighbor) {
+        std::memcpy(
+            reinterpret_cast<char*>(ptr) + sizeof(linklistsizeint) + index * sizeof(InnerIdType),
+            &neighbor,
+            sizeof(neighbor));
     }
 
     /*

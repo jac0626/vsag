@@ -140,7 +140,7 @@ SparseTermDataCell::InsertHeapByTermLists(float* dists,
     while (computer->HasNextTerm()) {
         auto it = computer->NextTermIter();
         auto term = computer->GetTerm(it);
-        if (term >= term_ids_.size()) {
+        if (term >= term_sizes_.size() || term_sizes_[term] == 0 || term_ids_[term] == nullptr) {
             continue;
         }
 
