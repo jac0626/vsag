@@ -250,9 +250,10 @@ AreAllPointersDifferent(T* original, T* copy, uint64_t num_elements) {
     return true;
 }
 
-template <>
-bool
-AreAllPointersDifferent(std::string* original, std::string* copy, uint64_t num_elements) {
+static bool
+AreAllStringPointersDifferent(const std::string* original,
+                              const std::string* copy,
+                              uint64_t num_elements) {
     if (original == copy) {
         return false;
     }
@@ -265,6 +266,20 @@ AreAllPointersDifferent(std::string* original, std::string* copy, uint64_t num_e
         }
     }
     return true;
+}
+
+template <>
+bool
+AreAllPointersDifferent(std::string* original, std::string* copy, uint64_t num_elements) {
+    return AreAllStringPointersDifferent(original, copy, num_elements);
+}
+
+template <>
+bool
+AreAllPointersDifferent(const std::string* original,
+                        const std::string* copy,
+                        uint64_t num_elements) {
+    return AreAllStringPointersDifferent(original, copy, num_elements);
 }
 
 TEST_CASE("Dataset Copy and Append Test", "[ut][Dataset]") {
