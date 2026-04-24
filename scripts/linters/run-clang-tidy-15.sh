@@ -46,6 +46,12 @@ fi
 
 echo "Using clang-tidy version $ACTUAL_VERSION (required: $REQUIRED_VERSION)"
 
+# Verify .clang-tidy config is parseable before running; exit non-zero if not.
+if ! "$CLANG_TIDY" --verify-config 2>&1; then
+    echo "ERROR: .clang-tidy config is invalid. Fix the config before running lint."
+    exit 1
+fi
+
 if printf '%s\n' "$@" | grep -qx -- '-fix'; then
     # Find clang-apply-replacements-15 binary
     if command -v clang-apply-replacements-15 &> /dev/null; then
