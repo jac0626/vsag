@@ -36,7 +36,7 @@ TEST_CASE("Normalize Compute", "[ut][simd]") {
             auto gt_zero_centroid = generic::NormalizeWithCentroid(
                 vec1.data() + i * dim, zero_centroid.data(), tmp_value.data(), dim);
             auto gt = generic::Normalize(vec1.data() + i * dim, tmp_value.data(), dim);
-            REQUIRE(gt_zero_centroid == gt);
+            REQUIRE(fixtures::dist_t(gt_zero_centroid) == fixtures::dist_t(gt));
 
             if (SimdStatus::SupportSSE()) {
                 auto sse = sse::Normalize(vec1.data() + i * dim, tmp_value.data() + dim, dim);

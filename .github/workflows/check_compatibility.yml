@@ -25,18 +25,11 @@ jobs:
           mv /tmp/gh_${GH_VERSION}_linux_amd64/bin/gh /usr/local/bin/gh
           rm -rf /tmp/gh.tar.gz /tmp/gh_${GH_VERSION}_linux_amd64
           gh --version
+      - uses: actions/checkout@v4
       - name: Download Compatibility Indexes from Release
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-        run: |
-          gh release download compatibility-indexes \
-            --repo antgroup/vsag \
-            --dir /tmp \
-            --pattern "*.index" \
-            --pattern "*.bin" \
-            --pattern "*.json" \
-            || echo "Warning: Failed to download compatibility indexes"
-      - uses: actions/checkout@v4
+        run: bash ./scripts/download_compatibility_assets.sh
       - name: Compile Check Compatibility Tools
         run: export CMAKE_GENERATOR="Ninja"; make release VSAG_ENABLE_TOOLS=ON
       - name: Run Check Compatibility

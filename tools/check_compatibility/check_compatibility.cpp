@@ -15,8 +15,12 @@
 
 #include <vsag/vsag.h>
 
+#include <cstdlib>
 #include <fstream>
 #include <iostream>
+#include <sstream>
+#include <string>
+#include <vector>
 
 std::vector<std::string>
 split_string(const std::string& input, char delimiter) {
@@ -32,13 +36,30 @@ split_string(const std::string& input, char delimiter) {
 }
 
 std::string
-read_json(const std::string& json_path) {
+asset_path(const std::string& compatibility_index_dir, const std::string& filename) {
+    if (compatibility_index_dir.back() == '/') {
+        return compatibility_index_dir + filename;
+    }
+    return compatibility_index_dir + "/" + filename;
+}
+
+bool
+read_json(const std::string& json_path, std::string& json) {
     std::ifstream infile(json_path);
+    if (not infile.is_open()) {
+        std::cerr << "failed to open json file: " << json_path << std::endl;
+        return false;
+    }
     std::stringstream buffer;
     buffer << infile.rdbuf();
     infile.close();
 
-    return buffer.str();
+    json = buffer.str();
+    if (json.empty()) {
+        std::cerr << "json file is empty: " << json_path << std::endl;
+        return false;
+    }
+    return true;
 }
 
 int
@@ -50,16 +71,33 @@ main(int argc, char** argv) {
 
     std::string input_str = argv[1];
     auto strs = split_string(input_str, '_');
-    auto tag_id = strs[0];
+    if (strs.size() < 2) {
+        std::cerr << "input error" << std::endl;
+        return -1;
+    }
     auto algo_name = strs[1];
-    std::string index_path = "/tmp/" + input_str + ".index";
-    std::string search_json_path = "/tmp/" + input_str + "_search.json";
-    std::string build_json_path = "/tmp/" + input_str + "_build.json";
 
-    auto build_json = read_json(build_json_path);
-    auto search_json = read_json(search_json_path);
+    std::string compatibility_index_dir = "/tmp";
+    const auto* compatibility_index_dir_env = std::getenv("COMPATIBILITY_INDEX_DIR");
+    if (compatibility_index_dir_env != nullptr and compatibility_index_dir_env[0] != '\0') {
+        compatibility_index_dir = compatibility_index_dir_env;
+    }
+
+    std::string index_path = asset_path(compatibility_index_dir, input_str + ".index");
+    std::string search_json_path =
+        asset_path(compatibility_index_dir, input_str + "_search.json");
+    std::string build_json_path = asset_path(compatibility_index_dir, input_str + "_build.json");
+
+    std::string build_json;
+    std::string search_json;
 
     auto log_error = [&]() { std::cerr << input_str << " failed " << std::endl; };
+
+    if (not read_json(build_json_path, build_json) or
+        not read_json(search_json_path, search_json)) {
+        log_error();
+        return -1;
+    }
 
     auto index = vsag::Factory::CreateIndex(algo_name, build_json);
     if (not index.has_value()) {
@@ -68,6 +106,11 @@ main(int argc, char** argv) {
     }
     auto algo = index.value();
     std::ifstream index_file(index_path, std::ios::binary);
+    if (not index_file.is_open()) {
+        std::cerr << "failed to open index file: " << index_path << std::endl;
+        log_error();
+        return -1;
+    }
     auto load_index = algo->Deserialize(index_file);
     if (not load_index.has_value()) {
         log_error();
@@ -75,10 +118,20 @@ main(int argc, char** argv) {
     }
     int64_t dim = 512;
     auto count = 500;
-    std::string origin_data_path = "/tmp/random_512d_10K.bin";
+    std::string origin_data_path = asset_path(compatibility_index_dir, "random_512d_10K.bin");
     std::ifstream ifs(origin_data_path, std::ios::binary);
+    if (not ifs.is_open()) {
+        std::cerr << "failed to open dataset file: " << origin_data_path << std::endl;
+        log_error();
+        return -1;
+    }
     std::vector<float> data(count * dim);
     ifs.read(reinterpret_cast<char*>(data.data()), data.size() * sizeof(float));
+    if (ifs.gcount() != static_cast<std::streamsize>(data.size() * sizeof(float))) {
+        std::cerr << "dataset file is incomplete: " << origin_data_path << std::endl;
+        log_error();
+        return -1;
+    }
 
     for (int i = 0; i < count; ++i) {
         auto query = vsag::Dataset::Make();

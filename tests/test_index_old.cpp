@@ -1063,7 +1063,7 @@ TEST_CASE("int8 + freshhnsw + feedback + update", "[ft][index][hnsw]") {
         constexpr auto search_parameters_json = R"(
         {{
             "fresh_hnsw": {{
-                "ef_search": 10,
+                "ef_search": 1,
                 "use_conjugate_graph_search": {}
             }}
         }}
