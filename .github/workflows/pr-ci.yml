@@ -111,7 +111,7 @@ jobs:
     name: ASan Build macOS arm64
     needs: [changes, format]
     if: needs.changes.outputs.cpp == 'true'
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - name: Install Dependencies
@@ -153,7 +153,7 @@ jobs:
     name: Release Build macOS arm64
     needs: [changes, format]
     if: needs.changes.outputs.cpp == 'true'
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - name: Install Dependencies
@@ -178,7 +178,7 @@ jobs:
     name: Test macOS Unittests
     needs: [changes, build-asan-macos-arm64]
     if: needs.changes.outputs.cpp == 'true'
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - name: Install Dependencies
@@ -212,7 +212,7 @@ jobs:
     name: Test macOS Functests
     needs: [changes, build-asan-macos-arm64]
     if: needs.changes.outputs.cpp == 'true'
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - name: Install Dependencies
@@ -246,7 +246,7 @@ jobs:
     name: Test Example macOS arm64
     needs: [changes, build-asan-macos-arm64]
     if: needs.changes.outputs.cpp == 'true'
-    runs-on: macos-14
+    runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
       - name: Install Dependencies
