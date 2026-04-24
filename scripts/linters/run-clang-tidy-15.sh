@@ -63,15 +63,37 @@ for arg in "$@"; do
     fi
 
     case "$arg" in
-        --config-file|-config)
+        --config-file)
+            # clang-tidy uses --config-file; run-clang-tidy.py uses -config-file
             VERIFY_CONFIG_ARGS+=("$arg")
             EXPECT_CONFIG_VALUE=1
-            RUN_CLANG_TIDY_ARGS+=("${arg#--}")
+            RUN_CLANG_TIDY_ARGS+=("-config-file")
             EXPECT_RUN_CONFIG_VALUE=1
             ;;
-        --config-file=*|-config=*)
+        -config-file)
+            # run-clang-tidy.py form; clang-tidy --verify-config uses --config-file
+            VERIFY_CONFIG_ARGS+=("--config-file")
+            EXPECT_CONFIG_VALUE=1
+            RUN_CLANG_TIDY_ARGS+=("$arg")
+            EXPECT_RUN_CONFIG_VALUE=1
+            ;;
+        -config)
             VERIFY_CONFIG_ARGS+=("$arg")
-            RUN_CLANG_TIDY_ARGS+=("${arg#--}")
+            EXPECT_CONFIG_VALUE=1
+            RUN_CLANG_TIDY_ARGS+=("$arg")
+            EXPECT_RUN_CONFIG_VALUE=1
+            ;;
+        --config-file=*)
+            VERIFY_CONFIG_ARGS+=("$arg")
+            RUN_CLANG_TIDY_ARGS+=("-config-file=${arg#--config-file=}")
+            ;;
+        -config-file=*)
+            VERIFY_CONFIG_ARGS+=("--config-file=${arg#-config-file=}")
+            RUN_CLANG_TIDY_ARGS+=("$arg")
+            ;;
+        -config=*)
+            VERIFY_CONFIG_ARGS+=("$arg")
+            RUN_CLANG_TIDY_ARGS+=("$arg")
             ;;
         *)
             RUN_CLANG_TIDY_ARGS+=("$arg")
