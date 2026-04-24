@@ -84,8 +84,7 @@ main(int argc, char** argv) {
     }
 
     std::string index_path = asset_path(compatibility_index_dir, input_str + ".index");
-    std::string search_json_path =
-        asset_path(compatibility_index_dir, input_str + "_search.json");
+    std::string search_json_path = asset_path(compatibility_index_dir, input_str + "_search.json");
     std::string build_json_path = asset_path(compatibility_index_dir, input_str + "_build.json");
 
     std::string build_json;
