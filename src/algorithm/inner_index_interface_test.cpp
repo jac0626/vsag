@@ -167,6 +167,14 @@ public:
     }
 };
 
+Binary
+MakeBinary(const std::shared_ptr<int8_t[]>& data, uint64_t size) {
+    Binary binary;
+    binary.data = data;
+    binary.size = size;
+    return binary;
+}
+
 template <typename Func>
 void
 RequireReadError(Func&& func) {
@@ -176,6 +184,10 @@ RequireReadError(Func&& func) {
     } catch (const VsagException& e) {
         got_read_error = true;
         REQUIRE(e.error_.type == ErrorType::READ_ERROR);
+    } catch (const std::exception& e) {
+        FAIL("Expected READ_ERROR VsagException, got std::exception: " << e.what());
+    } catch (...) {
+        FAIL("Expected READ_ERROR VsagException, got non-standard exception");
     }
     REQUIRE(got_read_error);
 }
@@ -245,7 +257,7 @@ TEST_CASE("InnerIndexInterface rejects malformed binary set", "[ut][InnerIndexIn
 
     SECTION("null non-empty index binary") {
         BinarySet binary;
-        binary.Set(index->GetName(), Binary{.data = nullptr, .size = sizeof(uint64_t)});
+        binary.Set(index->GetName(), MakeBinary(std::shared_ptr<int8_t[]>(), sizeof(uint64_t)));
 
         RequireReadError([&index, &binary]() { index->Deserialize(binary); });
     }
@@ -253,7 +265,7 @@ TEST_CASE("InnerIndexInterface rejects malformed binary set", "[ut][InnerIndexIn
     SECTION("truncated index binary") {
         auto data = std::shared_ptr<int8_t[]>(new int8_t[1]);
         BinarySet binary;
-        binary.Set(index->GetName(), Binary{.data = data, .size = 1});
+        binary.Set(index->GetName(), MakeBinary(data, 1));
 
         RequireReadError([&index, &binary]() { index->Deserialize(binary); });
     }
@@ -262,7 +274,7 @@ TEST_CASE("InnerIndexInterface rejects malformed binary set", "[ut][InnerIndexIn
         index = std::make_shared<NullDestinationInnerIndex>();
         auto data = std::shared_ptr<int8_t[]>(new int8_t[1]);
         BinarySet binary;
-        binary.Set(index->GetName(), Binary{.data = data, .size = 1});
+        binary.Set(index->GetName(), MakeBinary(data, 1));
 
         RequireReadError([&index, &binary]() { index->Deserialize(binary); });
     }
@@ -271,7 +283,7 @@ TEST_CASE("InnerIndexInterface rejects malformed binary set", "[ut][InnerIndexIn
         index = std::make_shared<SeekOutOfRangeInnerIndex>();
         auto data = std::shared_ptr<int8_t[]>(new int8_t[1]);
         BinarySet binary;
-        binary.Set(index->GetName(), Binary{.data = data, .size = 1});
+        binary.Set(index->GetName(), MakeBinary(data, 1));
 
         RequireReadError([&index, &binary]() { index->Deserialize(binary); });
     }
