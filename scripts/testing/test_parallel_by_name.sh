@@ -23,13 +23,13 @@ fi
 for tag in ${parallel_tags}
 do
   othertag="~"${tag}${othertag}
-  ./build/tests/${testname} -d yes ${UT_FILTER} -a --order rand --allow-running-no-tests ${tag} ${addition_tag} -o ./log/${tag}.log &
-  pids+=($!)
   logname="./log/"${tag}".log"
+  ./build/tests/${testname} -d yes ${UT_FILTER} -a --order rand --allow-running-no-tests ${tag} ${addition_tag} -o ${logname} 2>> ${logname} &
+  pids+=($!)
   logger_files+=($logname)
 done
 
-./build/tests/${testname} -d yes ${UT_FILTER} -a --order rand --allow-running-no-tests ${othertag} ${addition_tag} -o ./log/other.log &
+./build/tests/${testname} -d yes ${UT_FILTER} -a --order rand --allow-running-no-tests ${othertag} ${addition_tag} -o ./log/other.log 2>> ./log/other.log &
 pids+=($!)
 logger_files+=("./log/other.log")
 
@@ -52,6 +52,21 @@ do
   fi
   ((index+=1))
 done
+
+sanitizer_successful=true
+sanitizer_pattern='runtime error:|ERROR: (AddressSanitizer|UndefinedBehaviorSanitizer|LeakSanitizer)|SUMMARY: (AddressSanitizer|UndefinedBehaviorSanitizer|LeakSanitizer)'
+for log_file in "${logger_files[@]}"
+do
+  if grep -Eq "${sanitizer_pattern}" "${log_file}"; then
+    sanitizer_successful=false
+    echo "${log_file} sanitizer failed"
+    cat "${log_file}"
+  fi
+done
+
+if [ $sanitizer_successful = false ]; then
+  all_successful=false
+fi
 
 if [ $all_successful = true ]; then
   exit 0
