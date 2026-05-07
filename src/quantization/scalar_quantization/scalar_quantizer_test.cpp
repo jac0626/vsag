@@ -15,6 +15,8 @@
 
 #include "scalar_quantizer.h"
 
+#include <cmath>
+#include <limits>
 #include <vector>
 
 #include "impl/allocator/default_allocator.h"
@@ -95,6 +97,20 @@ TEST_CASE("SQ4 Serialize and Deserialize", "[ut][SQ4Quantizer]") {
             TestSerializeAndDeserializeMetricSQ4<metrics[2]>(dim, count, error);
         }
     }
+}
+
+TEST_CASE("SQ8 Encode handles NaN delta before uint8 cast", "[ut][SQ8Quantizer]") {
+    auto allocator = SafeAllocator::FactoryDefaultAllocator();
+    SQ8Quantizer<MetricType::METRIC_TYPE_L2SQR> quantizer(2, allocator.get());
+    std::vector<float> train = {0.0F, 0.0F, 1.0F, 1.0F};
+    std::vector<float> query = {std::numeric_limits<float>::quiet_NaN(), 0.5F};
+    std::vector<uint8_t> codes(quantizer.GetCodeSize());
+    std::vector<float> decoded(2);
+
+    REQUIRE(quantizer.Train(train.data(), 2));
+    REQUIRE(quantizer.EncodeOne(query.data(), codes.data()));
+    REQUIRE(quantizer.DecodeOne(codes.data(), decoded.data()));
+    REQUIRE(std::isfinite(decoded[0]));
 }
 
 template <MetricType metric>

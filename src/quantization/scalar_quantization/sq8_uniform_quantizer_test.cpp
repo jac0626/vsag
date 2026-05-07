@@ -49,6 +49,22 @@ TEST_CASE("SQ8 Uniform Encode and Decode", "[ut][SQ8UniformQuantizer]") {
     }
 }
 
+TEST_CASE("SQ8 Uniform encodes zero range to zero", "[ut][SQ8UniformQuantizer]") {
+    auto allocator = SafeAllocator::FactoryDefaultAllocator();
+    SQ8UniformQuantizer<MetricType::METRIC_TYPE_L2SQR> quantizer(4, allocator.get());
+    std::vector<float> train(12, 3.0F);
+    std::vector<float> query(4, 4.0F);
+    std::vector<uint8_t> codes(quantizer.GetCodeSize());
+    std::vector<float> decoded(4);
+
+    REQUIRE(quantizer.Train(train.data(), 3));
+    REQUIRE(quantizer.EncodeOne(query.data(), codes.data()));
+    REQUIRE(quantizer.DecodeOne(codes.data(), decoded.data()));
+    for (auto value : decoded) {
+        REQUIRE(value == 3.0F);
+    }
+}
+
 template <MetricType metric>
 void
 TestComputeMetricSQ8Uniform(uint64_t dim, int count, float error = 1e-5) {

@@ -15,6 +15,8 @@
 
 #include "scalar_quantizer.h"
 
+#include <cmath>
+
 #include "scalar_quantization_trainer.h"
 #include "simd/normalize.h"
 #include "simd/sq4_simd.h"
@@ -104,6 +106,8 @@ ScalarQuantizer<metric, bit>::EncodeOneImpl(const float* data, uint8_t* codes) c
             delta = 0;
         } else if (delta > 0.999F) {
             delta = 1;
+        } else if (std::isnan(delta)) {
+            delta = 0;
         }
         scaled = static_cast<uint8_t>(static_cast<float>(MAX_CODE_PER_DIM - 1) * delta);
         fill_codes(codes, scaled, BIT_PER_DIM, d);
