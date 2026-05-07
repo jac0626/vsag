@@ -16,6 +16,7 @@
 #include "fast_bitset.h"
 
 #include <catch2/matchers/catch_matchers.hpp>
+#include <limits>
 #include <sstream>
 
 #include "impl/allocator/safe_allocator.h"
@@ -229,7 +230,7 @@ TEST_CASE("FastBitset rejects oversized deserialize size", "[ut][FastBitset]") {
     std::stringstream stream(std::ios::in | std::ios::out | std::ios::binary);
     IOStreamWriter writer(stream);
     const bool fill_bit = false;
-    const uint64_t oversized_size = 0x80000000ULL;
+    const uint64_t oversized_size = (std::numeric_limits<uint32_t>::max() >> 1) + 1ULL;
     StreamWriter::WriteObj(writer, fill_bit);
     StreamWriter::WriteObj(writer, oversized_size);
     stream.seekg(0);
