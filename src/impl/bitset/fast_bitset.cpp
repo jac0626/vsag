@@ -17,6 +17,7 @@
 
 #include <limits>
 #include <memory>
+#include <string>
 
 #include "simd/bit_simd.h"
 #include "vsag_exception.h"
@@ -24,6 +25,7 @@
 namespace vsag {
 
 static constexpr uint64_t FILL_ONE = 0xFFFFFFFFFFFFFFFF;
+// The high bit of capacity_ stores fill_bit, so serialized word count must fit in 31 bits.
 static constexpr uint64_t MAX_FAST_BITSET_WORDS = std::numeric_limits<uint32_t>::max() >> 1;
 
 void
@@ -222,10 +224,19 @@ FastBitset::Deserialize(StreamReader& reader) {
     uint64_t size;
     StreamReader::ReadObj(reader, size);
     if (size > MAX_FAST_BITSET_WORDS) {
-        throw VsagException(ErrorType::READ_ERROR, "bitset size too large");
+        throw VsagException(ErrorType::READ_ERROR,
+                            "bitset word size too large: ",
+                            std::to_string(size),
+                            ", max: ",
+                            std::to_string(MAX_FAST_BITSET_WORDS));
     }
-    if (size > std::numeric_limits<size_t>::max() / sizeof(uint64_t)) {
-        throw VsagException(ErrorType::READ_ERROR, "bitset byte size too large");
+    const auto max_byte_words = std::numeric_limits<size_t>::max() / sizeof(uint64_t);
+    if (size > max_byte_words) {
+        throw VsagException(ErrorType::READ_ERROR,
+                            "bitset byte size too large, words: ",
+                            std::to_string(size),
+                            ", max words: ",
+                            std::to_string(max_byte_words));
     }
 
     std::unique_ptr<uint64_t[]> new_data;

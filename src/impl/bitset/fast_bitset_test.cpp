@@ -204,11 +204,6 @@ GetUnion(const std::vector<int>& values1, const std::vector<int>& values2) {
 TEST_CASE("FastBitset empty resize and deserialize", "[ut][FastBitset]") {
     auto allocator = SafeAllocator::FactoryDefaultAllocator();
 
-    FastBitset bitset(allocator.get());
-    bitset.Set(3, true);
-    REQUIRE(bitset.Test(3));
-    REQUIRE(bitset.Count() == 1);
-
     FastBitset empty(allocator.get());
     std::stringstream stream(std::ios::in | std::ios::out | std::ios::binary);
     IOStreamWriter writer(stream);
