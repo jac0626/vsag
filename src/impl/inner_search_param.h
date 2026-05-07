@@ -19,6 +19,7 @@
 #include <mutex>
 
 #include "typing.h"
+#include "utils/filter_search_skip_strategy.h"
 #include "utils/pointer_define.h"
 #include "utils/timer.h"
 
@@ -43,6 +44,8 @@ public:
     uint32_t hops_limit{std::numeric_limits<uint32_t>::max()};
     FilterPtr is_inner_id_allowed{nullptr};
     float skip_ratio{0.8F};
+    FilterSearchSkipStrategyType skip_strategy_type{
+        FilterSearchSkipStrategyType::DETERMINISTIC_ACCUMULATIVE};
     InnerSearchMode search_mode{KNN_SEARCH};
     int range_search_limit_size{-1};
     int64_t parallel_search_thread_count{1};
@@ -71,6 +74,7 @@ public:
             ep = other.ep;
             ef = other.ef;
             skip_ratio = other.skip_ratio;
+            skip_strategy_type = other.skip_strategy_type;
             search_mode = other.search_mode;
             range_search_limit_size = other.range_search_limit_size;
             is_inner_id_allowed = other.is_inner_id_allowed;
