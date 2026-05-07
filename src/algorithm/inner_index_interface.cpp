@@ -17,8 +17,10 @@
 
 #include <fmt/format.h>
 
+#include <cstddef>
 #include <cstring>
 #include <limits>
+#include <type_traits>
 
 #include "algorithm/bruteforce/bruteforce.h"
 #include "algorithm/hgraph/hgraph.h"
@@ -229,7 +231,15 @@ InnerIndexInterface::Deserialize(const BinarySet& binary_set) {
         }
         const auto copy_offset = static_cast<size_t>(offset);
         const auto copy_len = static_cast<size_t>(len);
-        std::memcpy(dest, b.data.get() + copy_offset, copy_len);
+        using PointerDiffLimit = std::make_unsigned_t<std::ptrdiff_t>;
+        if (offset > static_cast<PointerDiffLimit>(std::numeric_limits<std::ptrdiff_t>::max()) ||
+            len > static_cast<PointerDiffLimit>(std::numeric_limits<std::ptrdiff_t>::max()) ||
+            len > static_cast<PointerDiffLimit>(std::numeric_limits<std::ptrdiff_t>::max()) -
+                      offset) {
+            throw VsagException(
+                ErrorType::READ_ERROR, "binary read offset too large for index: ", this->GetName());
+        }
+        std::memcpy(dest, b.data.get() + static_cast<std::ptrdiff_t>(offset), copy_len);
     };
 
     try {
