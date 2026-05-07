@@ -15,12 +15,15 @@
 
 #include "fast_bitset.h"
 
+#include <memory>
+
 #include "simd/bit_simd.h"
 #include "vsag_exception.h"
 
 namespace vsag {
 
 static constexpr uint64_t FILL_ONE = 0xFFFFFFFFFFFFFFFF;
+static constexpr uint64_t MAX_FAST_BITSET_WORDS = 0x7FFFFFFF;
 
 void
 FastBitset::Set(int64_t pos, bool value) {
@@ -217,14 +220,20 @@ FastBitset::Deserialize(StreamReader& reader) {
     StreamReader::ReadObj(reader, fill_bit);
     uint64_t size;
     StreamReader::ReadObj(reader, size);
-    delete[] data_;
-    data_ = nullptr;
-    if (size > 0) {
-        data_ = new uint64_t[size];
-        reader.Read(reinterpret_cast<char*>(data_), size * sizeof(uint64_t));
+    if (size > MAX_FAST_BITSET_WORDS) {
+        throw VsagException(ErrorType::INTERNAL_ERROR, "bitset size too large");
     }
-    this->size_ = size;
-    this->set_capacity(size);
+
+    std::unique_ptr<uint64_t[]> new_data;
+    if (size > 0) {
+        new_data = std::make_unique<uint64_t[]>(size);
+        reader.Read(reinterpret_cast<char*>(new_data.get()), size * sizeof(uint64_t));
+    }
+
+    delete[] data_;
+    data_ = new_data.release();
+    this->size_ = static_cast<uint32_t>(size);
+    this->set_capacity(static_cast<uint32_t>(size));
     this->set_fill_bit(fill_bit);
 }
 

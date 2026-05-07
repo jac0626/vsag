@@ -21,6 +21,7 @@
 #include "impl/allocator/safe_allocator.h"
 #include "unittest.h"
 #include "utils/util_functions.h"
+#include "vsag_exception.h"
 using namespace vsag;
 
 std::pair<FastBitsetPtr, std::vector<int>>
@@ -222,6 +223,26 @@ TEST_CASE("FastBitset empty resize and deserialize", "[ut][FastBitset]") {
     restored.Set(7, true);
     REQUIRE(restored.Test(7));
     REQUIRE(restored.Count() == 1);
+}
+
+TEST_CASE("FastBitset rejects oversized deserialize size", "[ut][FastBitset]") {
+    auto allocator = SafeAllocator::FactoryDefaultAllocator();
+
+    FastBitset bitset(allocator.get());
+    bitset.Set(3, true);
+
+    std::stringstream stream(std::ios::in | std::ios::out | std::ios::binary);
+    IOStreamWriter writer(stream);
+    const bool fill_bit = false;
+    const uint64_t oversized_size = 0x80000000ULL;
+    StreamWriter::WriteObj(writer, fill_bit);
+    StreamWriter::WriteObj(writer, oversized_size);
+    stream.seekg(0);
+
+    IOStreamReader reader(stream);
+    REQUIRE_THROWS_AS(bitset.Deserialize(reader), vsag::VsagException);
+    REQUIRE(bitset.Test(3));
+    REQUIRE(bitset.Count() == 1);
 }
 
 std::unordered_set<int>
