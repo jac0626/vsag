@@ -217,8 +217,12 @@ FastBitset::Deserialize(StreamReader& reader) {
     StreamReader::ReadObj(reader, fill_bit);
     uint64_t size;
     StreamReader::ReadObj(reader, size);
-    data_ = new uint64_t[size];
-    reader.Read(reinterpret_cast<char*>(data_), size * sizeof(uint64_t));
+    delete[] data_;
+    data_ = nullptr;
+    if (size > 0) {
+        data_ = new uint64_t[size];
+        reader.Read(reinterpret_cast<char*>(data_), size * sizeof(uint64_t));
+    }
     this->size_ = size;
     this->set_capacity(size);
     this->set_fill_bit(fill_bit);
@@ -234,7 +238,9 @@ void
 FastBitset::resize(uint32_t new_size, uint64_t fill) {
     if (new_size > this->get_capacity()) {
         auto* tmp = new uint64_t[new_size];
-        std::memcpy(tmp, data_, size_ * sizeof(uint64_t));
+        if (size_ > 0) {
+            std::memcpy(tmp, data_, size_ * sizeof(uint64_t));
+        }
         delete[] data_;
         this->data_ = tmp;
         this->set_capacity(new_size);

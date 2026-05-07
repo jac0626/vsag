@@ -16,6 +16,7 @@
 #include "fast_bitset.h"
 
 #include <catch2/matchers/catch_matchers.hpp>
+#include <sstream>
 
 #include "impl/allocator/safe_allocator.h"
 #include "unittest.h"
@@ -197,6 +198,30 @@ GetUnion(const std::vector<int>& values1, const std::vector<int>& values2) {
         result.insert(value);
     }
     return result;
+}
+
+TEST_CASE("FastBitset empty resize and deserialize", "[ut][FastBitset]") {
+    auto allocator = SafeAllocator::FactoryDefaultAllocator();
+
+    FastBitset bitset(allocator.get());
+    bitset.Set(3, true);
+    REQUIRE(bitset.Test(3));
+    REQUIRE(bitset.Count() == 1);
+
+    FastBitset empty(allocator.get());
+    std::stringstream stream(std::ios::in | std::ios::out | std::ios::binary);
+    IOStreamWriter writer(stream);
+    empty.Serialize(writer);
+    stream.seekg(0);
+
+    FastBitset restored(allocator.get());
+    IOStreamReader reader(stream);
+    restored.Deserialize(reader);
+    REQUIRE(restored.Count() == 0);
+
+    restored.Set(7, true);
+    REQUIRE(restored.Test(7));
+    REQUIRE(restored.Count() == 1);
 }
 
 std::unordered_set<int>
