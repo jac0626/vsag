@@ -15,6 +15,7 @@
 
 #include "inner_index_interface.h"
 
+#include <functional>
 #include <memory>
 #include <sstream>
 
@@ -23,6 +24,7 @@
 #include "impl/allocator/safe_allocator.h"
 #include "index_common_param.h"
 #include "unittest.h"
+#include "vsag_exception.h"
 
 using namespace vsag;
 
@@ -124,6 +126,32 @@ public:
     }
 };
 
+class ReadingInnerIndex : public EmptyInnerIndex {
+public:
+    std::string
+    GetName() const override {
+        return "ReadingInnerIndex";
+    }
+
+    void
+    Deserialize(StreamReader& reader) override {
+        uint64_t value = 0;
+        StreamReader::ReadObj(reader, value);
+    }
+};
+
+void
+RequireReadError(const std::function<void()>& func) {
+    bool got_read_error = false;
+    try {
+        func();
+    } catch (const VsagException& e) {
+        got_read_error = true;
+        REQUIRE(e.error_.type == ErrorType::READ_ERROR);
+    }
+    REQUIRE(got_read_error);
+}
+
 TEST_CASE("InnerIndexInterface NOT Implemented", "[ut][InnerIndexInterface]") {
     InnerIndexPtr empty_index = std::make_shared<EmptyInnerIndex>();
     IndexCommonParam common_param;
@@ -176,4 +204,29 @@ TEST_CASE("InnerIndexInterface NOT Implemented", "[ut][InnerIndexInterface]") {
     REQUIRE_THROWS(empty_index->KnnSearch(nullptr, 0, param));
 
     REQUIRE_NOTHROW(empty_index->GetIndexDetailInfos());
+}
+
+TEST_CASE("InnerIndexInterface rejects malformed binary set", "[ut][InnerIndexInterface]") {
+    InnerIndexPtr index = std::make_shared<ReadingInnerIndex>();
+
+    SECTION("missing index binary") {
+        BinarySet binary;
+
+        RequireReadError([&index, &binary]() { index->Deserialize(binary); });
+    }
+
+    SECTION("null non-empty index binary") {
+        BinarySet binary;
+        binary.Set(index->GetName(), Binary{.data = nullptr, .size = sizeof(uint64_t)});
+
+        RequireReadError([&index, &binary]() { index->Deserialize(binary); });
+    }
+
+    SECTION("truncated index binary") {
+        auto data = std::shared_ptr<int8_t[]>(new int8_t[1]);
+        BinarySet binary;
+        binary.Set(index->GetName(), Binary{.data = data, .size = 1});
+
+        RequireReadError([&index, &binary]() { index->Deserialize(binary); });
+    }
 }
