@@ -17,6 +17,8 @@
 
 #include <fmt/format.h>
 
+#include <cstring>
+
 #include "brute_force.h"
 #include "hgraph.h"
 #include "impl/filter/filter_headers.h"
@@ -194,9 +196,29 @@ InnerIndexInterface::Deserialize(const BinarySet& binary_set) {
         }
     }
 
+    if (not binary_set.Contains(this->GetName())) {
+        throw VsagException(
+            ErrorType::READ_ERROR, "missing binary data for index: ", this->GetName());
+    }
+
     Binary b = binary_set.Get(this->GetName());
+    if (b.size > 0 && b.data == nullptr) {
+        throw VsagException(ErrorType::READ_ERROR, "null binary data for index: ", this->GetName());
+    }
+
     auto func = [&](uint64_t offset, uint64_t len, void* dest) -> void {
         // logger::debug("read offset {} len {}", offset, len);
+        if (len == 0) {
+            return;
+        }
+        if (dest == nullptr) {
+            throw VsagException(
+                ErrorType::READ_ERROR, "null read destination for index: ", this->GetName());
+        }
+        if (b.data == nullptr || offset > b.size || len > b.size - offset) {
+            throw VsagException(
+                ErrorType::READ_ERROR, "binary read out of range for index: ", this->GetName());
+        }
         std::memcpy(dest, b.data.get() + offset, len);
     };
 
