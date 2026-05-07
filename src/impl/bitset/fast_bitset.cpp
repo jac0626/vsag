@@ -15,6 +15,7 @@
 
 #include "fast_bitset.h"
 
+#include <limits>
 #include <memory>
 
 #include "simd/bit_simd.h"
@@ -23,7 +24,7 @@
 namespace vsag {
 
 static constexpr uint64_t FILL_ONE = 0xFFFFFFFFFFFFFFFF;
-static constexpr uint64_t MAX_FAST_BITSET_WORDS = 0x7FFFFFFF;
+static constexpr uint64_t MAX_FAST_BITSET_WORDS = std::numeric_limits<uint32_t>::max() >> 1;
 
 void
 FastBitset::Set(int64_t pos, bool value) {
@@ -221,7 +222,10 @@ FastBitset::Deserialize(StreamReader& reader) {
     uint64_t size;
     StreamReader::ReadObj(reader, size);
     if (size > MAX_FAST_BITSET_WORDS) {
-        throw VsagException(ErrorType::INTERNAL_ERROR, "bitset size too large");
+        throw VsagException(ErrorType::READ_ERROR, "bitset size too large");
+    }
+    if (size > std::numeric_limits<size_t>::max() / sizeof(uint64_t)) {
+        throw VsagException(ErrorType::READ_ERROR, "bitset byte size too large");
     }
 
     std::unique_ptr<uint64_t[]> new_data;
