@@ -224,22 +224,21 @@ InnerIndexInterface::Deserialize(const BinarySet& binary_set) {
             throw VsagException(
                 ErrorType::READ_ERROR, "binary read out of range for index: ", this->GetName());
         }
-        if (offset > std::numeric_limits<size_t>::max() ||
-            len > std::numeric_limits<size_t>::max()) {
+        if (len > std::numeric_limits<size_t>::max()) {
             throw VsagException(
                 ErrorType::READ_ERROR, "binary read too large for index: ", this->GetName());
         }
-        const auto copy_offset = static_cast<size_t>(offset);
         const auto copy_len = static_cast<size_t>(len);
         using PointerDiffLimit = std::make_unsigned_t<std::ptrdiff_t>;
-        if (offset > static_cast<PointerDiffLimit>(std::numeric_limits<std::ptrdiff_t>::max()) ||
-            len > static_cast<PointerDiffLimit>(std::numeric_limits<std::ptrdiff_t>::max()) ||
-            len > static_cast<PointerDiffLimit>(std::numeric_limits<std::ptrdiff_t>::max()) -
-                      offset) {
+        const auto max_pointer_offset =
+            static_cast<PointerDiffLimit>(std::numeric_limits<std::ptrdiff_t>::max());
+        if (offset > max_pointer_offset || len > max_pointer_offset ||
+            len > max_pointer_offset - offset) {
             throw VsagException(
                 ErrorType::READ_ERROR, "binary read offset too large for index: ", this->GetName());
         }
-        std::memcpy(dest, b.data.get() + static_cast<std::ptrdiff_t>(offset), copy_len);
+        const auto copy_offset = static_cast<std::ptrdiff_t>(offset);
+        std::memcpy(dest, b.data.get() + copy_offset, copy_len);
     };
 
     try {
