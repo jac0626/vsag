@@ -18,6 +18,7 @@
 #include <fmt/format.h>
 
 #include <cstring>
+#include <limits>
 
 #include "algorithm/bruteforce/bruteforce.h"
 #include "algorithm/hgraph/hgraph.h"
@@ -221,7 +222,14 @@ InnerIndexInterface::Deserialize(const BinarySet& binary_set) {
             throw VsagException(
                 ErrorType::READ_ERROR, "binary read out of range for index: ", this->GetName());
         }
-        std::memcpy(dest, b.data.get() + offset, len);
+        if (offset > std::numeric_limits<size_t>::max() ||
+            len > std::numeric_limits<size_t>::max()) {
+            throw VsagException(
+                ErrorType::READ_ERROR, "binary read too large for index: ", this->GetName());
+        }
+        const auto copy_offset = static_cast<size_t>(offset);
+        const auto copy_len = static_cast<size_t>(len);
+        std::memcpy(dest, b.data.get() + copy_offset, copy_len);
     };
 
     try {

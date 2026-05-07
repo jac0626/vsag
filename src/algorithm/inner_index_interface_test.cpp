@@ -15,9 +15,9 @@
 
 #include "inner_index_interface.h"
 
-#include <functional>
 #include <memory>
 #include <sstream>
+#include <utility>
 
 #include "algorithm/bruteforce/bruteforce.h"
 #include "algorithm/hgraph/hgraph.h"
@@ -140,11 +140,40 @@ public:
     }
 };
 
+class NullDestinationInnerIndex : public EmptyInnerIndex {
+public:
+    std::string
+    GetName() const override {
+        return "NullDestinationInnerIndex";
+    }
+
+    void
+    Deserialize(StreamReader& reader) override {
+        reader.Read(nullptr, 1);
+    }
+};
+
+class SeekOutOfRangeInnerIndex : public EmptyInnerIndex {
+public:
+    std::string
+    GetName() const override {
+        return "SeekOutOfRangeInnerIndex";
+    }
+
+    void
+    Deserialize(StreamReader& reader) override {
+        reader.Seek(2);
+        uint8_t value = 0;
+        reader.Read(reinterpret_cast<char*>(&value), 1);
+    }
+};
+
+template <typename Func>
 void
-RequireReadError(const std::function<void()>& func) {
+RequireReadError(Func&& func) {
     bool got_read_error = false;
     try {
-        func();
+        std::forward<Func>(func)();
     } catch (const VsagException& e) {
         got_read_error = true;
         REQUIRE(e.error_.type == ErrorType::READ_ERROR);
@@ -223,6 +252,24 @@ TEST_CASE("InnerIndexInterface rejects malformed binary set", "[ut][InnerIndexIn
     }
 
     SECTION("truncated index binary") {
+        auto data = std::shared_ptr<int8_t[]>(new int8_t[1]);
+        BinarySet binary;
+        binary.Set(index->GetName(), Binary{.data = data, .size = 1});
+
+        RequireReadError([&index, &binary]() { index->Deserialize(binary); });
+    }
+
+    SECTION("null read destination") {
+        index = std::make_shared<NullDestinationInnerIndex>();
+        auto data = std::shared_ptr<int8_t[]>(new int8_t[1]);
+        BinarySet binary;
+        binary.Set(index->GetName(), Binary{.data = data, .size = 1});
+
+        RequireReadError([&index, &binary]() { index->Deserialize(binary); });
+    }
+
+    SECTION("seek out of range") {
+        index = std::make_shared<SeekOutOfRangeInnerIndex>();
         auto data = std::shared_ptr<int8_t[]>(new int8_t[1]);
         BinarySet binary;
         binary.Set(index->GetName(), Binary{.data = data, .size = 1});
