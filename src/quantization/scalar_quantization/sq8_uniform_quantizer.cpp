@@ -18,6 +18,7 @@
 #include <cstddef>
 
 #include "scalar_quantization_trainer.h"
+#include "scalar_quantization_utils.h"
 #include "simd/normalize.h"
 #include "simd/sq8_uniform_simd.h"
 #include "typing.h"
@@ -113,12 +114,7 @@ SQ8UniformQuantizer<metric>::EncodeOneImpl(const float* data, uint8_t* codes) co
     float inv_diff = diff_ == 0.0F ? 0.0F : 1.0F / diff_;
     for (uint64_t d = 0; d < this->dim_; d++) {
         delta = (data[d] - lower_bound_) * inv_diff;
-        // The negated comparison is true for NaN, preventing it from reaching the uint8_t cast.
-        if (!(delta >= 0.0F)) {
-            delta = 0;
-        } else if (delta > 0.999F) {
-            delta = 1;
-        }
+        delta = ClampScalarQuantizationDelta(delta);
         scaled = static_cast<uint8_t>(255.0F * delta);
         codes[offset_code_ + d] = scaled;
 
