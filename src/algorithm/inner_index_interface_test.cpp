@@ -264,7 +264,7 @@ TEST_CASE("InnerIndexInterface rejects malformed binary set", "[ut][InnerIndexIn
     }
 
     SECTION("truncated index binary") {
-        auto data = std::shared_ptr<int8_t[]>(new int8_t[1]);
+        auto data = std::shared_ptr<int8_t[]>(new int8_t[1]{});
         BinarySet binary;
         binary.Set(index->GetName(), MakeBinary(data, 1));
 
@@ -273,7 +273,7 @@ TEST_CASE("InnerIndexInterface rejects malformed binary set", "[ut][InnerIndexIn
 
     SECTION("null read destination") {
         index = std::make_shared<NullDestinationInnerIndex>();
-        auto data = std::shared_ptr<int8_t[]>(new int8_t[1]);
+        auto data = std::shared_ptr<int8_t[]>(new int8_t[1]{});
         BinarySet binary;
         binary.Set(index->GetName(), MakeBinary(data, 1));
 
@@ -282,7 +282,7 @@ TEST_CASE("InnerIndexInterface rejects malformed binary set", "[ut][InnerIndexIn
 
     SECTION("seek out of range") {
         index = std::make_shared<SeekOutOfRangeInnerIndex>();
-        auto data = std::shared_ptr<int8_t[]>(new int8_t[1]);
+        auto data = std::shared_ptr<int8_t[]>(new int8_t[1]{});
         BinarySet binary;
         binary.Set(index->GetName(), MakeBinary(data, 1));
 
