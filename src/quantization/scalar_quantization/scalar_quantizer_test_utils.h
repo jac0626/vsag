@@ -23,7 +23,11 @@ namespace vsag {
 
 template <typename QuantizerT>
 void
-TestUniformZeroRangeEncodesToZero(QuantizerT& quantizer, uint64_t dim, uint64_t encoded_code_size) {
+TestUniformZeroRangeEncodesToZero(QuantizerT& quantizer,
+                                  uint64_t dim,
+                                  uint64_t encoded_code_size,
+                                  uint64_t code_offset = 0,
+                                  float tolerance = 1e-5F) {
     std::vector<float> train(dim * 3, 3.0F);
     std::vector<float> query(dim, 4.0F);
     std::vector<uint8_t> codes(quantizer.GetCodeSize());
@@ -32,11 +36,11 @@ TestUniformZeroRangeEncodesToZero(QuantizerT& quantizer, uint64_t dim, uint64_t 
     REQUIRE(quantizer.Train(train.data(), 3));
     REQUIRE(quantizer.EncodeOne(query.data(), codes.data()));
     for (uint64_t i = 0; i < encoded_code_size; ++i) {
-        REQUIRE(codes[i] == 0);
+        REQUIRE(codes[code_offset + i] == 0);
     }
     REQUIRE(quantizer.DecodeOne(codes.data(), decoded.data()));
     for (auto value : decoded) {
-        REQUIRE(std::abs(value - 3.0F) <= 1e-6F);
+        REQUIRE(std::abs(value - 3.0F) <= tolerance);
     }
 }
 
