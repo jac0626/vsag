@@ -225,30 +225,27 @@ FastBitset::Deserialize(StreamReader& reader) {
     StreamReader::ReadObj(reader, size);
     if (size > MAX_FAST_BITSET_WORDS) {
         throw VsagException(ErrorType::READ_ERROR,
-                            "bitset word size too large: ",
-                            std::to_string(size),
-                            ", max: ",
-                            std::to_string(MAX_FAST_BITSET_WORDS));
+                            "bitset word size too large: " + std::to_string(size) +
+                                ", max: " + std::to_string(MAX_FAST_BITSET_WORDS));
     }
     const auto max_byte_words = std::numeric_limits<size_t>::max() / sizeof(uint64_t);
     if (size > max_byte_words) {
         throw VsagException(ErrorType::READ_ERROR,
-                            "bitset byte size too large, words: ",
-                            std::to_string(size),
-                            ", max words: ",
-                            std::to_string(max_byte_words));
+                            "bitset byte size too large, words: " + std::to_string(size) +
+                                ", max words: " + std::to_string(max_byte_words));
     }
 
     std::unique_ptr<uint64_t[]> new_data;
     if (size > 0) {
-        new_data = std::make_unique<uint64_t[]>(size);
+        new_data.reset(new uint64_t[size]);
         reader.Read(reinterpret_cast<char*>(new_data.get()), size * sizeof(uint64_t));
     }
 
+    const auto size32 = static_cast<uint32_t>(size);
     delete[] data_;
     data_ = new_data.release();
-    this->size_ = static_cast<uint32_t>(size);
-    this->set_capacity(static_cast<uint32_t>(size));
+    this->size_ = size32;
+    this->set_capacity(size32);
     this->set_fill_bit(fill_bit);
 }
 
