@@ -19,7 +19,6 @@
 #include <limits>
 #include <vector>
 
-#include "impl/allocator/default_allocator.h"
 #include "impl/allocator/safe_allocator.h"
 #include "quantization/quantizer_test.h"
 #include "unittest.h"
