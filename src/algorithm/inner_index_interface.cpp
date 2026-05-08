@@ -199,14 +199,14 @@ InnerIndexInterface::Deserialize(const BinarySet& binary_set) {
         }
     }
 
-    if (not binary_set.Contains(this->GetName())) {
-        throw VsagException(
-            ErrorType::READ_ERROR, "missing binary data for index: ", this->GetName());
+    const auto index_name = this->GetName();
+    if (not binary_set.Contains(index_name)) {
+        throw VsagException(ErrorType::READ_ERROR, "missing binary data for index: ", index_name);
     }
 
-    Binary b = binary_set.Get(this->GetName());
+    Binary b = binary_set.Get(index_name);
     if (b.size > 0 && b.data == nullptr) {
-        throw VsagException(ErrorType::READ_ERROR, "null binary data for index: ", this->GetName());
+        throw VsagException(ErrorType::READ_ERROR, "null binary data for index: ", index_name);
     }
 
     auto func = [&](uint64_t offset, uint64_t len, void* dest) -> void {
@@ -216,15 +216,15 @@ InnerIndexInterface::Deserialize(const BinarySet& binary_set) {
         }
         if (dest == nullptr) {
             throw VsagException(
-                ErrorType::READ_ERROR, "null read destination for index: ", this->GetName());
+                ErrorType::READ_ERROR, "null read destination for index: ", index_name);
         }
         if (b.data == nullptr || offset > b.size || len > b.size - offset) {
             throw VsagException(
-                ErrorType::READ_ERROR, "binary read out of range for index: ", this->GetName());
+                ErrorType::READ_ERROR, "binary read out of range for index: ", index_name);
         }
         if (len > std::numeric_limits<size_t>::max()) {
             throw VsagException(
-                ErrorType::READ_ERROR, "binary read too large for index: ", this->GetName());
+                ErrorType::READ_ERROR, "binary read too large for index: ", index_name);
         }
         const auto copy_len = static_cast<size_t>(len);
         using PointerDiffLimit = std::make_unsigned_t<std::ptrdiff_t>;
@@ -233,7 +233,7 @@ InnerIndexInterface::Deserialize(const BinarySet& binary_set) {
         if (offset > max_pointer_offset || len > max_pointer_offset ||
             len > max_pointer_offset - offset) {
             throw VsagException(
-                ErrorType::READ_ERROR, "binary read offset too large for index: ", this->GetName());
+                ErrorType::READ_ERROR, "binary read offset too large for index: ", index_name);
         }
         const auto copy_offset = static_cast<std::ptrdiff_t>(offset);
         std::memcpy(dest, b.data.get() + copy_offset, copy_len);
