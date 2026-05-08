@@ -16,12 +16,14 @@
 
 namespace vsag {
 
-static inline float
+inline constexpr float kScalarQuantizationUpperClamp = 0.999F;
+
+inline float
 ClampScalarQuantizationDelta(float delta) {
     if (!(delta >= 0.0F)) {
         return 0.0F;
     }
-    if (delta > 0.999F) {
+    if (delta > kScalarQuantizationUpperClamp) {
         return 1.0F;
     }
     return delta;

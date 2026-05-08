@@ -15,11 +15,9 @@
 
 #include "sq8_uniform_quantizer.h"
 
-#include <cmath>
-#include <vector>
-
 #include "impl/allocator/safe_allocator.h"
 #include "quantization/quantizer_test.h"
+#include "scalar_quantizer_test_utils.h"
 #include "unittest.h"
 using namespace vsag;
 
@@ -52,21 +50,9 @@ TEST_CASE("SQ8 Uniform Encode and Decode", "[ut][SQ8UniformQuantizer]") {
 
 TEST_CASE("SQ8 Uniform encodes zero range to zero", "[ut][SQ8UniformQuantizer]") {
     auto allocator = SafeAllocator::FactoryDefaultAllocator();
-    SQ8UniformQuantizer<MetricType::METRIC_TYPE_L2SQR> quantizer(4, allocator.get());
-    std::vector<float> train(12, 3.0F);
-    std::vector<float> query(4, 4.0F);
-    std::vector<uint8_t> codes(quantizer.GetCodeSize());
-    std::vector<float> decoded(4);
-
-    REQUIRE(quantizer.Train(train.data(), 3));
-    REQUIRE(quantizer.EncodeOne(query.data(), codes.data()));
-    for (uint64_t i = 0; i < query.size(); ++i) {
-        REQUIRE(codes[i] == 0);
-    }
-    REQUIRE(quantizer.DecodeOne(codes.data(), decoded.data()));
-    for (auto value : decoded) {
-        REQUIRE(std::abs(value - 3.0F) <= 1e-6F);
-    }
+    constexpr uint64_t dim = 4;
+    SQ8UniformQuantizer<MetricType::METRIC_TYPE_L2SQR> quantizer(dim, allocator.get());
+    TestUniformZeroRangeEncodesToZero(quantizer, dim, dim);
 }
 
 template <MetricType metric>
