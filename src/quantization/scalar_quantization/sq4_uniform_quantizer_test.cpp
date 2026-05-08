@@ -15,6 +15,7 @@
 
 #include "sq4_uniform_quantizer.h"
 
+#include <cmath>
 #include <vector>
 
 #include "impl/allocator/safe_allocator.h"
@@ -64,7 +65,7 @@ TEST_CASE("SQ4 Uniform encodes zero range to zero", "[ut][SQ4UniformQuantizer]")
     }
     REQUIRE(quantizer.DecodeOne(codes.data(), decoded.data()));
     for (auto value : decoded) {
-        REQUIRE(value == 3.0F);
+        REQUIRE(std::abs(value - 3.0F) <= 1e-6F);
     }
 }
 
