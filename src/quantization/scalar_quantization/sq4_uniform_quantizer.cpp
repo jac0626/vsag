@@ -125,8 +125,8 @@ SQ4UniformQuantizer<metric>::EncodeOneImpl(const float* data, uint8_t* codes) co
     float inv_diff = diff_ == 0.0F ? 0.0F : 1.0F / diff_;
     for (uint64_t d = 0; d < this->dim_; d++) {
         delta = (data[d] - lower_bound_) * inv_diff;
-        // This also clamps NaN, preventing it from reaching the uint8_t cast below.
-        if (!(delta > 0.0F)) {
+        // The negated comparison is true for NaN, preventing it from reaching the uint8_t cast.
+        if (!(delta >= 0.0F)) {
             delta = 0.0F;
         } else if (delta > 0.999F) {
             delta = 1.0F;
