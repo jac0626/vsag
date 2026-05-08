@@ -100,6 +100,7 @@ ScalarQuantizer<metric, bit>::EncodeOneImpl(const float* data, uint8_t* codes) c
         } else {
             delta = 1.0F * (cur[d] - lower_bound_[d]) / diff_[d];
         }
+        // This also clamps NaN, preventing it from reaching the uint8_t cast below.
         if (!(delta > 0.0F)) {
             delta = 0;
         } else if (delta > 0.999F) {

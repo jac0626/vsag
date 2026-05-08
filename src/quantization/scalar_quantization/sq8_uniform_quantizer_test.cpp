@@ -59,6 +59,9 @@ TEST_CASE("SQ8 Uniform encodes zero range to zero", "[ut][SQ8UniformQuantizer]")
 
     REQUIRE(quantizer.Train(train.data(), 3));
     REQUIRE(quantizer.EncodeOne(query.data(), codes.data()));
+    for (uint64_t i = 0; i < query.size(); ++i) {
+        REQUIRE(codes[i] == 0);
+    }
     REQUIRE(quantizer.DecodeOne(codes.data(), decoded.data()));
     for (auto value : decoded) {
         REQUIRE(value == 3.0F);

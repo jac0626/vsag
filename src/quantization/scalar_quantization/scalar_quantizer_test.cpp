@@ -110,7 +110,9 @@ TEST_CASE("SQ8 Encode handles NaN delta before uint8 cast", "[ut][SQ8Quantizer]"
     REQUIRE(quantizer.Train(train.data(), 2));
     REQUIRE(quantizer.EncodeOne(query.data(), codes.data()));
     REQUIRE(quantizer.DecodeOne(codes.data(), decoded.data()));
+    REQUIRE(codes[0] == 0);
     REQUIRE(std::isfinite(decoded[0]));
+    REQUIRE(decoded[0] == 0.0F);
 }
 
 template <MetricType metric>
