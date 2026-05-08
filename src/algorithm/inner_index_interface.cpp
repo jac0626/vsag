@@ -209,6 +209,11 @@ InnerIndexInterface::Deserialize(const BinarySet& binary_set) {
         throw VsagException(ErrorType::READ_ERROR, "null binary data for index: ", index_name);
     }
 
+    const auto* binary_data = b.data.get();
+    using PointerDiffLimit = std::make_unsigned_t<std::ptrdiff_t>;
+    const auto max_pointer_offset =
+        static_cast<PointerDiffLimit>(std::numeric_limits<std::ptrdiff_t>::max());
+
     auto func = [&](uint64_t offset, uint64_t len, void* dest) -> void {
         // logger::debug("read offset {} len {}", offset, len);
         if (len == 0) {
@@ -227,16 +232,14 @@ InnerIndexInterface::Deserialize(const BinarySet& binary_set) {
                 ErrorType::READ_ERROR, "binary read too large for index: ", index_name);
         }
         const auto copy_len = static_cast<size_t>(len);
-        using PointerDiffLimit = std::make_unsigned_t<std::ptrdiff_t>;
-        const auto max_pointer_offset =
-            static_cast<PointerDiffLimit>(std::numeric_limits<std::ptrdiff_t>::max());
+        // Pointer arithmetic uses ptrdiff_t offsets, so validate representability first.
         if (offset > max_pointer_offset || len > max_pointer_offset ||
             len > max_pointer_offset - offset) {
             throw VsagException(
                 ErrorType::READ_ERROR, "binary read offset too large for index: ", index_name);
         }
         const auto copy_offset = static_cast<std::ptrdiff_t>(offset);
-        std::memcpy(dest, b.data.get() + copy_offset, copy_len);
+        std::memcpy(dest, binary_data + copy_offset, copy_len);
     };
 
     try {
