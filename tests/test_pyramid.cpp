@@ -502,6 +502,59 @@ TEST_CASE_PERSISTENT_FIXTURE(fixtures::PyramidTestIndex,
     vsag::Options::Instance().set_block_size_limit(origin_size);
 }
 
+TEST_CASE_PERSISTENT_FIXTURE(fixtures::PyramidTestIndex,
+                             "Pyramid Store Extraction Legacy Regression",
+                             "[ft][pyramid][store][serialization]") {
+    PyramidParam pyramid_param;
+    pyramid_param.no_build_levels = {0, 1, 2};
+    pyramid_param.use_reorder = true;
+    pyramid_param.base_quantization_type = "fp32";
+    pyramid_param.precise_quantization_type = "fp32";
+
+    const auto param = GeneratePyramidBuildParametersString("l2", 4, pyramid_param);
+    auto index = TestFactory("pyramid", param, true);
+
+    auto base = MakeDenseDataset({{1.0F, 0.0F, 0.0F, 0.0F},
+                                  {0.0F, 1.0F, 0.0F, 0.0F},
+                                  {0.0F, 0.0F, 1.0F, 0.0F},
+                                  {0.0F, 0.0F, 0.0F, 1.0F}},
+                                 {501, 502, 503, 504},
+                                 {"site/a", "site/b", "date/2026", "date/2027"});
+    auto build_result = index->Build(base);
+    REQUIRE(build_result.has_value());
+
+    auto serialize_binary = index->Serialize();
+    REQUIRE(serialize_binary.has_value());
+
+    auto restored_index = TestFactory("pyramid", param, true);
+    auto deserialize_result = restored_index->Deserialize(serialize_binary.value());
+    REQUIRE(deserialize_result.has_value());
+
+    auto extra = MakeDenseDataset({{2.0F, 0.0F, 0.0F, 0.0F}}, {505}, {"site/c"});
+    auto add_result = restored_index->Add(extra);
+    REQUIRE(add_result.has_value());
+    REQUIRE(add_result.value().empty());
+
+    auto query = MakeSingleQuery({2.0F, 0.0F, 0.0F, 0.0F}, "site/c");
+    auto search_result =
+        restored_index->KnnSearch(query, 1, GeneratePyramidSearchParametersString(20));
+    REQUIRE(search_result.has_value());
+    REQUIRE(search_result.value()->GetDim() == 1);
+    REQUIRE(search_result.value()->GetIds()[0] == 505);
+    RequireDistancesNearZero(search_result.value(), {505});
+
+    auto distance = restored_index->CalcDistanceById(query->GetFloat32Vectors(), 505);
+    REQUIRE(distance.has_value());
+    REQUIRE(std::abs(distance.value()) <= 1e-6F);
+
+    auto stats_str = restored_index->GetStats();
+    REQUIRE(!stats_str.empty());
+    auto stats = nlohmann::json::parse(stats_str);
+    REQUIRE(stats.contains("total_count"));
+    REQUIRE(stats["total_count"].get<int64_t>() == 5);
+    REQUIRE(stats.contains("index_node_structure"));
+}
+
 TEST_CASE_PERSISTENT_FIXTURE(fixtures::PyramidTestIndex, "Pyramid Clone", "[ft][clone][pyramid]") {
     auto origin_size = vsag::Options::Instance().block_size_limit();
     auto size = GENERATE(1024 * 1024 * 2);

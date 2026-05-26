@@ -212,22 +212,13 @@ std::vector<int64_t>
 Pyramid::build_by_odescent(const DatasetPtr& base) {
     const auto* path = base->GetPaths();
     CHECK_ARGUMENT(path != nullptr, "path is required");
-    int64_t data_num = base->GetNumElements();
-    const auto* data_vectors = base->GetFloat32Vectors();
-    const auto* data_ids = base->GetIds();
 
-    resize(data_num);
-    std::memcpy(label_table_->label_table_.data(), data_ids, sizeof(LabelType) * data_num);
-
-    base_codes_->BatchInsertVector(data_vectors, data_num);
-    if (use_reorder_) {
-        precise_codes_->BatchInsertVector(data_vectors, data_num);
-    }
-    auto codes = use_reorder_ ? precise_codes_ : base_codes_;
+    store_->InsertForBuild(base,
+                           [this](int64_t new_max_capacity) { this->resize(new_max_capacity); });
+    auto codes = store_->DefaultCodes();
 
     ODescent graph_builder(odescent_param_, codes, allocator_, this->thread_pool_.get());
     root_->Build(graph_builder);
-    cur_element_count_ = data_num;
     return {};
 }
 
@@ -266,8 +257,13 @@ Pyramid::KnnSearch(const DatasetPtr& query,
             std::make_shared<InnerIdWrapperFilter>(filter, *label_table_);
     }
     SearchFunc search_func = [&](const IndexNode* node, const VisitedListPtr& vl) {
-        return this->search_node(
-            node, vl, search_param, query, base_codes_, ctx, parsed_param.subindex_ef_search);
+        return this->search_node(node,
+                                 vl,
+                                 search_param,
+                                 query,
+                                 store_->base_codes(),
+                                 ctx,
+                                 parsed_param.subindex_ef_search);
     };
 
     auto result = this->search_impl(query, search_func, search_param);
@@ -308,8 +304,13 @@ Pyramid::RangeSearch(const DatasetPtr& query,
             std::make_shared<InnerIdWrapperFilter>(filter, *label_table_);
     }
     SearchFunc search_func = [&](const IndexNode* node, const VisitedListPtr& vl) {
-        return this->search_node(
-            node, vl, search_param, query, base_codes_, ctx, parsed_param.subindex_ef_search);
+        return this->search_node(node,
+                                 vl,
+                                 search_param,
+                                 query,
+                                 store_->base_codes(),
+                                 ctx,
+                                 parsed_param.subindex_ef_search);
     };
 
     auto result = this->search_impl(query, search_func, search_param);
@@ -332,7 +333,7 @@ Pyramid::search_impl(const DatasetPtr& query,
 
     DistHeapPtr search_result = std::make_shared<StandardHeap<true, false>>(allocator_, -1);
 
-    std::shared_lock<std::shared_mutex> lock(resize_mutex_);
+    auto lock = store_->ResizeLock();
     auto vl = pool_->TakeOne();
     if (query_path != nullptr) {
         std::vector<std::future<void>> futures;
@@ -380,7 +381,7 @@ Pyramid::search_impl(const DatasetPtr& query,
     pool_->ReturnOne(vl);
 
     if (use_reorder_) {
-        search_result = this->reorder_->Reorder(
+        search_result = this->store_->reorder()->Reorder(
             search_result, query->GetFloat32Vectors(), search_param.topk, ctx);
     }
 
@@ -416,21 +417,17 @@ Pyramid::search_impl(const DatasetPtr& query,
 
 int64_t
 Pyramid::GetNumElements() const {
-    return base_codes_->TotalCount();
+    return store_->GetNumElements();
 }
 
 void
 Pyramid::Serialize(StreamWriter& writer) const {
-    label_table_->Serialize(writer);
-    base_codes_->Serialize(writer);
-    if (use_reorder_) {
-        precise_codes_->Serialize(writer);
-    }
+    store_->Serialize(writer);
     root_->Serialize(writer);
 
     // serialize footer (introduced since v0.15)
     JsonType basic_info;
-    basic_info["max_capacity"].SetInt(max_capacity_);
+    basic_info["max_capacity"].SetInt(store_->max_capacity());
     basic_info[INDEX_PARAM].SetString(this->create_param_ptr_->ToString());
     auto metadata = std::make_shared<Metadata>();
     metadata->Set(BASIC_INFO, basic_info);
@@ -449,14 +446,10 @@ Pyramid::Deserialize(StreamReader& reader) {
     BufferStreamReader buffer_reader(
         &reader, std::numeric_limits<uint64_t>::max(), this->allocator_);
 
-    label_table_->Deserialize(buffer_reader);
-    base_codes_->Deserialize(buffer_reader);
-    if (use_reorder_) {
-        precise_codes_->Deserialize(buffer_reader);
-    }
-    cur_element_count_ = base_codes_->TotalCount();
+    store_->Deserialize(buffer_reader);
     root_->Deserialize(buffer_reader);
-    resize(max_capacity);
+    store_->Resize(max_capacity,
+                   [this](int64_t new_max_capacity) { this->resize(new_max_capacity); });
     this->current_memory_usage_ = static_cast<int64_t>(this->CalSerializeSize());
 }
 
@@ -467,14 +460,7 @@ Pyramid::ExportModel(const IndexCommonParam& param) const {
         throw VsagException(ErrorType::INTERNAL_ERROR,
                             "Export model's pyramid reorder config mismatched");
     }
-    this->base_codes_->ExportModel(index->base_codes_);
-    if (use_reorder_) {
-        if (index->precise_codes_ == nullptr) {
-            throw VsagException(ErrorType::INTERNAL_ERROR,
-                                "Export model's pyramid precise codes is empty");
-        }
-        this->precise_codes_->ExportModel(index->precise_codes_);
-    }
+    store_->ExportModel(*index->store_);
     index->current_memory_usage_ = static_cast<int64_t>(index->CalSerializeSize());
     return index;
 }
@@ -483,50 +469,15 @@ std::vector<int64_t>
 Pyramid::Add(const DatasetPtr& base, AddMode mode) {
     const auto* path = base->GetPaths();
     CHECK_ARGUMENT(path != nullptr, "path is required");
-    int64_t data_num = base->GetNumElements();
     const auto* data_vectors = base->GetFloat32Vectors();
-    const auto* data_ids = base->GetIds();
-    std::vector<int64_t> failed_ids;
-    Vector<int64_t> data_biases(allocator_);
-    int64_t local_cur_element_count = 0;
-    {
-        std::lock_guard lock(cur_element_count_mutex_);
-        local_cur_element_count = cur_element_count_;
-        if (max_capacity_ == 0) {
-            auto new_capacity = std::max(INIT_CAPACITY, data_num);
-            resize(new_capacity);
-        } else if (max_capacity_ < data_num + cur_element_count_) {
-            auto new_capacity = std::min(MAX_CAPACITY_EXTEND, max_capacity_);
-            new_capacity = std::max(data_num + cur_element_count_ - max_capacity_, new_capacity) +
-                           max_capacity_;
-            resize(new_capacity);
-        }
-        int64_t valid_id_count = 0;
-        for (int64_t i = 0; i < data_num; ++i) {
-            if (not label_table_->CheckLabel(data_ids[i])) {
-                label_table_->Insert(valid_id_count + local_cur_element_count, data_ids[i]);
-                base_codes_->InsertVector(data_vectors + dim_ * i,
-                                          valid_id_count + local_cur_element_count);
-                if (use_reorder_) {
-                    precise_codes_->InsertVector(data_vectors + dim_ * i,
-                                                 valid_id_count + local_cur_element_count);
-                }
-                valid_id_count++;
-                data_biases.push_back(i);
-            } else {
-                logger::warn("Label {} already exists, skip adding.", data_ids[i]);
-                failed_ids.push_back(data_ids[i]);
-            }
-        }
-        cur_element_count_ += valid_id_count;
-    }
-    std::shared_lock<std::shared_mutex> lock(resize_mutex_);
+    auto insert_result = store_->Insert(
+        base, true, [this](int64_t new_max_capacity) { this->resize(new_max_capacity); });
+    auto lock = store_->ResizeLock();
 
-    auto add_func = [&](int64_t i, int64_t data_bias) {
+    auto add_func = [&](InnerIdType inner_id, int64_t data_bias) {
         std::string current_path = path[data_bias];
         auto path_slices = split(current_path, PART_SLASH);
         IndexNode* node = root_.get();
-        auto inner_id = static_cast<InnerIdType>(i + local_cur_element_count);
         const auto* vector = data_vectors + dim_ * data_bias;
         int no_build_level_index = 0;
         for (int j = 0; j <= path_slices.size(); ++j) {
@@ -546,12 +497,13 @@ Pyramid::Add(const DatasetPtr& base, AddMode mode) {
     };
 
     Vector<std::future<void>> futures(allocator_);
-    for (int64_t i = 0; i < data_biases.size(); ++i) {
-        auto data_bias = data_biases[i];
+    for (int64_t i = 0; i < insert_result.data_biases.size(); ++i) {
+        auto data_bias = insert_result.data_biases[i];
+        auto inner_id = insert_result.inner_ids[i];
         if (this->thread_pool_ != nullptr) {
-            futures.push_back(this->thread_pool_->GeneralEnqueue(add_func, i, data_bias));
+            futures.push_back(this->thread_pool_->GeneralEnqueue(add_func, inner_id, data_bias));
         } else {
-            add_func(i, data_bias);
+            add_func(inner_id, data_bias);
         }
     }
     if (this->thread_pool_ != nullptr) {
@@ -559,23 +511,13 @@ Pyramid::Add(const DatasetPtr& base, AddMode mode) {
             future.get();
         }
     }
-    return failed_ids;
+    return insert_result.failed_ids;
 }
 
 void
 Pyramid::resize(int64_t new_max_capacity) {
-    std::unique_lock<std::shared_mutex> lock(resize_mutex_);
-    if (new_max_capacity <= max_capacity_) {
-        return;
-    }
     pool_ = std::make_unique<VisitedListPool>(1, allocator_, new_max_capacity, allocator_);
-    label_table_->Resize(new_max_capacity);
-    base_codes_->Resize(new_max_capacity);
-    if (use_reorder_) {
-        precise_codes_->Resize(new_max_capacity);
-    }
     points_mutex_->Resize(new_max_capacity);
-    max_capacity_ = new_max_capacity;
 }
 
 void
@@ -729,10 +671,7 @@ Pyramid::CheckAndMappingExternalParam(const JsonType& external_param,
 
 void
 Pyramid::Train(const DatasetPtr& base) {
-    this->base_codes_->Train(base->GetFloat32Vectors(), base->GetNumElements());
-    if (use_reorder_) {
-        this->precise_codes_->Train(base->GetFloat32Vectors(), base->GetNumElements());
-    }
+    store_->Train(base);
 }
 std::vector<int64_t>
 Pyramid::Build(const DatasetPtr& base) {
@@ -793,7 +732,7 @@ Pyramid::add_one_point(IndexNode* node, InnerIdType inner_id, const float* vecto
         if (support_duplicate_) {
             search_param.find_duplicate = true;
         }
-        auto codes = use_reorder_ ? precise_codes_ : base_codes_;
+        auto codes = store_->DefaultCodes();
         bool update_entry_point;
         {
             std::scoped_lock<std::mutex> entry_point_lock(entry_point_mutex_);
@@ -903,7 +842,7 @@ Pyramid::SetImmutable() {
     if (this->immutable_) {
         return;
     }
-    label_table_->SetImmutable();
+    store_->SetImmutable();
     this->points_mutex_.reset();
     this->points_mutex_ = std::make_shared<EmptyMutex>();
     this->searcher_->SetMutexArray(this->points_mutex_);
@@ -912,10 +851,10 @@ Pyramid::SetImmutable() {
 
 float
 Pyramid::CalcDistanceById(const float* query, int64_t id, bool calculate_precise_distance) const {
-    std::shared_lock<std::shared_mutex> lock(resize_mutex_);
-    auto flat = this->base_codes_;
+    auto lock = store_->ResizeLock();
+    auto flat = store_->base_codes();
     if (use_reorder_ && calculate_precise_distance) {
-        flat = this->precise_codes_;
+        flat = store_->precise_codes();
     }
     return InnerIndexInterface::calc_distance_by_id(query, id, flat);
 }
@@ -925,18 +864,18 @@ Pyramid::CalDistanceById(const float* query,
                          const int64_t* ids,
                          int64_t count,
                          bool calculate_precise_distance) const {
-    std::shared_lock<std::shared_mutex> lock(resize_mutex_);
-    auto flat = this->base_codes_;
+    auto lock = store_->ResizeLock();
+    auto flat = store_->base_codes();
     if (use_reorder_ && calculate_precise_distance) {
-        flat = this->precise_codes_;
+        flat = store_->precise_codes();
     }
     return InnerIndexInterface::cal_distance_by_id(query, ids, count, flat);
 }
 
 void
 Pyramid::GetVectorByInnerId(InnerIdType inner_id, float* data) const {
-    std::shared_lock<std::shared_mutex> lock(resize_mutex_);
-    auto codes = (use_reorder_) ? precise_codes_ : base_codes_;
+    auto lock = store_->ResizeLock();
+    auto codes = store_->DefaultCodes();
     bool release = false;
     const auto* buffer = codes->GetCodesById(inner_id, release);
     codes->Decode(buffer, data);

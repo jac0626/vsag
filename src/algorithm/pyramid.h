@@ -23,11 +23,11 @@
 #include "impl/filter/filter_headers.h"
 #include "impl/heap/distance_heap.h"
 #include "impl/odescent/odescent_graph_builder.h"
-#include "impl/reorder/flatten_reorder.h"
 #include "impl/searcher/basic_searcher.h"
 #include "index_feature_list.h"
 #include "inner_index_interface.h"
 #include "io/memory_io_parameter.h"
+#include "pyramid_store.h"
 #include "pyramid_zparameters.h"
 #include "quantization/fp32_quantizer_parameter.h"
 #include "query_context.h"
@@ -107,19 +107,15 @@ public:
           max_degree_(pyramid_param->max_degree),
           index_min_size_(pyramid_param->index_min_size),
           graph_type_(pyramid_param->graph_type),
-          support_duplicate_(pyramid_param->support_duplicate) {
-        base_codes_ = FlattenInterface::MakeInstance(pyramid_param->base_codes_param, common_param);
+          support_duplicate_(pyramid_param->support_duplicate),
+          store_(std::make_unique<PyramidStore>(pyramid_param, common_param)) {
+        label_table_ = store_->label_table();
         root_ =
             std::make_unique<IndexNode>(allocator_, pyramid_param->graph_param, index_min_size_);
-        points_mutex_ = std::make_shared<PointsMutex>(max_capacity_, allocator_);
+        points_mutex_ = std::make_shared<PointsMutex>(store_->max_capacity(), allocator_);
         searcher_ = std::make_unique<BasicSearcher>(common_param, points_mutex_);
         no_build_levels_.assign(pyramid_param->no_build_levels.begin(),
                                 pyramid_param->no_build_levels.end());
-        if (use_reorder_) {
-            precise_codes_ =
-                FlattenInterface::MakeInstance(pyramid_param->precise_codes_param, common_param);
-            reorder_ = std::make_shared<FlattenReorder>(precise_codes_, allocator_);
-        }
     }
 
     explicit Pyramid(const ParamPtr& param, const IndexCommonParam& common_param)
@@ -241,24 +237,18 @@ private:
     uint64_t ef_construction_{400};
     int64_t max_degree_{64};
     std::unique_ptr<IndexNode> root_{nullptr};
-    FlattenInterfacePtr base_codes_{nullptr};
-    FlattenInterfacePtr precise_codes_{nullptr};
+    std::unique_ptr<PyramidStore> store_{nullptr};
     std::unique_ptr<VisitedListPool> pool_ = nullptr;
 
     MutexArrayPtr points_mutex_{nullptr};
     std::unique_ptr<BasicSearcher> searcher_ = nullptr;
-    int64_t max_capacity_{0};
-    int64_t cur_element_count_{0};
     float alpha_{1.0F};
     bool support_duplicate_{false};
 
-    mutable std::shared_mutex resize_mutex_;
-    std::mutex cur_element_count_mutex_;
     std::string graph_type_{GRAPH_TYPE_VALUE_NSW};
 
     std::mutex entry_point_mutex_;
     std::default_random_engine level_generator_{2021};
-    ReorderInterfacePtr reorder_{nullptr};
 
     // static
     uint32_t index_min_size_{0};

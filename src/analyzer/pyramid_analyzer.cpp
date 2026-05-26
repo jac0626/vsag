@@ -120,7 +120,7 @@ PyramidAnalyzer::AnalyzeIndexBySearch(const SearchRequest& request) {
         get_search_recall(query_num, query_ids, query_ground_truth, query_search_result));
     stats["time_cost_query"].SetFloat(query_time_ms);
 
-    if (pyramid_->use_reorder_) {
+    if (pyramid_->store_->use_reorder()) {
         auto [q_error, q_inversion] =
             calculate_quantization_result(query_datas, query_ids, query_search_result, query_num);
         stats["quantization_error_query"].SetFloat(q_error);
@@ -510,7 +510,7 @@ PyramidAnalyzer::calculate_groundtruth(const Vector<float>& sample_datas,
     Vector<InnerIdType> ids_array(this->total_count_, allocator_);
     std::iota(ids_array.begin(), ids_array.end(), 0);
 
-    auto codes = pyramid_->use_reorder_ ? pyramid_->precise_codes_ : pyramid_->base_codes_;
+    auto codes = pyramid_->store_->DefaultCodes();
 
     for (uint32_t i = 0; i < sample_size; ++i) {
         if (i % 10 == 0) {
@@ -547,7 +547,7 @@ PyramidAnalyzer::get_avg_distance() {
 
 float
 PyramidAnalyzer::get_quantization_error(const std::string& search_param) {
-    if (not pyramid_->use_reorder_ || search_result_.empty()) {
+    if (not pyramid_->store_->use_reorder() || search_result_.empty()) {
         return 0.0F;
     }
 
@@ -557,7 +557,7 @@ PyramidAnalyzer::get_quantization_error(const std::string& search_param) {
 
 float
 PyramidAnalyzer::get_quantization_inversion_ratio(const std::string& search_param) {
-    if (not pyramid_->use_reorder_ || search_result_.empty()) {
+    if (not pyramid_->store_->use_reorder() || search_result_.empty()) {
         return 0.0F;
     }
 
@@ -571,7 +571,7 @@ PyramidAnalyzer::calculate_quantization_result(
     const Vector<InnerIdType>& sample_ids,
     const UnorderedMap<InnerIdType, Vector<LabelType>>& search_result,
     uint32_t sample_size) {
-    if (not pyramid_->use_reorder_) {
+    if (not pyramid_->store_->use_reorder()) {
         return {0.0F, 0.0F};
     }
 
@@ -720,7 +720,7 @@ PyramidAnalyzer::get_search_recall(
         UnorderedSet<LabelType> gt_set(allocator_);
         const auto* gt_data = gt->GetData();
         for (uint32_t j = 0; j < gt->Size(); ++j) {
-            gt_set.insert(pyramid_->label_table_->GetLabelById(gt_data[j].second));
+            gt_set.insert(pyramid_->store_->label_table()->GetLabelById(gt_data[j].second));
         }
 
         uint32_t hit_count = 0;
@@ -795,7 +795,7 @@ PyramidAnalyzer::calculate_node_groundtruth(const IndexNode* node,
         return gt;
     }
 
-    auto codes = pyramid_->use_reorder_ ? pyramid_->precise_codes_ : pyramid_->base_codes_;
+    auto codes = pyramid_->store_->DefaultCodes();
     if (codes == nullptr) {
         return gt;
     }
@@ -832,7 +832,7 @@ PyramidAnalyzer::search_single_node(const IndexNode* node,
             return result;
         }
 
-        auto codes = pyramid_->use_reorder_ ? pyramid_->precise_codes_ : pyramid_->base_codes_;
+        auto codes = pyramid_->store_->DefaultCodes();
         Vector<float> distances(node_ids.size(), allocator_);
         auto computer = codes->FactoryComputer(query);
         codes->Query(distances.data(), computer, node_ids.data(), node_ids.size());
@@ -885,11 +885,16 @@ PyramidAnalyzer::search_single_node(const IndexNode* node,
 
         DistHeapPtr result;
         try {
-            result = pyramid_->search_node(
-                node, vl, inner_param, query_dataset, pyramid_->base_codes_, ctx, ef_search);
+            result = pyramid_->search_node(node,
+                                           vl,
+                                           inner_param,
+                                           query_dataset,
+                                           pyramid_->store_->base_codes(),
+                                           ctx,
+                                           ef_search);
 
-            if (pyramid_->use_reorder_ && result != nullptr && !result->Empty()) {
-                result = pyramid_->reorder_->Reorder(result, query, inner_param.topk, ctx);
+            if (pyramid_->store_->use_reorder() && result != nullptr && !result->Empty()) {
+                result = pyramid_->store_->reorder()->Reorder(result, query, inner_param.topk, ctx);
             }
         } catch (const std::exception& e) {
             logger::error("[search_single_node] search_node threw exception: {}", e.what());
@@ -1023,7 +1028,7 @@ PyramidAnalyzer::get_node_neighbor_recall(const IndexNode* node,
     }
 
     auto graph = node->graph_;
-    auto codes = pyramid_->use_reorder_ ? pyramid_->precise_codes_ : pyramid_->base_codes_;
+    auto codes = pyramid_->store_->DefaultCodes();
     if (codes == nullptr) {
         return 0.0F;
     }
@@ -1464,7 +1469,7 @@ PyramidAnalyzer::get_node_duplicate_ratio(const IndexNode* node,
     }
 
     constexpr float epsilon = 2e-6F;
-    auto codes = pyramid_->base_codes_;
+    auto codes = pyramid_->store_->base_codes();
 
     Vector<Vector<InnerIdType>> groups(allocator_);
     groups.emplace_back(node_ids.begin(), node_ids.end(), allocator_);
@@ -1541,7 +1546,7 @@ PyramidAnalyzer::check_entry_point_duplicate(const IndexNode* node,
     Vector<float> entry_vector(dim_, allocator_);
     pyramid_->GetVectorByInnerId(entry_id, entry_vector.data());
 
-    auto codes = pyramid_->base_codes_;
+    auto codes = pyramid_->store_->base_codes();
     auto comp = codes->FactoryComputer(entry_vector.data());
     Vector<float> dists(node_ids.size(), allocator_);
     codes->Query(dists.data(), comp, node_ids.data(), node_ids.size());
