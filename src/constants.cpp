@@ -230,7 +230,11 @@ const char* const PYRAMID_PRECISE_IO_TYPE = "precise_io_type";
 const char* const PYRAMID_PRECISE_FILE_PATH = "precise_file_path";
 const char* const PYRAMID_PARAMETER_EF_SEARCH = "ef_search";
 const char* const PYRAMID_PARAMETER_SUBINDEX_EF_SEARCH = "subindex_ef_search";
+const char* const PYRAMID_PARAMETER_HIERARCHY = "hierarchy";
+const char* const PYRAMID_PARAMETER_HIERARCHIES = "hierarchies";
+const char* const PYRAMID_PARAMETER_HIERARCHY_OP = "hierarchy_op";
 const char* const PYRAMID_NO_BUILD_LEVELS = "no_build_levels";
+const char* const PYRAMID_HIERARCHIES = "hierarchies";
 const char* const PYRAMID_INDEX_MIN_SIZE = "index_min_size";
 
 const char* const GNO_IMI_FIRST_ORDER_BUCKETS_COUNT = "first_order_buckets_count";

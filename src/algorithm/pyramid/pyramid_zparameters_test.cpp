@@ -20,6 +20,8 @@
 #include "pyramid.h"
 #include "unittest.h"
 
+#include <nlohmann/json.hpp>
+
 struct PyramidDefaultParam {
     int max_degree = 32;
     float alpha = 1.3f;
@@ -130,6 +132,48 @@ TEST_CASE("Pyramid Parameters Test", "[ut][PyramidParameters]") {
     vsag::ParameterTest::TestToJson(param);
 }
 
+std::shared_ptr<vsag::PyramidParameters>
+ParsePyramidWithHierarchies(const nlohmann::json& hierarchies) {
+    PyramidDefaultParam index_param;
+    auto param_json = vsag::JsonType::Parse(generate_pyramid(index_param));
+    *param_json["hierarchies"].GetInnerJson() = hierarchies;
+    auto param = std::make_shared<vsag::PyramidParameters>();
+    param->FromJson(param_json);
+    return param;
+}
+
+TEST_CASE("Pyramid Hierarchy Parameters Test", "[ut][PyramidParameters][hierarchy]") {
+    SECTION("parse string and object hierarchy definitions") {
+        auto param = ParsePyramidWithHierarchies(nlohmann::json::array(
+            {"site", {{"name", "taxonomy"}, {"no_build_levels", {2, 0}}}}));
+
+        REQUIRE(param->has_hierarchies);
+        REQUIRE(param->hierarchies.size() == 2);
+        REQUIRE(param->hierarchies[0].name == "site");
+        REQUIRE(param->hierarchies[0].no_build_levels.empty());
+        REQUIRE(param->hierarchies[1].name == "taxonomy");
+        REQUIRE(param->hierarchies[1].no_build_levels == std::vector<int32_t>{0, 2});
+
+        auto output = param->ToJson();
+        const auto* hierarchies_json = output["hierarchies"].GetInnerJson();
+        REQUIRE(hierarchies_json->size() == 2);
+        REQUIRE((*hierarchies_json)[0]["name"] == "site");
+        REQUIRE((*hierarchies_json)[1]["name"] == "taxonomy");
+        REQUIRE((*hierarchies_json)[1]["no_build_levels"] == nlohmann::json::array({0, 2}));
+    }
+
+    SECTION("invalid hierarchy definitions are rejected") {
+        REQUIRE_THROWS(ParsePyramidWithHierarchies(nlohmann::json::array()));
+        REQUIRE_THROWS(ParsePyramidWithHierarchies(nlohmann::json::array({""})));
+        REQUIRE_THROWS(ParsePyramidWithHierarchies(
+            nlohmann::json::array({"site", {{"name", "site"}}})));
+        REQUIRE_THROWS(ParsePyramidWithHierarchies(nlohmann::json::array({{{"name", ""}}})));
+        REQUIRE_THROWS(ParsePyramidWithHierarchies(
+            nlohmann::json::array({{{"name", "site"}, {"no_build_levels", 1}}})));
+        REQUIRE_THROWS(ParsePyramidWithHierarchies(nlohmann::json::array({{{"foo", "site"}}})));
+    }
+}
+
 #define TEST_COMPATIBILITY_CASE(section_name, param_member, val1, val2, expect_compatible) \
     SECTION(section_name) {                                                                \
         PyramidDefaultParam param1;                                                        \
@@ -179,6 +223,98 @@ TEST_CASE("Pyramid Parameters CheckCompatibility", "[ut][PyramidParameter][Check
         "different precise quantization type", precise_quantization_type, "fp32", "fp16", false);
     TEST_COMPATIBILITY_CASE("different index min size", index_min_size, 500, 1500, false);
     TEST_COMPATIBILITY_CASE("different support duplicate", support_duplicate, false, true, false);
+
+    SECTION("same hierarchies in different order") {
+        auto param1 = ParsePyramidWithHierarchies(nlohmann::json::array(
+            {{{"name", "site"}, {"no_build_levels", {0, 1}}},
+             {{"name", "taxonomy"}, {"no_build_levels", {2}}}}));
+        auto param2 = ParsePyramidWithHierarchies(nlohmann::json::array(
+            {{{"name", "taxonomy"}, {"no_build_levels", {2}}},
+             {{"name", "site"}, {"no_build_levels", {1, 0}}}}));
+
+        REQUIRE(param1->CheckCompatibility(param2));
+    }
+
+    SECTION("different hierarchy no_build_levels") {
+        auto param1 = ParsePyramidWithHierarchies(nlohmann::json::array(
+            {{{"name", "site"}, {"no_build_levels", {0}}}}));
+        auto param2 = ParsePyramidWithHierarchies(nlohmann::json::array(
+            {{{"name", "site"}, {"no_build_levels", {1}}}}));
+
+        REQUIRE_FALSE(param1->CheckCompatibility(param2));
+    }
+
+    SECTION("different hierarchy names") {
+        auto param1 = ParsePyramidWithHierarchies(nlohmann::json::array({"site"}));
+        auto param2 = ParsePyramidWithHierarchies(nlohmann::json::array({"taxonomy"}));
+
+        REQUIRE_FALSE(param1->CheckCompatibility(param2));
+    }
+
+    SECTION("legacy and explicit hierarchy modes are incompatible") {
+        PyramidDefaultParam default_param;
+        auto legacy_param = std::make_shared<vsag::PyramidParameters>();
+        legacy_param->FromString(generate_pyramid(default_param));
+        auto hierarchy_param = ParsePyramidWithHierarchies(nlohmann::json::array({"site"}));
+
+        REQUIRE_FALSE(legacy_param->CheckCompatibility(hierarchy_param));
+        REQUIRE_FALSE(hierarchy_param->CheckCompatibility(legacy_param));
+    }
+}
+
+TEST_CASE("Pyramid Search Hierarchy Parameters Test",
+          "[ut][PyramidParameters][hierarchy][search]") {
+    SECTION("single hierarchy selector") {
+        auto search_param = vsag::PyramidSearchParameters::FromJson(
+            R"({"pyramid":{"ef_search":100,"hierarchy":"taxonomy"}})");
+
+        REQUIRE(search_param.HasHierarchySelector());
+        REQUIRE(search_param.hierarchies == std::vector<std::string>{"taxonomy"});
+        REQUIRE_FALSE(search_param.has_hierarchy_op);
+        REQUIRE(search_param.hierarchy_op == vsag::PyramidSearchParameters::HierarchyOp::SINGLE);
+    }
+
+    SECTION("multi hierarchy intersection selector") {
+        auto search_param = vsag::PyramidSearchParameters::FromJson(
+            R"({"pyramid":{"ef_search":100,"hierarchies":["site","taxonomy"],)"
+            R"("hierarchy_op":"intersection"}})");
+
+        REQUIRE(search_param.HasHierarchySelector());
+        REQUIRE(search_param.hierarchies == std::vector<std::string>{"site", "taxonomy"});
+        REQUIRE(search_param.has_hierarchy_op);
+        REQUIRE(search_param.hierarchy_op ==
+                vsag::PyramidSearchParameters::HierarchyOp::INTERSECTION);
+    }
+
+    SECTION("multi hierarchy union selector") {
+        auto search_param = vsag::PyramidSearchParameters::FromJson(
+            R"({"pyramid":{"ef_search":100,"hierarchies":["site","date"],)"
+            R"("hierarchy_op":"union"}})");
+
+        REQUIRE(search_param.hierarchies == std::vector<std::string>{"site", "date"});
+        REQUIRE(search_param.has_hierarchy_op);
+        REQUIRE(search_param.hierarchy_op == vsag::PyramidSearchParameters::HierarchyOp::UNION);
+    }
+
+    SECTION("invalid hierarchy search parameters are rejected") {
+        REQUIRE_THROWS(vsag::PyramidSearchParameters::FromJson(
+            R"({"pyramid":{"ef_search":100,"hierarchy":""}})"));
+        REQUIRE_THROWS(vsag::PyramidSearchParameters::FromJson(
+            R"({"pyramid":{"ef_search":100,"hierarchy":"site",)"
+            R"("hierarchies":["taxonomy","date"]}})"));
+        REQUIRE_THROWS(vsag::PyramidSearchParameters::FromJson(
+            R"({"pyramid":{"ef_search":100,"hierarchy":"site","hierarchy_op":"union"}})"));
+        REQUIRE_THROWS(vsag::PyramidSearchParameters::FromJson(
+            R"({"pyramid":{"ef_search":100,"hierarchies":["site"]}})"));
+        REQUIRE_THROWS(vsag::PyramidSearchParameters::FromJson(
+            R"({"pyramid":{"ef_search":100,"hierarchies":["site","taxonomy"]}})"));
+        REQUIRE_THROWS(vsag::PyramidSearchParameters::FromJson(
+            R"({"pyramid":{"ef_search":100,"hierarchies":["site","site"],)"
+            R"("hierarchy_op":"union"}})"));
+        REQUIRE_THROWS(vsag::PyramidSearchParameters::FromJson(
+            R"({"pyramid":{"ef_search":100,"hierarchies":["site","taxonomy"],)"
+            R"("hierarchy_op":"minus"}})"));
+    }
 }
 
 TEST_CASE("Pyramid maps support_duplicate to graph parameter", "[ut][PyramidParameters]") {
@@ -195,6 +331,10 @@ TEST_CASE("Pyramid maps support_duplicate to graph parameter", "[ut][PyramidPara
         "ef_construction": 100,
         "index_min_size": 0,
         "support_duplicate": true,
+        "hierarchies": [
+            "site",
+            {"name": "taxonomy", "no_build_levels": [0, 2]}
+        ],
         "use_reorder": true
     })");
 
@@ -207,4 +347,9 @@ TEST_CASE("Pyramid maps support_duplicate to graph parameter", "[ut][PyramidPara
     REQUIRE(typed_param != nullptr);
     REQUIRE(typed_param->support_duplicate);
     REQUIRE(typed_param->graph_param->support_duplicate_);
+    REQUIRE(typed_param->has_hierarchies);
+    REQUIRE(typed_param->hierarchies.size() == 2);
+    REQUIRE(typed_param->hierarchies[0].name == "site");
+    REQUIRE(typed_param->hierarchies[1].name == "taxonomy");
+    REQUIRE(typed_param->hierarchies[1].no_build_levels == std::vector<int32_t>{0, 2});
 }

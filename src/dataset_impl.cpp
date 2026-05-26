@@ -16,6 +16,8 @@
 #include "dataset_impl.h"
 
 #include <cstring>
+#include <unordered_set>
+#include <vector>
 
 #include "typing.h"
 #include "vsag_exception.h"
@@ -159,6 +161,19 @@ allocate_and_copy_multi_vectors(const MultiVector* src,
     return dest;
 }
 
+static std::string*
+allocate_and_copy_paths(const std::string* src, uint64_t count) {
+    if (src == nullptr) {
+        return nullptr;
+    }
+
+    auto* dest = new std::string[count];
+    for (uint64_t i = 0; i < count; ++i) {
+        dest[i] = src[i];
+    }
+    return dest;
+}
+
 static SparseVector*
 allocate_and_copy_sparse_vectors(const SparseVector* src,
                                  uint64_t count,
@@ -261,7 +276,18 @@ DatasetImpl::~DatasetImpl() {  // NOLINT
             delete[] DatasetImpl::GetMultiVectors();
         }
     }
-    delete[] DatasetImpl::GetPaths();
+    std::unordered_set<const std::string*> released_paths;
+    auto release_paths = [&released_paths](const std::string* paths) {
+        if (paths != nullptr && released_paths.insert(paths).second) {
+            delete[] paths;
+        }
+    };
+    release_paths(DatasetImpl::GetPaths());
+    for (const auto& [key, value] : this->data_) {
+        if (IsHierarchyPathsKey(key)) {
+            release_paths(std::get<const std::string*>(value));
+        }
+    }
     if (DatasetImpl::GetAttributeSets() != nullptr) {
         const auto* attrsets = DatasetImpl::GetAttributeSets();
         for (int i = 0; i < DatasetImpl::GetNumElements(); ++i) {
@@ -325,10 +351,15 @@ DatasetImpl::DeepCopy(Allocator* allocator) const {
             this->GetMultiVectors(), num_elements, mv_dim, allocator_ref));
     }
     if (this->GetPaths() != nullptr) {
-        auto* paths = new std::string[num_elements];
-        copy_dataset->Paths(paths);
-        for (int i = 0; i < num_elements; ++i) {
-            paths[i] += this->GetPaths()[i];
+        copy_dataset->Paths(
+            allocate_and_copy_paths(this->GetPaths(), static_cast<uint64_t>(num_elements)));
+    }
+    for (const auto& [key, value] : this->data_) {
+        if (IsHierarchyPathsKey(key)) {
+            copy_dataset->Paths(
+                HierarchyNameFromPathsKey(key),
+                allocate_and_copy_paths(std::get<const std::string*>(value),
+                                        static_cast<uint64_t>(num_elements)));
         }
     }
 
@@ -384,6 +415,24 @@ DatasetImpl::Append(const DatasetPtr& other) {
     if (this->data_.find(DATASET_PATHS) != this->data_.end() && other->GetPaths() == nullptr) {
         throw VsagException(ErrorType::INVALID_ARGUMENT,
                             "Cannot append dataset without paths to dataset with paths");
+    }
+    std::vector<std::string> hierarchy_path_keys;
+    for (const auto& [key, value] : this->data_) {
+        if (not IsHierarchyPathsKey(key)) {
+            continue;
+        }
+        const auto* paths = std::get<const std::string*>(value);
+        if (paths == nullptr) {
+            continue;
+        }
+        const auto hierarchy_name = HierarchyNameFromPathsKey(key);
+        if (other->GetPaths(hierarchy_name) == nullptr) {
+            throw VsagException(ErrorType::INVALID_ARGUMENT,
+                                "Cannot append dataset without paths for hierarchy " +
+                                    hierarchy_name +
+                                    " to dataset with paths for hierarchy " + hierarchy_name);
+        }
+        hierarchy_path_keys.push_back(key);
     }
 
     // check sparse-vectors
@@ -443,6 +492,25 @@ DatasetImpl::Append(const DatasetPtr& other) {
             paths_copy[old_num_elements + i] += other->GetPaths()[i];
         }
         this->Paths(paths_copy);
+    }
+    for (const auto& key : hierarchy_path_keys) {
+        auto iter = this->data_.find(key);
+        if (iter == this->data_.end()) {
+            continue;
+        }
+        auto hierarchy_name = HierarchyNameFromPathsKey(key);
+        auto* ptr = const_cast<std::string*>(std::get<const std::string*>(iter->second));
+        auto* paths_copy = new std::string[old_num_elements + new_num_elements];
+        for (int i = 0; i < old_num_elements; ++i) {
+            paths_copy[i] = ptr[i];
+        }
+        delete[] ptr;
+        ptr = nullptr;
+        const auto* other_paths = other->GetPaths(hierarchy_name);
+        for (int i = 0; i < new_num_elements; ++i) {
+            paths_copy[old_num_elements + i] = other_paths[i];
+        }
+        this->Paths(hierarchy_name, paths_copy);
     }
 
     // append sparse-vectors
