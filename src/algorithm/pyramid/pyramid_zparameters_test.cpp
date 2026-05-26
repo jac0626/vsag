@@ -21,6 +21,7 @@
 #include "parameter_test.h"
 #include "pyramid.h"
 #include "unittest.h"
+#include "vsag_exception.h"
 
 struct PyramidDefaultParam {
     int max_degree = 32;
@@ -171,6 +172,12 @@ TEST_CASE("Pyramid Hierarchy Parameters Test", "[ut][PyramidParameters][hierarch
         REQUIRE_THROWS(ParsePyramidWithHierarchies(
             nlohmann::json::array({{{"name", "site"}, {"no_build_levels", 1}}})));
         REQUIRE_THROWS(ParsePyramidWithHierarchies(nlohmann::json::array({{{"foo", "site"}}})));
+        REQUIRE_THROWS_AS(ParsePyramidWithHierarchies(nlohmann::json::array({1})),
+                          vsag::VsagException);
+        REQUIRE_THROWS_AS(ParsePyramidWithHierarchies(nlohmann::json::array({true})),
+                          vsag::VsagException);
+        REQUIRE_THROWS_AS(ParsePyramidWithHierarchies(nlohmann::json::array({nullptr})),
+                          vsag::VsagException);
     }
 }
 

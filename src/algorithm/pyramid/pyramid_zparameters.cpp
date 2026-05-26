@@ -66,6 +66,7 @@ PyramidHierarchyParameters::FromJson(const JsonType& json) {
         return;
     }
 
+    CHECK_ARGUMENT(json.IsObject(), "hierarchy definition must be a string or an object");
     CHECK_ARGUMENT(json.Contains("name"), "hierarchy must contain name");
     CHECK_ARGUMENT(json["name"].IsString(), "hierarchy name must be a string");
     name = json["name"].GetString();
