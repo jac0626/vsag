@@ -430,9 +430,7 @@ TEST_CASE("Dataset Named Paths Test", "[ut][dataset]") {
 
         auto dataset = vsag::Dataset::Make();
         dataset->NumElements(2)->Dim(1)->Owner(false);
-        dataset->Paths(default_paths)
-            ->Paths("site", site_paths)
-            ->Paths("taxonomy", taxonomy_paths);
+        dataset->Paths(default_paths)->Paths("site", site_paths)->Paths("taxonomy", taxonomy_paths);
 
         REQUIRE(dataset->GetPaths() == default_paths);
         REQUIRE(dataset->GetPaths("") == default_paths);
@@ -455,17 +453,16 @@ TEST_CASE("Dataset Named Paths Test", "[ut][dataset]") {
 
         REQUIRE(ArePathArraysDeepCopied(original->GetPaths(), copy->GetPaths(), 2));
         REQUIRE(ArePathArraysDeepCopied(original->GetPaths("site"), copy->GetPaths("site"), 2));
-        REQUIRE(ArePathArraysDeepCopied(
-            original->GetPaths("taxonomy"), copy->GetPaths("taxonomy"), 2));
+        REQUIRE(
+            ArePathArraysDeepCopied(original->GetPaths("taxonomy"), copy->GetPaths("taxonomy"), 2));
     }
 
     SECTION("append preserves named paths") {
         auto dataset = MakeDatasetWithNamedPaths(
             {"root/a", "root/b"},
             {{"site", {"site/a", "site/b"}}, {"taxonomy", {"taxonomy/a", "taxonomy/b"}}});
-        auto append_dataset =
-            MakeDatasetWithNamedPaths({"root/c"},
-                                      {{"site", {"site/c"}}, {"taxonomy", {"taxonomy/c"}}});
+        auto append_dataset = MakeDatasetWithNamedPaths(
+            {"root/c"}, {{"site", {"site/c"}}, {"taxonomy", {"taxonomy/c"}}});
 
         dataset->Append(append_dataset);
 

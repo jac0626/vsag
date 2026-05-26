@@ -15,12 +15,12 @@
 
 #include "pyramid_zparameters.h"
 
+#include <nlohmann/json.hpp>
+
 #include "index_common_param.h"
 #include "parameter_test.h"
 #include "pyramid.h"
 #include "unittest.h"
-
-#include <nlohmann/json.hpp>
 
 struct PyramidDefaultParam {
     int max_degree = 32;
@@ -144,8 +144,8 @@ ParsePyramidWithHierarchies(const nlohmann::json& hierarchies) {
 
 TEST_CASE("Pyramid Hierarchy Parameters Test", "[ut][PyramidParameters][hierarchy]") {
     SECTION("parse string and object hierarchy definitions") {
-        auto param = ParsePyramidWithHierarchies(nlohmann::json::array(
-            {"site", {{"name", "taxonomy"}, {"no_build_levels", {2, 0}}}}));
+        auto param = ParsePyramidWithHierarchies(
+            nlohmann::json::array({"site", {{"name", "taxonomy"}, {"no_build_levels", {2, 0}}}}));
 
         REQUIRE(param->has_hierarchies);
         REQUIRE(param->hierarchies.size() == 2);
@@ -165,8 +165,8 @@ TEST_CASE("Pyramid Hierarchy Parameters Test", "[ut][PyramidParameters][hierarch
     SECTION("invalid hierarchy definitions are rejected") {
         REQUIRE_THROWS(ParsePyramidWithHierarchies(nlohmann::json::array()));
         REQUIRE_THROWS(ParsePyramidWithHierarchies(nlohmann::json::array({""})));
-        REQUIRE_THROWS(ParsePyramidWithHierarchies(
-            nlohmann::json::array({"site", {{"name", "site"}}})));
+        REQUIRE_THROWS(
+            ParsePyramidWithHierarchies(nlohmann::json::array({"site", {{"name", "site"}}})));
         REQUIRE_THROWS(ParsePyramidWithHierarchies(nlohmann::json::array({{{"name", ""}}})));
         REQUIRE_THROWS(ParsePyramidWithHierarchies(
             nlohmann::json::array({{{"name", "site"}, {"no_build_levels", 1}}})));
@@ -225,21 +225,21 @@ TEST_CASE("Pyramid Parameters CheckCompatibility", "[ut][PyramidParameter][Check
     TEST_COMPATIBILITY_CASE("different support duplicate", support_duplicate, false, true, false);
 
     SECTION("same hierarchies in different order") {
-        auto param1 = ParsePyramidWithHierarchies(nlohmann::json::array(
-            {{{"name", "site"}, {"no_build_levels", {0, 1}}},
-             {{"name", "taxonomy"}, {"no_build_levels", {2}}}}));
-        auto param2 = ParsePyramidWithHierarchies(nlohmann::json::array(
-            {{{"name", "taxonomy"}, {"no_build_levels", {2}}},
-             {{"name", "site"}, {"no_build_levels", {1, 0}}}}));
+        auto param1 = ParsePyramidWithHierarchies(
+            nlohmann::json::array({{{"name", "site"}, {"no_build_levels", {0, 1}}},
+                                   {{"name", "taxonomy"}, {"no_build_levels", {2}}}}));
+        auto param2 = ParsePyramidWithHierarchies(
+            nlohmann::json::array({{{"name", "taxonomy"}, {"no_build_levels", {2}}},
+                                   {{"name", "site"}, {"no_build_levels", {1, 0}}}}));
 
         REQUIRE(param1->CheckCompatibility(param2));
     }
 
     SECTION("different hierarchy no_build_levels") {
-        auto param1 = ParsePyramidWithHierarchies(nlohmann::json::array(
-            {{{"name", "site"}, {"no_build_levels", {0}}}}));
-        auto param2 = ParsePyramidWithHierarchies(nlohmann::json::array(
-            {{{"name", "site"}, {"no_build_levels", {1}}}}));
+        auto param1 = ParsePyramidWithHierarchies(
+            nlohmann::json::array({{{"name", "site"}, {"no_build_levels", {0}}}}));
+        auto param2 = ParsePyramidWithHierarchies(
+            nlohmann::json::array({{{"name", "site"}, {"no_build_levels", {1}}}}));
 
         REQUIRE_FALSE(param1->CheckCompatibility(param2));
     }

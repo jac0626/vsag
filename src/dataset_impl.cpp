@@ -356,10 +356,9 @@ DatasetImpl::DeepCopy(Allocator* allocator) const {
     }
     for (const auto& [key, value] : this->data_) {
         if (IsHierarchyPathsKey(key)) {
-            copy_dataset->Paths(
-                HierarchyNameFromPathsKey(key),
-                allocate_and_copy_paths(std::get<const std::string*>(value),
-                                        static_cast<uint64_t>(num_elements)));
+            copy_dataset->Paths(HierarchyNameFromPathsKey(key),
+                                allocate_and_copy_paths(std::get<const std::string*>(value),
+                                                        static_cast<uint64_t>(num_elements)));
         }
     }
 
@@ -429,8 +428,8 @@ DatasetImpl::Append(const DatasetPtr& other) {
         if (other->GetPaths(hierarchy_name) == nullptr) {
             throw VsagException(ErrorType::INVALID_ARGUMENT,
                                 "Cannot append dataset without paths for hierarchy " +
-                                    hierarchy_name +
-                                    " to dataset with paths for hierarchy " + hierarchy_name);
+                                    hierarchy_name + " to dataset with paths for hierarchy " +
+                                    hierarchy_name);
         }
         hierarchy_path_keys.push_back(key);
     }
