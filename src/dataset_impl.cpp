@@ -426,10 +426,11 @@ DatasetImpl::Append(const DatasetPtr& other) {
         }
         const auto hierarchy_name = HierarchyNameFromPathsKey(key);
         if (other->GetPaths(hierarchy_name) == nullptr) {
-            throw VsagException(ErrorType::INVALID_ARGUMENT,
-                                "Cannot append dataset without paths for hierarchy " +
-                                    hierarchy_name + " to dataset with paths for hierarchy " +
-                                    hierarchy_name);
+            std::string error_message = "Cannot append dataset without paths for hierarchy ";
+            error_message.append(hierarchy_name)
+                .append(" to dataset with paths for hierarchy ")
+                .append(hierarchy_name);
+            throw VsagException(ErrorType::INVALID_ARGUMENT, error_message);
         }
         hierarchy_path_keys.push_back(key);
     }
