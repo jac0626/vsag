@@ -530,12 +530,12 @@ TEST_CASE_PERSISTENT_FIXTURE(fixtures::PyramidTestIndex,
     auto deserialize_result = restored_index->Deserialize(serialize_binary.value());
     REQUIRE(deserialize_result.has_value());
 
-    auto extra = MakeDenseDataset({{2.0F, 0.0F, 0.0F, 0.0F}}, {505}, {"site/c"});
+    auto extra = MakeDenseDataset({{2.0F, 0.0F, 0.0F, 0.0F}}, {505}, {"site/c/new"});
     auto add_result = restored_index->Add(extra);
     REQUIRE(add_result.has_value());
     REQUIRE(add_result.value().empty());
 
-    auto query = MakeSingleQuery({2.0F, 0.0F, 0.0F, 0.0F}, "site/c");
+    auto query = MakeSingleQuery({2.0F, 0.0F, 0.0F, 0.0F}, "site/c/new");
     auto search_result =
         restored_index->KnnSearch(query, 1, GeneratePyramidSearchParametersString(20));
     REQUIRE(search_result.has_value());
