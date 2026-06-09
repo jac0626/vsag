@@ -62,7 +62,6 @@ PyramidHierarchyParameters::FromJson(const JsonType& json) {
     if (json.IsString()) {
         name = json.GetString();
         CHECK_ARGUMENT(not name.empty(), "hierarchy name must not be empty");
-        no_build_levels.clear();
         return;
     }
 
@@ -78,8 +77,18 @@ PyramidHierarchyParameters::FromJson(const JsonType& json) {
                        fmt::format("hierarchy {} no_build_levels must be an array", name));
         no_build_levels = no_build_levels_json.GetVector();
         std::sort(no_build_levels.begin(), no_build_levels.end());
-    } else {
-        no_build_levels.clear();
+    }
+    if (json.Contains(GRAPH_PARAM_MAX_DEGREE_KEY)) {
+        max_degree = json[GRAPH_PARAM_MAX_DEGREE_KEY].GetInt();
+    }
+    if (json.Contains(EF_CONSTRUCTION_KEY)) {
+        ef_construction = json[EF_CONSTRUCTION_KEY].GetInt();
+    }
+    if (json.Contains(ALPHA_KEY)) {
+        alpha = json[ALPHA_KEY].GetFloat();
+    }
+    if (json.Contains(INDEX_MIN_SIZE)) {
+        index_min_size = json[INDEX_MIN_SIZE].GetInt();
     }
 }
 
@@ -88,6 +97,10 @@ PyramidHierarchyParameters::ToJson() const {
     JsonType json;
     json["name"].SetString(name);
     json[NO_BUILD_LEVELS].SetVector(no_build_levels);
+    json[GRAPH_PARAM_MAX_DEGREE_KEY].SetInt(max_degree);
+    json[EF_CONSTRUCTION_KEY].SetInt(ef_construction);
+    json[ALPHA_KEY].SetFloat(alpha);
+    json[INDEX_MIN_SIZE].SetInt(index_min_size);
     return json;
 }
 
@@ -166,6 +179,11 @@ PyramidParameters::FromJson(const JsonType& json) {
             *hierarchy_json.GetInnerJson() = hierarchy_raw_json;
 
             PyramidHierarchyParameters hierarchy;
+            hierarchy.no_build_levels = this->no_build_levels;
+            hierarchy.max_degree = this->max_degree;
+            hierarchy.ef_construction = this->ef_construction;
+            hierarchy.alpha = this->alpha;
+            hierarchy.index_min_size = this->index_min_size;
             hierarchy.FromJson(hierarchy_json);
             CHECK_ARGUMENT(seen_names.insert(hierarchy.name).second,
                            fmt::format("duplicate hierarchy name {}", hierarchy.name));
@@ -277,26 +295,12 @@ PyramidSearchParameters::FromJson(const std::string& json_string) {
         obj.subindex_ef_search =
             params[INDEX_PYRAMID][PYRAMID_PARAMETER_SUBINDEX_EF_SEARCH].GetInt();
     }
-    bool has_hierarchy = false;
-    bool has_hierarchies = false;
     std::unordered_set<std::string> seen_names;
-    if (params[INDEX_PYRAMID].Contains(PYRAMID_PARAMETER_HIERARCHY)) {
-        CHECK_ARGUMENT(not params[INDEX_PYRAMID].Contains(PYRAMID_PARAMETER_HIERARCHIES),
-                       "pyramid hierarchy and hierarchies cannot both be set");
-        CHECK_ARGUMENT(not params[INDEX_PYRAMID].Contains(PYRAMID_PARAMETER_HIERARCHY_OP),
-                       "pyramid hierarchy and hierarchy_op cannot both be set");
-        CHECK_ARGUMENT(params[INDEX_PYRAMID][PYRAMID_PARAMETER_HIERARCHY].IsString(),
-                       "pyramid hierarchy must be a string");
-        append_hierarchy_selector(
-            obj, seen_names, params[INDEX_PYRAMID][PYRAMID_PARAMETER_HIERARCHY].GetString());
-        has_hierarchy = true;
-    }
     if (params[INDEX_PYRAMID].Contains(PYRAMID_PARAMETER_HIERARCHIES)) {
-        CHECK_ARGUMENT(not has_hierarchy, "pyramid hierarchy and hierarchies cannot both be set");
         const auto& hierarchies_json = params[INDEX_PYRAMID][PYRAMID_PARAMETER_HIERARCHIES];
         CHECK_ARGUMENT(hierarchies_json.IsArray(), "pyramid hierarchies must be an array");
-        CHECK_ARGUMENT(hierarchies_json.GetInnerJson()->size() >= 2,
-                       "pyramid hierarchies must contain at least two hierarchy names");
+        CHECK_ARGUMENT(not hierarchies_json.GetInnerJson()->empty(),
+                       "pyramid hierarchies must not be empty");
 
         for (const auto& hierarchy_raw_json : *hierarchies_json.GetInnerJson()) {
             JsonType hierarchy_json;
@@ -304,18 +308,16 @@ PyramidSearchParameters::FromJson(const std::string& json_string) {
             CHECK_ARGUMENT(hierarchy_json.IsString(), "pyramid hierarchy name must be a string");
             append_hierarchy_selector(obj, seen_names, hierarchy_json.GetString());
         }
-        has_hierarchies = true;
     }
     if (params[INDEX_PYRAMID].Contains(PYRAMID_PARAMETER_HIERARCHY_OP)) {
-        CHECK_ARGUMENT(has_hierarchies,
-                       "pyramid hierarchy_op requires pyramid hierarchies to be set");
+        CHECK_ARGUMENT(obj.hierarchies.size() >= 2,
+                       "pyramid hierarchy_op requires at least two hierarchies");
         CHECK_ARGUMENT(params[INDEX_PYRAMID][PYRAMID_PARAMETER_HIERARCHY_OP].IsString(),
                        "pyramid hierarchy_op must be a string");
         obj.hierarchy_op =
             parse_hierarchy_op(params[INDEX_PYRAMID][PYRAMID_PARAMETER_HIERARCHY_OP].GetString());
-        obj.has_hierarchy_op = true;
     }
-    CHECK_ARGUMENT(not has_hierarchies || obj.has_hierarchy_op,
+    CHECK_ARGUMENT(obj.hierarchies.size() <= 1 || obj.hierarchy_op != HierarchyOp::SINGLE,
                    "pyramid hierarchy_op is required for multiple hierarchies");
     return obj;
 }

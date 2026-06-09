@@ -287,8 +287,7 @@ Pyramid::RangeSearch(const DatasetPtr& query,
     QueryContext ctx{.stats = &stats};
 
     auto parsed_param = PyramidSearchParameters::FromJson(parameters);
-    const bool has_named_hierarchy_param =
-        parsed_param.HasHierarchySelector() || parsed_param.has_hierarchy_op;
+    const bool has_named_hierarchy_param = parsed_param.HasHierarchySelector();
     CHECK_ARGUMENT(has_named_hierarchy_param == false,
                    "pyramid named hierarchy search is reserved but not implemented");
     InnerSearchParam search_param;

@@ -15,6 +15,7 @@
 
 #pragma once
 
+#include <cstdint>
 #include <functional>
 #include <string>
 #include <vector>
@@ -48,6 +49,10 @@ public:
 public:
     std::string name;
     std::vector<int32_t> no_build_levels;
+    int64_t max_degree{64};
+    uint64_t ef_construction{400};
+    float alpha{1.2F};
+    uint32_t index_min_size{0};
 };
 
 struct PyramidParameters : public InnerIndexParameter {
@@ -97,7 +102,6 @@ public:
     uint64_t subindex_ef_search{50};
     std::vector<std::string> hierarchies;
     HierarchyOp hierarchy_op{HierarchyOp::SINGLE};
-    bool has_hierarchy_op{false};
 
 private:
     PyramidSearchParameters() = default;
