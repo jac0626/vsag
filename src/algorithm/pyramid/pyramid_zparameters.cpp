@@ -80,15 +80,25 @@ PyramidHierarchyParameters::FromJson(const JsonType& json) {
     }
     if (json.Contains(GRAPH_PARAM_MAX_DEGREE_KEY)) {
         max_degree = json[GRAPH_PARAM_MAX_DEGREE_KEY].GetInt();
+        CHECK_ARGUMENT(max_degree > 0,
+                       fmt::format("hierarchy {} max_degree must be positive", name));
     }
     if (json.Contains(EF_CONSTRUCTION_KEY)) {
         ef_construction = json[EF_CONSTRUCTION_KEY].GetInt();
+        CHECK_ARGUMENT(ef_construction > 0,
+                       fmt::format("hierarchy {} ef_construction must be positive", name));
     }
     if (json.Contains(ALPHA_KEY)) {
         alpha = json[ALPHA_KEY].GetFloat();
+        CHECK_ARGUMENT(alpha > 0.0F,
+                       fmt::format("hierarchy {} alpha must be positive", name));
     }
     if (json.Contains(INDEX_MIN_SIZE)) {
         index_min_size = json[INDEX_MIN_SIZE].GetInt();
+    }
+    for (auto level : no_build_levels) {
+        CHECK_ARGUMENT(level >= 0,
+                       fmt::format("hierarchy {} no_build_levels values must be non-negative", name));
     }
 }
 
