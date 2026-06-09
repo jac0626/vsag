@@ -210,6 +210,16 @@ TEST_CASE("Pyramid Hierarchy Parameters Test", "[ut][PyramidParameters][hierarch
         REQUIRE_THROWS(ParsePyramidWithHierarchies(nlohmann::json::array({{{"name", ""}}})));
         REQUIRE_THROWS(ParsePyramidWithHierarchies(
             nlohmann::json::array({{{"name", "site"}, {"no_build_levels", 1}}})));
+        REQUIRE_THROWS(ParsePyramidWithHierarchies(
+            nlohmann::json::array({{{"name", "site"}, {"no_build_levels", {-1}}}})));
+        REQUIRE_THROWS(ParsePyramidWithHierarchies(
+            nlohmann::json::array({{{"name", "site"}, {"max_degree", 0}}})));
+        REQUIRE_THROWS(ParsePyramidWithHierarchies(
+            nlohmann::json::array({{{"name", "site"}, {"ef_construction", -1}}})));
+        REQUIRE_THROWS(
+            ParsePyramidWithHierarchies(nlohmann::json::array({{{"name", "site"}, {"alpha", 0}}})));
+        REQUIRE_THROWS(ParsePyramidWithHierarchies(
+            nlohmann::json::array({{{"name", "site"}, {"index_min_size", -1}}})));
         REQUIRE_THROWS(ParsePyramidWithHierarchies(nlohmann::json::array({{{"foo", "site"}}})));
         REQUIRE_THROWS_AS(ParsePyramidWithHierarchies(nlohmann::json::array({1})),
                           vsag::VsagException);

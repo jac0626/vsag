@@ -499,18 +499,20 @@ DatasetImpl::Append(const DatasetPtr& other) {
     }
 
     // append paths
-    if (auto iter = this->data_.find(DATASET_PATHS); iter != this->data_.end()) {
-        auto* ptr = const_cast<std::string*>(std::get<const std::string*>(iter->second));
+    std::unordered_set<const std::string*> replaced_paths;
+    auto append_paths = [&](const std::string* current_paths, const std::string* other_paths) {
         auto* paths_copy = new std::string[old_num_elements + new_num_elements];
-        for (int i = 0; i < old_num_elements; ++i) {
-            paths_copy[i] += ptr[i];
+        for (int64_t i = 0; i < old_num_elements; ++i) {
+            paths_copy[i] = current_paths[i];
         }
-        delete[] ptr;
-        ptr = nullptr;
-        for (int i = 0; i < new_num_elements; ++i) {
-            paths_copy[old_num_elements + i] += other->GetPaths()[i];
+        for (int64_t i = 0; i < new_num_elements; ++i) {
+            paths_copy[old_num_elements + i] = other_paths[i];
         }
-        this->Paths(paths_copy);
+        replaced_paths.insert(current_paths);
+        return paths_copy;
+    };
+    if (auto iter = this->data_.find(DATASET_PATHS); iter != this->data_.end()) {
+        this->Paths(append_paths(std::get<const std::string*>(iter->second), other->GetPaths()));
     }
     for (const auto& key : hierarchy_path_keys) {
         auto iter = this->data_.find(key);
@@ -518,18 +520,12 @@ DatasetImpl::Append(const DatasetPtr& other) {
             continue;
         }
         auto hierarchy_name = HierarchyNameFromPathsKey(key);
-        auto* ptr = const_cast<std::string*>(std::get<const std::string*>(iter->second));
-        auto* paths_copy = new std::string[old_num_elements + new_num_elements];
-        for (int i = 0; i < old_num_elements; ++i) {
-            paths_copy[i] = ptr[i];
-        }
-        delete[] ptr;
-        ptr = nullptr;
-        const auto* other_paths = other->GetPaths(hierarchy_name);
-        for (int i = 0; i < new_num_elements; ++i) {
-            paths_copy[old_num_elements + i] = other_paths[i];
-        }
-        this->Paths(hierarchy_name, paths_copy);
+        this->Paths(hierarchy_name,
+                    append_paths(std::get<const std::string*>(iter->second),
+                                 other->GetPaths(hierarchy_name)));
+    }
+    for (const auto* paths : replaced_paths) {
+        delete[] paths;
     }
 
     // append sparse-vectors

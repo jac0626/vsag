@@ -478,6 +478,36 @@ TEST_CASE("Dataset Named Paths Test", "[ut][dataset]") {
 
         REQUIRE_THROWS(dataset->Append(append_dataset));
     }
+
+    SECTION("append rejects extra named paths on appended dataset") {
+        auto dataset = MakeDatasetWithNamedPaths({"root/a"}, {});
+        auto append_dataset = MakeDatasetWithNamedPaths({"root/b"}, {{"site", {"site/b"}}});
+
+        REQUIRE_THROWS(dataset->Append(append_dataset));
+    }
+
+    SECTION("append handles aliased named path arrays") {
+        auto* shared_paths = CopyPathArray({"shared/a", "shared/b"});
+        auto dataset = vsag::Dataset::Make();
+        dataset->NumElements(2)
+            ->Dim(1)
+            ->Paths(shared_paths)
+            ->Paths("site", shared_paths)
+            ->Paths("taxonomy", shared_paths)
+            ->Owner(true);
+        auto append_dataset = MakeDatasetWithNamedPaths(
+            {"root/c"}, {{"site", {"site/c"}}, {"taxonomy", {"taxonomy/c"}}});
+
+        dataset->Append(append_dataset);
+
+        REQUIRE(dataset->GetNumElements() == 3);
+        REQUIRE(dataset->GetPaths()[0] == "shared/a");
+        REQUIRE(dataset->GetPaths("site")[0] == "shared/a");
+        REQUIRE(dataset->GetPaths("taxonomy")[0] == "shared/a");
+        REQUIRE(dataset->GetPaths()[2] == "root/c");
+        REQUIRE(dataset->GetPaths("site")[2] == "site/c");
+        REQUIRE(dataset->GetPaths("taxonomy")[2] == "taxonomy/c");
+    }
 }
 
 TEST_CASE("Dataset MultiVector Basic Test", "[ut][dataset]") {

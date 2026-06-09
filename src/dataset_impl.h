@@ -352,9 +352,10 @@ public:
     MakeEmptyDataset();
 
 private:
-    static std::string
+    static const std::string&
     HierarchyPathsPrefix() {
-        return std::string(DATASET_PATHS) + ":";
+        static const std::string prefix = std::string(DATASET_PATHS) + ":";
+        return prefix;
     }
 
     static std::string

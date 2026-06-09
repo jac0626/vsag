@@ -16,6 +16,7 @@
 #include "pyramid_zparameters.h"
 
 #include <algorithm>
+#include <limits>
 #include <nlohmann/json.hpp>
 #include <unordered_set>
 #include <utility>
@@ -51,7 +52,7 @@ append_hierarchy_selector(PyramidSearchParameters& params,
                           const std::string& hierarchy_name) {
     CHECK_ARGUMENT(not hierarchy_name.empty(), "pyramid hierarchy name must not be empty");
     CHECK_ARGUMENT(seen_names.insert(hierarchy_name).second,
-                   fmt::format("duplicate pyramid hierarchy {}", hierarchy_name));
+                   fmt::format("duplicate hierarchy name {}", hierarchy_name));
     params.hierarchies.emplace_back(hierarchy_name);
 }
 
@@ -84,21 +85,27 @@ PyramidHierarchyParameters::FromJson(const JsonType& json) {
                        fmt::format("hierarchy {} max_degree must be positive", name));
     }
     if (json.Contains(EF_CONSTRUCTION_KEY)) {
-        ef_construction = json[EF_CONSTRUCTION_KEY].GetInt();
-        CHECK_ARGUMENT(ef_construction > 0,
+        const auto ef_construction_value = json[EF_CONSTRUCTION_KEY].GetInt();
+        CHECK_ARGUMENT(ef_construction_value > 0,
                        fmt::format("hierarchy {} ef_construction must be positive", name));
+        ef_construction = static_cast<uint64_t>(ef_construction_value);
     }
     if (json.Contains(ALPHA_KEY)) {
         alpha = json[ALPHA_KEY].GetFloat();
-        CHECK_ARGUMENT(alpha > 0.0F,
-                       fmt::format("hierarchy {} alpha must be positive", name));
+        CHECK_ARGUMENT(alpha > 0.0F, fmt::format("hierarchy {} alpha must be positive", name));
     }
     if (json.Contains(INDEX_MIN_SIZE)) {
-        index_min_size = json[INDEX_MIN_SIZE].GetInt();
+        const auto index_min_size_value = json[INDEX_MIN_SIZE].GetInt();
+        CHECK_ARGUMENT(index_min_size_value >= 0,
+                       fmt::format("hierarchy {} index_min_size must be non-negative", name));
+        CHECK_ARGUMENT(index_min_size_value <= std::numeric_limits<uint32_t>::max(),
+                       fmt::format("hierarchy {} index_min_size exceeds uint32_t", name));
+        index_min_size = static_cast<uint32_t>(index_min_size_value);
     }
     for (auto level : no_build_levels) {
-        CHECK_ARGUMENT(level >= 0,
-                       fmt::format("hierarchy {} no_build_levels values must be non-negative", name));
+        CHECK_ARGUMENT(
+            level >= 0,
+            fmt::format("hierarchy {} no_build_levels values must be non-negative", name));
     }
 }
 
