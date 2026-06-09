@@ -434,6 +434,25 @@ DatasetImpl::Append(const DatasetPtr& other) {
         }
         hierarchy_path_keys.push_back(key);
     }
+    auto other_impl = std::dynamic_pointer_cast<DatasetImpl>(other);
+    if (other_impl != nullptr) {
+        for (const auto& [key, value] : other_impl->data_) {
+            if (not IsHierarchyPathsKey(key)) {
+                continue;
+            }
+            if (std::get<const std::string*>(value) == nullptr) {
+                continue;
+            }
+            const auto hierarchy_name = HierarchyNameFromPathsKey(key);
+            if (this->GetPaths(hierarchy_name) == nullptr) {
+                std::string error_message = "Cannot append dataset with paths for hierarchy ";
+                error_message.append(hierarchy_name)
+                    .append(" to dataset without paths for hierarchy ")
+                    .append(hierarchy_name);
+                throw VsagException(ErrorType::INVALID_ARGUMENT, error_message);
+            }
+        }
+    }
 
     // check sparse-vectors
     if (this->data_.find(SPARSE_VECTORS) != this->data_.end() &&

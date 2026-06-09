@@ -117,6 +117,12 @@ PyramidHierarchyParameters::CheckCompatibility(const PyramidHierarchyParameters&
             "PyramidHierarchyParameters::CheckCompatibility: no_build_levels are not compatible");
         return false;
     }
+    if (max_degree != other.max_degree || ef_construction != other.ef_construction ||
+        alpha != other.alpha || index_min_size != other.index_min_size) {
+        logger::error(
+            "PyramidHierarchyParameters::CheckCompatibility: build params are not compatible");
+        return false;
+    }
     return true;
 }
 
