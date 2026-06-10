@@ -167,7 +167,7 @@ PyramidAnalyzer::get_index_node_structure() {
         }
     };
 
-    traverse(pyramid_->root_.get(), 0);
+    traverse(pyramid_->hierarchies_.begin()->second->root.get(), 0);
 
     structure["total_nodes"].SetInt(total_nodes);
     structure["max_depth"].SetInt(max_depth);
@@ -192,7 +192,7 @@ PyramidAnalyzer::get_leaf_node_size_distribution() {
     JsonType distribution;
 
     Vector<uint32_t> leaf_sizes(allocator_);
-    collect_leaf_sizes(pyramid_->root_.get(), leaf_sizes);
+    collect_leaf_sizes(pyramid_->hierarchies_.begin()->second->root.get(), leaf_sizes);
 
     if (leaf_sizes.empty()) {
         distribution["total_leaf_nodes"].SetInt(0);
@@ -310,7 +310,7 @@ PyramidAnalyzer::get_subindex_quality() {
     JsonType quality;
 
     subindex_stats_.clear();
-    analyze_subindexes(pyramid_->root_.get(), "");
+    analyze_subindexes(pyramid_->hierarchies_.begin()->second->root.get(), "");
 
     uint32_t graph_count = 0;
     uint32_t flat_count = 0;
@@ -1378,7 +1378,7 @@ PyramidAnalyzer::get_graph_node_recall_stats(const std::string& search_param_str
         }
     };
 
-    traverse(pyramid_->root_.get(), "");
+    traverse(pyramid_->hierarchies_.begin()->second->root.get(), "");
 
     float weighted_recall =
         total_size > 0 ? total_weighted_recall / static_cast<float>(total_size) : 0.0F;
@@ -1449,7 +1449,7 @@ PyramidAnalyzer::GetDuplicateRatio() {
         }
     };
 
-    traverse(pyramid_->root_.get());
+    traverse(pyramid_->hierarchies_.begin()->second->root.get());
 
     return total_vector_count > 0
                ? static_cast<float>(total_duplicate_count) / static_cast<float>(total_vector_count)
