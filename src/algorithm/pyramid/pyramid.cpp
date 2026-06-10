@@ -223,9 +223,22 @@ Pyramid::build_by_odescent(const DatasetPtr& base) {
     }
     auto codes = use_reorder_ ? precise_codes_ : base_codes_;
 
-    ODescent graph_builder(odescent_param_, codes, allocator_, this->thread_pool_.get());
-    for (auto& [hname, h_ptr] : hierarchies_) {
-        h_ptr->root->Build(graph_builder);
+    if (thread_pool_ != nullptr && hierarchies_.size() > 1) {
+        Vector<std::future<void>> futures(allocator_);
+        for (auto& [hname, h_ptr] : hierarchies_) {
+            futures.push_back(thread_pool_->GeneralEnqueue([&, codes]() {
+                ODescent builder(odescent_param_, codes, allocator_, nullptr);
+                h_ptr->root->Build(builder);
+            }));
+        }
+        for (auto& f : futures) {
+            f.get();
+        }
+    } else {
+        ODescent graph_builder(odescent_param_, codes, allocator_, this->thread_pool_.get());
+        for (auto& [hname, h_ptr] : hierarchies_) {
+            h_ptr->root->Build(graph_builder);
+        }
     }
     cur_element_count_ = data_num;
     return {};
@@ -704,10 +717,24 @@ Pyramid::Build(const DatasetPtr& base) {
     this->Train(base);
     std::vector<int64_t> ret;
 
-    for (auto& [hname, h_ptr] : hierarchies_) {
-        const auto* hpath = base->GetPaths(hname);
-        if (hpath != nullptr) {
-            populate_path_tree(*h_ptr, hpath, data_num);
+    if (thread_pool_ != nullptr && hierarchies_.size() > 1) {
+        Vector<std::future<void>> futures(allocator_);
+        for (auto& [hname, h_ptr] : hierarchies_) {
+            const auto* hpath = base->GetPaths(hname);
+            if (hpath != nullptr) {
+                futures.push_back(thread_pool_->GeneralEnqueue(
+                    [&h = *h_ptr, hpath, data_num, this]() { populate_path_tree(h, hpath, data_num); }));
+            }
+        }
+        for (auto& f : futures) {
+            f.get();
+        }
+    } else {
+        for (auto& [hname, h_ptr] : hierarchies_) {
+            const auto* hpath = base->GetPaths(hname);
+            if (hpath != nullptr) {
+                populate_path_tree(*h_ptr, hpath, data_num);
+            }
         }
     }
 

@@ -224,6 +224,36 @@ public:
     friend class PyramidAnalyzer;
 
 private:
+    struct Hierarchy {
+        std::string name;
+        std::unique_ptr<IndexNode> root{nullptr};
+        Vector<int32_t> no_build_levels;
+        uint64_t ef_construction{400};
+        float alpha{1.2F};
+
+        Hierarchy(const std::string& n, std::unique_ptr<IndexNode> r, Allocator* alloc)
+            : name(n), root(std::move(r)), no_build_levels(alloc) {
+        }
+    };
+
+    void
+    populate_path_tree(Hierarchy& h, const std::string* paths, int64_t count);
+
+    void
+    add_to_hierarchy(Hierarchy& h,
+                     const float* data_vectors,
+                     const std::string* paths,
+                     const Vector<int64_t>& data_biases,
+                     int64_t local_cur_element_count);
+
+    void
+    search_hierarchy(const Hierarchy& h,
+                     const SearchFunc& search_func,
+                     const VisitedListPtr& vl,
+                     DistHeapPtr& search_result,
+                     const std::string& path,
+                     const InnerSearchParam& search_param) const;
+
     void
     resize(int64_t new_max_capacity);
 
@@ -257,37 +287,6 @@ private:
                 const FlattenInterfacePtr& codes,
                 QueryContext& ctx,
                 uint64_t subindex_ef_search) const;
-
-private:
-    struct Hierarchy {
-        std::string name;
-        std::unique_ptr<IndexNode> root{nullptr};
-        Vector<int32_t> no_build_levels;
-        uint64_t ef_construction{400};
-        float alpha{1.2F};
-
-        Hierarchy(const std::string& n, std::unique_ptr<IndexNode> r, Allocator* alloc)
-            : name(n), root(std::move(r)), no_build_levels(alloc) {
-        }
-    };
-
-    void
-    populate_path_tree(Hierarchy& h, const std::string* paths, int64_t count);
-
-    void
-    add_to_hierarchy(Hierarchy& h,
-                     const float* data_vectors,
-                     const std::string* paths,
-                     const Vector<int64_t>& data_biases,
-                     int64_t local_cur_element_count);
-
-    void
-    search_hierarchy(const Hierarchy& h,
-                     const SearchFunc& search_func,
-                     const VisitedListPtr& vl,
-                     DistHeapPtr& search_result,
-                     const std::string& path,
-                     const InnerSearchParam& search_param) const;
 
 private:
     ODescentParameterPtr odescent_param_{nullptr};
