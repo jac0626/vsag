@@ -479,7 +479,8 @@ Pyramid::ExportModel(const IndexCommonParam& param) const {
 std::vector<int64_t>
 Pyramid::Add(const DatasetPtr& base, AddMode mode) {
     const auto pyramid_param = std::dynamic_pointer_cast<PyramidParameters>(create_param_ptr_);
-    CHECK_ARGUMENT(pyramid_param == nullptr || not pyramid_param->has_hierarchies,
+    CHECK_ARGUMENT(  // NOLINT(readability-simplify-boolean-expr)
+        pyramid_param == nullptr || not pyramid_param->has_hierarchies,
                    "pyramid named hierarchy add is reserved but not implemented");
     const auto* path = base->GetPaths();
     CHECK_ARGUMENT(path != nullptr, "path is required");
@@ -738,7 +739,8 @@ Pyramid::Train(const DatasetPtr& base) {
 std::vector<int64_t>
 Pyramid::Build(const DatasetPtr& base) {
     const auto pyramid_param = std::dynamic_pointer_cast<PyramidParameters>(create_param_ptr_);
-    CHECK_ARGUMENT(pyramid_param == nullptr || not pyramid_param->has_hierarchies,
+    CHECK_ARGUMENT(  // NOLINT(readability-simplify-boolean-expr)
+        pyramid_param == nullptr || not pyramid_param->has_hierarchies,
                    "pyramid named hierarchy build is reserved but not implemented");
     CHECK_ARGUMENT(GetNumElements() == 0, "index is not empty");
     this->Train(base);
