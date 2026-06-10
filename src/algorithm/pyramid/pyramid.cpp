@@ -481,7 +481,7 @@ Pyramid::Add(const DatasetPtr& base, AddMode mode) {
     const auto pyramid_param = std::dynamic_pointer_cast<PyramidParameters>(create_param_ptr_);
     CHECK_ARGUMENT(  // NOLINT(readability-simplify-boolean-expr)
         pyramid_param == nullptr || not pyramid_param->has_hierarchies,
-                   "pyramid named hierarchy add is reserved but not implemented");
+        "pyramid named hierarchy add is reserved but not implemented");
     const auto* path = base->GetPaths();
     CHECK_ARGUMENT(path != nullptr, "path is required");
     int64_t data_num = base->GetNumElements();
@@ -741,7 +741,7 @@ Pyramid::Build(const DatasetPtr& base) {
     const auto pyramid_param = std::dynamic_pointer_cast<PyramidParameters>(create_param_ptr_);
     CHECK_ARGUMENT(  // NOLINT(readability-simplify-boolean-expr)
         pyramid_param == nullptr || not pyramid_param->has_hierarchies,
-                   "pyramid named hierarchy build is reserved but not implemented");
+        "pyramid named hierarchy build is reserved but not implemented");
     CHECK_ARGUMENT(GetNumElements() == 0, "index is not empty");
     this->Train(base);
     std::vector<int64_t> ret;
