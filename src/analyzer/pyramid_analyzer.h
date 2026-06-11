@@ -83,7 +83,7 @@ private:
         float avg_distance_from_entry{0.0F};
     };
 
-    JsonType
+    static JsonType
     get_index_node_structure(IndexNode* root);
 
     JsonType
