@@ -770,10 +770,22 @@ struct MultiHierarchyFixture {
     static constexpr int64_t DIM = 4;
 
     std::vector<float> vectors = {
-        1.0f, 0.0f, 0.0f, 0.0f,
-        0.0f, 1.0f, 0.0f, 0.0f,
-        0.0f, 0.0f, 1.0f, 0.0f,
-        0.0f, 0.0f, 0.0f, 1.0f,
+        1.0f,
+        0.0f,
+        0.0f,
+        0.0f,
+        0.0f,
+        1.0f,
+        0.0f,
+        0.0f,
+        0.0f,
+        0.0f,
+        1.0f,
+        0.0f,
+        0.0f,
+        0.0f,
+        0.0f,
+        1.0f,
     };
     std::vector<int64_t> ids = {100, 101, 102, 103};
     std::vector<std::string> site_paths = {"www/news", "www/sports", "www/news", "www/sports"};
@@ -1112,8 +1124,7 @@ TEST_CASE("Multi-Hierarchy: Error - unknown hierarchy in search",
     REQUIRE_FALSE(result.has_value());
 }
 
-TEST_CASE("Multi-Hierarchy: Duplicate label rejected on Add",
-          "[ft][pyramid][multi_hierarchy]") {
+TEST_CASE("Multi-Hierarchy: Duplicate label rejected on Add", "[ft][pyramid][multi_hierarchy]") {
     MultiHierarchyFixture f;
     auto index = vsag::Factory::CreateIndex("pyramid", f.build_param("nsw"));
     REQUIRE(index.has_value());
@@ -1338,7 +1349,8 @@ TEST_CASE("Multi-Hierarchy: Multi-hierarchy union/intersection rejected",
     auto query = vsag::Dataset::Make();
     query->NumElements(1)->Dim(4)->Float32Vectors(qv)->Paths("site", qp_s)->Owner(true);
 
-    std::string sp = R"({"pyramid": {"ef_search": 100, "hierarchies": ["site", "cat"], "hierarchy_op": "intersection"}})";
+    std::string sp =
+        R"({"pyramid": {"ef_search": 100, "hierarchies": ["site", "cat"], "hierarchy_op": "intersection"}})";
     auto result = index.value()->KnnSearch(query, 4, sp);
     REQUIRE_FALSE(result.has_value());
 }

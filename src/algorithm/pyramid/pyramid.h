@@ -116,11 +116,11 @@ public:
                     new_gp->max_degree_ = h_param.max_degree;
                     graph_param = new_gp;
                 }
-                auto root = std::make_unique<IndexNode>(
-                    allocator_, graph_param, h_param.index_min_size);
+                auto root =
+                    std::make_unique<IndexNode>(allocator_, graph_param, h_param.index_min_size);
                 auto h = std::make_unique<Hierarchy>(h_param.name, std::move(root), allocator_);
-                h->no_build_levels.assign(
-                    h_param.no_build_levels.begin(), h_param.no_build_levels.end());
+                h->no_build_levels.assign(h_param.no_build_levels.begin(),
+                                          h_param.no_build_levels.end());
                 h->ef_construction = h_param.ef_construction;
                 h->alpha = h_param.alpha;
                 hierarchies_.insert({h_param.name, std::move(h)});
@@ -129,8 +129,8 @@ public:
             auto root = std::make_unique<IndexNode>(
                 allocator_, pyramid_param->graph_param, index_min_size_);
             auto h = std::make_unique<Hierarchy>("", std::move(root), allocator_);
-            h->no_build_levels.assign(
-                pyramid_param->no_build_levels.begin(), pyramid_param->no_build_levels.end());
+            h->no_build_levels.assign(pyramid_param->no_build_levels.begin(),
+                                      pyramid_param->no_build_levels.end());
             h->ef_construction = pyramid_param->ef_construction;
             h->alpha = pyramid_param->alpha;
             hierarchies_.insert({"", std::move(h)});
@@ -236,7 +236,7 @@ private:
         }
     };
 
-    void
+    static void
     populate_path_tree(Hierarchy& h, const std::string* paths, int64_t count);
 
     void

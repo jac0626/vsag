@@ -225,10 +225,11 @@ Pyramid::build_by_odescent(const DatasetPtr& base) {
 
     if (thread_pool_ != nullptr && hierarchies_.size() > 1) {
         Vector<std::future<void>> futures(allocator_);
-        for (auto& [hname, h_ptr] : hierarchies_) {
-            futures.push_back(thread_pool_->GeneralEnqueue([&, codes]() {
+        for (const auto& [hname, h_ptr] : hierarchies_) {
+            auto* root_ptr = h_ptr->root.get();
+            futures.push_back(thread_pool_->GeneralEnqueue([&, codes, root_ptr]() {
                 ODescent builder(odescent_param_, codes, allocator_, nullptr);
-                h_ptr->root->Build(builder);
+                root_ptr->Build(builder);
             }));
         }
         for (auto& f : futures) {
@@ -236,7 +237,7 @@ Pyramid::build_by_odescent(const DatasetPtr& base) {
         }
     } else {
         ODescent graph_builder(odescent_param_, codes, allocator_, this->thread_pool_.get());
-        for (auto& [hname, h_ptr] : hierarchies_) {
+        for (const auto& [hname, h_ptr] : hierarchies_) {
             h_ptr->root->Build(graph_builder);
         }
     }
@@ -350,6 +351,7 @@ Pyramid::search_impl(const DatasetPtr& query,
     if (query_path == nullptr) {
         query_path = query->GetPaths();
     }
+    // NOLINTNEXTLINE(readability-simplify-boolean-expr)
     CHECK_ARGUMENT(query_path != nullptr || h.root->status_ != IndexNode::Status::NO_INDEX,
                    "query_path is required when level0 is not built");
     CHECK_ARGUMENT(query->GetFloat32Vectors() != nullptr, "query vectors is required");
@@ -527,7 +529,7 @@ Pyramid::Add(const DatasetPtr& base, AddMode mode) {
     }
     std::shared_lock<std::shared_mutex> lock(resize_mutex_);
 
-    for (auto& [hname, h_ptr] : hierarchies_) {
+    for (const auto& [hname, h_ptr] : hierarchies_) {
         const auto* hpath = base->GetPaths(hname);
         if (hpath != nullptr) {
             add_to_hierarchy(*h_ptr, data_vectors, hpath, data_biases, local_cur_element_count);
@@ -719,18 +721,20 @@ Pyramid::Build(const DatasetPtr& base) {
 
     if (thread_pool_ != nullptr && hierarchies_.size() > 1) {
         Vector<std::future<void>> futures(allocator_);
-        for (auto& [hname, h_ptr] : hierarchies_) {
+        for (const auto& [hname, h_ptr] : hierarchies_) {
             const auto* hpath = base->GetPaths(hname);
             if (hpath != nullptr) {
-                futures.push_back(thread_pool_->GeneralEnqueue(
-                    [&h = *h_ptr, hpath, data_num, this]() { populate_path_tree(h, hpath, data_num); }));
+                futures.push_back(
+                    thread_pool_->GeneralEnqueue([&h = *h_ptr, hpath, data_num, this]() {
+                        populate_path_tree(h, hpath, data_num);
+                    }));
             }
         }
         for (auto& f : futures) {
             f.get();
         }
     } else {
-        for (auto& [hname, h_ptr] : hierarchies_) {
+        for (const auto& [hname, h_ptr] : hierarchies_) {
             const auto* hpath = base->GetPaths(hname);
             if (hpath != nullptr) {
                 populate_path_tree(*h_ptr, hpath, data_num);
@@ -827,10 +831,10 @@ Pyramid::populate_path_tree(Hierarchy& h, const std::string* paths, int64_t coun
 
 void
 Pyramid::add_to_hierarchy(Hierarchy& h,
-                           const float* data_vectors,
-                           const std::string* paths,
-                           const Vector<int64_t>& data_biases,
-                           int64_t local_cur_element_count) {
+                          const float* data_vectors,
+                          const std::string* paths,
+                          const Vector<int64_t>& data_biases,
+                          int64_t local_cur_element_count) {
     auto add_func = [&](int64_t i, int64_t data_bias) {
         std::string current_path = paths[data_bias];
         auto path_slices = split(current_path, PART_SLASH);
@@ -872,11 +876,11 @@ Pyramid::add_to_hierarchy(Hierarchy& h,
 
 void
 Pyramid::search_hierarchy(const Hierarchy& h,
-                           const SearchFunc& search_func,
-                           const VisitedListPtr& vl,
-                           DistHeapPtr& search_result,
-                           const std::string& path,
-                           const InnerSearchParam& search_param) const {
+                          const SearchFunc& search_func,
+                          const VisitedListPtr& vl,
+                          DistHeapPtr& search_result,
+                          const std::string& path,
+                          const InnerSearchParam& search_param) const {
     std::vector<std::future<void>> futures;
     auto parsed_path = parse_path(path);
     Vector<DistHeapPtr> search_result_lists(parsed_path.size(), allocator_);
