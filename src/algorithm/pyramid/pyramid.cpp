@@ -418,6 +418,8 @@ Pyramid::Serialize(StreamWriter& writer) const {
 
     auto pyramid_param = std::dynamic_pointer_cast<PyramidParameters>(create_param_ptr_);
     if (pyramid_param && pyramid_param->has_hierarchies) {
+        uint64_t hierarchy_count = hierarchies_.size();
+        StreamWriter::WriteObj(writer, hierarchy_count);
         for (const auto& [hname, h_ptr] : hierarchies_) {
             StreamWriter::WriteString(writer, hname);
             h_ptr->root->Serialize(writer);
@@ -454,7 +456,13 @@ Pyramid::Deserialize(StreamReader& reader) {
 
     auto param_json = JsonType::Parse(basic_info[INDEX_PARAM].GetString());
     if (param_json.Contains(PYRAMID_HIERARCHIES)) {
-        for (size_t i = 0; i < hierarchies_.size(); ++i) {
+        uint64_t hierarchy_count = 0;
+        StreamReader::ReadObj(buffer_reader, hierarchy_count);
+        CHECK_ARGUMENT(hierarchy_count == hierarchies_.size(),
+                       fmt::format("serialized hierarchy count ({}) != config ({})",
+                                   hierarchy_count,
+                                   hierarchies_.size()));
+        for (uint64_t i = 0; i < hierarchy_count; ++i) {
             std::string hname = StreamReader::ReadString(buffer_reader);
             auto h_iter = hierarchies_.find(hname);
             CHECK_ARGUMENT(h_iter != hierarchies_.end(),
@@ -462,7 +470,11 @@ Pyramid::Deserialize(StreamReader& reader) {
             h_iter->second->root->Deserialize(buffer_reader);
         }
     } else {
-        hierarchies_.at("")->root->Deserialize(buffer_reader);
+        auto h_iter = hierarchies_.find("");
+        CHECK_ARGUMENT(
+            h_iter != hierarchies_.end(),
+            "deserialized single-hierarchy index but current config has named hierarchies");
+        h_iter->second->root->Deserialize(buffer_reader);
     }
 
     resize(max_capacity);
@@ -899,7 +911,9 @@ Pyramid::search_hierarchy(const Hierarchy& h,
         if (valid) {
             if (thread_pool_ != nullptr && search_param.parallel_search_thread_count > 1) {
                 futures.push_back(thread_pool_->GeneralEnqueue([&, node, i]() -> void {
-                    node->Search(search_func, vl, search_result_lists[i], search_param.ef);
+                    auto local_vl = pool_->TakeOne();
+                    node->Search(search_func, local_vl, search_result_lists[i], search_param.ef);
+                    pool_->ReturnOne(local_vl);
                 }));
             } else {
                 node->Search(search_func, vl, search_result_lists[i], search_param.ef);

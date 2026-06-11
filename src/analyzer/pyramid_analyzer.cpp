@@ -55,7 +55,7 @@ PyramidAnalyzer::GetStats() {
         return h_stats;
     };
 
-    if (pyramid_->hierarchies_.size() == 1) {
+    if (pyramid_->hierarchies_.size() == 1 && pyramid_->hierarchies_.begin()->first.empty()) {
         auto* root = pyramid_->hierarchies_.begin()->second->root.get();
         auto h_stats = analyze_one_hierarchy(root);
         stats["index_node_structure"].SetJson(h_stats["index_node_structure"]);
