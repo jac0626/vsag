@@ -53,9 +53,10 @@ public:
     ReadVector(StreamReader& reader, std::vector<T>& val) {
         uint64_t size;
         ReadObj(reader, size);
-        CheckReadable(reader, ReadSize<T>(size));
+        const auto bytes = ReadSize<T>(size);
+        CheckReadable(reader, bytes);
         val.resize(size);
-        reader.Read(reinterpret_cast<char*>(val.data()), size * sizeof(T));
+        reader.Read(reinterpret_cast<char*>(val.data()), bytes);
     }
 
     template <typename T>
@@ -63,9 +64,10 @@ public:
     ReadVector(StreamReader& reader, vsag::Vector<T>& val) {
         uint64_t size;
         ReadObj(reader, size);
-        CheckReadable(reader, ReadSize<T>(size));
+        const auto bytes = ReadSize<T>(size);
+        CheckReadable(reader, bytes);
         val.resize(size);
-        reader.Read(reinterpret_cast<char*>(val.data()), size * sizeof(T));
+        reader.Read(reinterpret_cast<char*>(val.data()), bytes);
     }
 
 private:

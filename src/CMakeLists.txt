@@ -83,7 +83,7 @@ target_link_libraries (vsag_static
     PRIVATE ${VSAG_DEP_LIBS} coverage_config)
 
 if (TARGET vsag_openmp)
-    foreach (_vsag_openmp_target IN ITEMS algorithm analyzer cluster factory odescent)
+    foreach (_vsag_openmp_target IN ITEMS algorithm analyzer cluster factory hgraph odescent pyramid)
         vsag_link_openmp_private (${_vsag_openmp_target})
     endforeach ()
     vsag_link_openmp_private (vsag)
