@@ -199,7 +199,9 @@ jobs:
   test-asan-macos-unittests:
     name: Test macOS Unittests
     needs: [changes, build-asan-macos-arm64]
-    if: needs.changes.outputs.cpp == 'true'
+    # Full macOS test-suite coverage runs after merge in asan_build_and_test.yml.
+    # PRs keep the macOS build, release build, and example smoke test.
+    if: github.event_name != 'pull_request' && needs.changes.outputs.cpp == 'true'
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
@@ -233,7 +235,9 @@ jobs:
   test-asan-macos-functests:
     name: Test macOS Functests
     needs: [changes, build-asan-macos-arm64]
-    if: needs.changes.outputs.cpp == 'true'
+    # Full macOS test-suite coverage runs after merge in asan_build_and_test.yml.
+    # PRs keep the macOS build, release build, and example smoke test.
+    if: github.event_name != 'pull_request' && needs.changes.outputs.cpp == 'true'
     runs-on: macos-15
     steps:
       - uses: actions/checkout@v4
