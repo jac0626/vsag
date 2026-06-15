@@ -133,8 +133,6 @@ main(int argc, char** argv) {
         }
 
         // Search parameters select the "site" hierarchy.
-        // The query path just needs Paths() — the hierarchy is already chosen
-        // in search params. search_impl falls back from GetPaths("site") to GetPaths().
         auto search_params = R"(
         {
             "pyramid": {
@@ -148,7 +146,7 @@ main(int argc, char** argv) {
         query->NumElements(1)
             ->Dim(dim)
             ->Float32Vectors(query_vector)
-            ->Paths(query_path)
+            ->Paths("site", query_path)
             ->Owner(true);
         auto knn_result = index->KnnSearch(query, topk, search_params);
 
@@ -231,12 +229,17 @@ main(int argc, char** argv) {
             ->Ids(add_ids)
             ->Float32Vectors(add_vectors)
             ->Paths("site", add_site_paths)
-            ->Paths("category", add_cat_paths);
+            ->Paths("category", add_cat_paths)
+            ->Owner(false);
         if (auto result = index->Add(add_data); result.has_value()) {
             std::cout << "After Add(), Pyramid contains: " << index->GetNumElements() << std::endl;
         } else {
             std::cerr << "Add failed: " << result.error().message << std::endl;
         }
+        delete[] add_ids;
+        delete[] add_vectors;
+        delete[] add_site_paths;
+        delete[] add_cat_paths;
     }
 
     /******************* RangeSearch on "category" Hierarchy *****************/
@@ -334,6 +337,8 @@ main(int argc, char** argv) {
         }
     }
 
+    delete[] ids;
+    delete[] vectors;
     delete[] site_paths;
     delete[] category_paths;
     return 0;
