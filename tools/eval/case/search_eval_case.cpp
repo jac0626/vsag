@@ -172,6 +172,14 @@ SearchEvalCase::do_knn_search() {
         } else {
             query->SparseVectors((const SparseVector*)query_vector);
         }
+        if (this->dataset_ptr_->HasPaths()) {
+            for (const auto& hname : this->dataset_ptr_->GetHierarchyNames()) {
+                const auto* paths = this->dataset_ptr_->GetTestPaths(hname);
+                if (paths != nullptr) {
+                    query->Paths(hname, paths + query_id);
+                }
+            }
+        }
         return std::make_pair(std::move(query), query_vector);
     };
 
@@ -292,6 +300,14 @@ SearchEvalCase::do_knn_filter_search() {
                 } else if (this->dataset_ptr_->GetTestDataType() == vsag::DATATYPE_INT8) {
                     query->Int8Vectors((const int8_t*)query_vector);
                 }
+                if (this->dataset_ptr_->HasPaths()) {
+                    for (const auto& hname : this->dataset_ptr_->GetHierarchyNames()) {
+                        const auto* paths = this->dataset_ptr_->GetTestPaths(hname);
+                        if (paths != nullptr) {
+                            query->Paths(hname, paths + i);
+                        }
+                    }
+                }
                 auto test_label = test_labels[i];
                 auto filter = std::make_shared<FilterObj>(
                     train_labels, test_label, this->dataset_ptr_->GetValidRatio(test_label));
@@ -324,6 +340,14 @@ SearchEvalCase::do_knn_filter_search() {
                 query->Float32Vectors((const float*)query_vector);
             } else if (this->dataset_ptr_->GetTestDataType() == vsag::DATATYPE_INT8) {
                 query->Int8Vectors((const int8_t*)query_vector);
+            }
+            if (this->dataset_ptr_->HasPaths()) {
+                for (const auto& hname : this->dataset_ptr_->GetHierarchyNames()) {
+                    const auto* paths = this->dataset_ptr_->GetTestPaths(hname);
+                    if (paths != nullptr) {
+                        query->Paths(hname, paths + i);
+                    }
+                }
             }
             auto test_label = test_labels[i];
             auto filter = std::make_shared<FilterObj>(
