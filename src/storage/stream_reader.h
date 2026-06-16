@@ -17,14 +17,12 @@
 #include <cstdint>
 #include <functional>
 #include <istream>
-#include <limits>
 #include <stack>
 #include <vector>
 
 #include "../container_types.h"
 #include "impl/logger/logger.h"
 #include "type_helpers.h"
-#include "vsag_exception.h"
 
 namespace vsag {
 
@@ -42,7 +40,6 @@ public:
     ReadString(StreamReader& reader) {
         uint64_t length = 0;
         StreamReader::ReadObj(reader, length);
-        CheckReadable(reader, length);
         std::vector<char> buffer(length);
         reader.Read(buffer.data(), length);
         return {buffer.data(), length};
@@ -53,10 +50,8 @@ public:
     ReadVector(StreamReader& reader, std::vector<T>& val) {
         uint64_t size;
         ReadObj(reader, size);
-        const auto bytes = ReadSize<T>(size);
-        CheckReadable(reader, bytes);
         val.resize(size);
-        reader.Read(reinterpret_cast<char*>(val.data()), bytes);
+        reader.Read(reinterpret_cast<char*>(val.data()), size * sizeof(T));
     }
 
     template <typename T>
@@ -64,35 +59,8 @@ public:
     ReadVector(StreamReader& reader, vsag::Vector<T>& val) {
         uint64_t size;
         ReadObj(reader, size);
-        const auto bytes = ReadSize<T>(size);
-        CheckReadable(reader, bytes);
         val.resize(size);
-        reader.Read(reinterpret_cast<char*>(val.data()), bytes);
-    }
-
-private:
-    template <typename T>
-    static uint64_t
-    ReadSize(uint64_t count) {
-        if (count > std::numeric_limits<uint64_t>::max() / sizeof(T)) {
-            throw VsagException(ErrorType::READ_ERROR, "StreamReader: vector byte size overflow");
-        }
-        return count * sizeof(T);
-    }
-
-    static void
-    CheckReadable(StreamReader& reader, uint64_t read_size) {
-        auto cursor = reader.GetCursor();
-        auto length = reader.Length();
-        if (cursor > length or read_size > length - cursor) {
-            throw VsagException(ErrorType::READ_ERROR,
-                                "StreamReader: read exceeds stream length, cursor=",
-                                cursor,
-                                ", read_size=",
-                                read_size,
-                                ", length=",
-                                length);
-        }
+        reader.Read(reinterpret_cast<char*>(val.data()), size * sizeof(T));
     }
 
 public:
