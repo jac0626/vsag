@@ -76,6 +76,25 @@ auto result = index->KnnSearch(
 | `base_file_path` / `precise_file_path` | string | — | 磁盘后端时的文件路径（使用 `mmap_io` / `async_io` / `buffer_io` 时必填） |
 | `hgraph_init_capacity` | int | `100` | 初始容量提示（不会限制最终规模） |
 
+## 重复向量处理
+
+当 `support_duplicate: true` 时，HGraph 会检测插入的向量是否与索引中已有向量重复；
+若重复，则让新条目**共享已有向量的物理存储**，而不再单独分配一份拷贝。每个 label 仍保留
+独立身份，可以独立检索和更新，但底层量化编码（以及可选的高精度 / 原始向量拷贝）由同组 label
+共享。对于包含大量重复向量的场景，这能按重复比例近似削减 flatten 存储占用。
+
+- **完全重复**（`duplicate_distance_threshold: 0.0`，默认值）通过逐字节编码比较判定。
+- **近似重复**（`duplicate_distance_threshold > 0.0`）按最近候选距离判定。判定为重复后，
+  新 label 直接共享代表向量的存储，不再保留自己的输入向量；`GetRawVectorByIds()` 和按 ID
+  距离计算会读取代表向量。
+- 无论使用哪种判重方式，判定为 duplicate 时，新 logical ID 都会共享该组的物理存储槽。
+- 对共享存储槽的 label 调用 **`UpdateVector`** 时，会先把它分离到一个新存储槽再写入，
+  因此更新某个重复项绝不会影响其他重复项。
+- **序列化** 向前兼容：使用存储去重的索引会额外写入 `code_slot_mapping_version` 标记。
+  未配置重复存储的读取方会以 `INVALID_ARGUMENT` 拒绝此类数据，而非静默错读；读取旧版
+  （未去重）数据时则透明回退为 1:1 映射。
+- **限制：** 带有重复存储映射的索引不支持 `Merge()`，调用会返回 `UNSUPPORTED_INDEX_OPERATION`。
+
 ## 支持的输入数据类型
 
 顶层构建配置中的 `dtype` 字段决定 `Dataset` 如何解释原始向量字节。HGraph 支持四种输入类型，

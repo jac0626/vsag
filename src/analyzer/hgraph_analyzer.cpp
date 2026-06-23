@@ -173,7 +173,7 @@ HGraphAnalyzer::GetDuplicateRatio() {
 
     // Sieve method: progressively filter candidate duplicate groups
     calculate_base_groundtruth();
-    auto codes = hgraph_->reorder_ ? hgraph_->high_precise_codes_ : hgraph_->basic_flatten_codes_;
+    auto codes = hgraph_->reorder_ ? hgraph_->get_reorder_read_codes() : hgraph_->basic_read_codes_;
     constexpr float epsilon = 2e-6F;
 
     // Initialize with all vectors as a single group
@@ -341,7 +341,7 @@ HGraphAnalyzer::calculate_groundtruth(const Vector<float>& sample_datas,
     Vector<float> distances_array(this->total_count_, allocator_);
     Vector<InnerIdType> ids_array(this->total_count_, allocator_);
     std::iota(ids_array.begin(), ids_array.end(), 0);
-    auto codes = hgraph_->reorder_ ? hgraph_->high_precise_codes_ : hgraph_->basic_flatten_codes_;
+    auto codes = hgraph_->reorder_ ? hgraph_->get_reorder_read_codes() : hgraph_->basic_read_codes_;
     for (uint64_t i = 0; i < sample_size; ++i) {
         if (i % 10 == 0) {
             logger::info("calculate groundtruth for sample {} of {}", i, i + 10);

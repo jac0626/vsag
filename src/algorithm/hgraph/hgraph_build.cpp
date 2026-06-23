@@ -18,6 +18,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <fstream>
+#include <functional>
 #include <future>
 #include <limits>
 #include <unordered_map>
@@ -88,10 +89,12 @@ HGraph::Train(const DatasetPtr& base) {
 std::vector<int64_t>
 HGraph::Build(const DatasetPtr& data) {
     CHECK_ARGUMENT(GetNumElements() == 0, "index is not empty");
+    CHECK_ARGUMENT(!(this->support_duplicate_ && this->graph_type_ != GRAPH_TYPE_VALUE_NSW),
+                   "HGraph duplicate detection does not support ODescent build");
     this->build_cache_hit_rate_ = -1.0F;
     this->build_cache_hit_nodes_ = 0;
     this->build_cache_missed_nodes_ = 0;
-    if (this->has_loaded_cache()) {
+    if (this->has_loaded_cache() && not this->support_duplicate_) {
         // A previously exported cache has been imported via ImportCache().
         // Take the accelerated build path that warm-starts neighbours from
         // the cache and refines them, instead of building from scratch.
@@ -370,22 +373,44 @@ HGraph::Add(const DatasetPtr& data, AddMode mode) {
             this->Train(data);
         }
         futures.clear();
-        for (const auto& id_pair : inner_ids) {
-            auto inner_id = id_pair.first;
-            auto local_idx = id_pair.second;
-            if (use_parallel_add) {
-                auto future =
-                    this->thread_pool_->GeneralEnqueue([this, data, inner_id, local_idx]() {
-                        this->insert_persistent_codes(get_data(data, local_idx), inner_id);
-                    });
-                futures.emplace_back(std::move(future));
-            } else {
-                this->insert_persistent_codes(get_data(data, local_idx), inner_id);
+        if (this->has_code_slot_mapping()) {
+            for (const auto& [inner_id, local_idx] : inner_ids) {
+                const auto* vector = get_data(data, local_idx);
+                std::unique_lock storage_lock(this->code_slot_storage_mutex_);
+                bool bound_existing_slot = false;
+                for (const auto duplicate_id : this->bottom_graph_->GetDuplicateIds(inner_id)) {
+                    if (not this->code_slot_mapping_->IsMapped(duplicate_id)) {
+                        continue;
+                    }
+                    auto code_slot_id = this->code_slot_mapping_->Resolve(duplicate_id);
+                    this->code_slot_mapping_->BindExistingSlot(inner_id, code_slot_id);
+                    bound_existing_slot = true;
+                    break;
+                }
+                if (not bound_existing_slot) {
+                    auto code_slot_id = this->code_slot_mapping_->PhysicalCount();
+                    this->write_persistent_codes_unlocked(vector, code_slot_id);
+                    this->code_slot_mapping_->CommitNewSlot(inner_id, code_slot_id);
+                }
             }
-        }
-        if (use_parallel_add) {
-            for (auto& future : futures) {
-                future.get();
+        } else {
+            for (const auto& id_pair : inner_ids) {
+                auto inner_id = id_pair.first;
+                auto local_idx = id_pair.second;
+                if (use_parallel_add) {
+                    auto future =
+                        this->thread_pool_->GeneralEnqueue([this, data, inner_id, local_idx]() {
+                            this->insert_persistent_codes(get_data(data, local_idx), inner_id);
+                        });
+                    futures.emplace_back(std::move(future));
+                } else {
+                    this->insert_persistent_codes(get_data(data, local_idx), inner_id);
+                }
+            }
+            if (use_parallel_add) {
+                for (auto& future : futures) {
+                    future.get();
+                }
             }
         }
     }
@@ -398,17 +423,28 @@ HGraph::add_one_point(const void* data, int level, InnerIdType inner_id) {
 }
 
 void
-HGraph::insert_persistent_codes(const void* data, InnerIdType inner_id) {
+HGraph::insert_persistent_codes(const void* data, InnerIdType inner_id, bool lock_add_mutex) {
     std::shared_lock<std::shared_mutex> add_lock;
-    if (not this->support_force_remove()) {
+    if (lock_add_mutex and not this->support_force_remove()) {
         add_lock = std::shared_lock<std::shared_mutex>(this->add_mutex_);
     }
-    this->basic_flatten_codes_->InsertVector(data, inner_id);
+    InnerIdType code_slot_id = inner_id;
+    if (this->has_code_slot_mapping()) {
+        std::unique_lock storage_lock(this->code_slot_storage_mutex_);
+        if (this->code_slot_mapping_->IsMapped(inner_id)) {
+            return;
+        }
+        code_slot_id = this->code_slot_mapping_->PhysicalCount();
+        this->write_persistent_codes_unlocked(data, code_slot_id);
+        this->code_slot_mapping_->CommitNewSlot(inner_id, code_slot_id);
+        return;
+    }
+    this->basic_flatten_codes_->InsertVector(data, code_slot_id);
     if (has_precise_reorder()) {
-        this->high_precise_codes_->InsertVector(data, inner_id);
+        this->high_precise_codes_->InsertVector(data, code_slot_id);
     }
     if (create_new_raw_vector_) {
-        raw_vector_->InsertVector(data, inner_id);
+        raw_vector_->InsertVector(data, code_slot_id);
     }
 }
 
@@ -418,7 +454,7 @@ HGraph::add_one_point(const void* data, int level, InnerIdType inner_id, bool in
     if (this->support_force_remove()) {
         add_lock.lock();
     }
-    if (insert_codes) {
+    if (insert_codes and not this->has_code_slot_mapping()) {
         this->insert_persistent_codes(data, inner_id);
     }
     if (not this->support_force_remove()) {
@@ -453,15 +489,15 @@ HGraph::graph_add_one(const void* data, int level, InnerIdType inner_id) {
     param.ef = 1;
     param.is_inner_id_allowed = nullptr;
 
-    auto flatten_codes = basic_flatten_codes_;
+    auto flatten_codes = this->basic_read_codes_;
     if (temporary_build_flatten_codes_ != nullptr) {
         flatten_codes = temporary_build_flatten_codes_;
     } else if (need_temporary_sq8_build_data(this->basic_flatten_codes_,
                                              this->has_precise_reorder()) and
                raw_vector_ != nullptr) {
-        flatten_codes = raw_vector_;
+        flatten_codes = this->raw_read_codes_;
     } else if (has_precise_reorder() and not build_by_base_) {
-        flatten_codes = high_precise_codes_;
+        flatten_codes = this->precise_read_codes_;
     }
 
     for (auto j = this->route_graphs_.size() - 1; j > level; --j) {
@@ -475,8 +511,17 @@ HGraph::graph_add_one(const void* data, int level, InnerIdType inner_id) {
     if (this->support_duplicate_) {
         param.find_duplicate = true;
         param.duplicate_query_id = inner_id;
+        param.duplicate_query_vector = data;
         param.duplicate_distance_threshold = this->duplicate_distance_threshold_;
     }
+
+    auto write_persistent_codes_now =
+        this->has_code_slot_mapping() && temporary_build_flatten_codes_ == nullptr;
+    auto ensure_persistent_codes = [this, data, inner_id, write_persistent_codes_now]() {
+        if (write_persistent_codes_now) {
+            this->insert_persistent_codes(data, inner_id, false);
+        }
+    };
 
     if (bottom_graph_->TotalCount() != 0) {
         result = search_one_graph(data,
@@ -487,10 +532,29 @@ HGraph::graph_add_one(const void* data, int level, InnerIdType inner_id) {
                                   (VisitedListPtr) nullptr,
                                   nullptr);
         if (this->support_duplicate_ && param.duplicate_id >= 0) {
+            auto representative_inner_id = static_cast<InnerIdType>(param.duplicate_id);
+            if (this->has_code_slot_mapping()) {
+                if (write_persistent_codes_now) {
+                    std::unique_lock storage_lock(this->code_slot_storage_mutex_);
+                    bool bound_existing_slot = false;
+                    if (this->code_slot_mapping_->IsMapped(representative_inner_id)) {
+                        auto code_slot_id =
+                            this->code_slot_mapping_->Resolve(representative_inner_id);
+                        this->code_slot_mapping_->BindExistingSlot(inner_id, code_slot_id);
+                        bound_existing_slot = true;
+                    }
+                    if (not bound_existing_slot) {
+                        auto code_slot_id = this->code_slot_mapping_->PhysicalCount();
+                        this->write_persistent_codes_unlocked(data, code_slot_id);
+                        this->code_slot_mapping_->CommitNewSlot(inner_id, code_slot_id);
+                    }
+                }
+            }
             std::unique_lock lock(this->label_lookup_mutex_);
-            bottom_graph_->SetDuplicateId(static_cast<InnerIdType>(param.duplicate_id), inner_id);
+            bottom_graph_->SetDuplicateId(representative_inner_id, inner_id);
             return false;
         }
+        ensure_persistent_codes();
         auto filtered_result = std::make_shared<StandardHeap<true, false>>(allocator_, -1);
         while (not result->Empty()) {
             auto [dist, id] = result->Top();
@@ -508,6 +572,7 @@ HGraph::graph_add_one(const void* data, int level, InnerIdType inner_id) {
                                      allocator_,
                                      alpha_);
     } else {
+        ensure_persistent_codes();
         LockGuard cur_lock(neighbors_mutex_, inner_id);
         bottom_graph_->InsertNeighborsById(inner_id, Vector<InnerIdType>(allocator_));
     }
@@ -560,12 +625,16 @@ HGraph::resize(uint64_t new_size) {
         pool_ = std::make_shared<VisitedListPool>(1, allocator_, new_size_power_2, allocator_);
         this->label_table_->Resize(new_size_power_2);
         bottom_graph_->Resize(new_size_power_2);
-        this->basic_flatten_codes_->Resize(new_size_power_2);
-        if (has_precise_reorder()) {
-            this->high_precise_codes_->Resize(new_size_power_2);
-        }
-        if (create_new_raw_vector_) {
-            this->raw_vector_->Resize(new_size_power_2);
+        if (this->has_code_slot_mapping()) {
+            this->code_slot_mapping_->ResizeLogical(new_size_power_2);
+        } else {
+            this->basic_flatten_codes_->Resize(new_size_power_2);
+            if (has_precise_reorder()) {
+                this->high_precise_codes_->Resize(new_size_power_2);
+            }
+            if (create_new_raw_vector_) {
+                this->raw_vector_->Resize(new_size_power_2);
+            }
         }
         if (this->extra_infos_ != nullptr) {
             this->extra_infos_->Resize(new_size_power_2);
@@ -675,7 +744,7 @@ HGraph::elp_optimize() {
     param.ef = 80;
     param.topk = 10;
     param.is_inner_id_allowed = nullptr;
-    searcher_->SetMockParameters(bottom_graph_, basic_flatten_codes_, pool_, param, dim_);
+    searcher_->SetMockParameters(bottom_graph_, this->basic_read_codes_, pool_, param, dim_);
     // TODO(ZXY): optimize PREFETCH_DEPTH_CODE and add default value for the others
     optimizer_->RegisterParameter(RuntimeParameter(PREFETCH_STRIDE_CODE, 1, 10, 1));
     optimizer_->RegisterParameter(RuntimeParameter(PREFETCH_STRIDE_VISIT, 1, 10, 1));
@@ -779,8 +848,8 @@ HGraph::collect_refine_candidates(const DatasetPtr& data,
     // FactoryComputer(query) once and then asks the flatten cell to fill an
     // array of N distances in one shot, which lets the underlying SIMD /
     // prefetching code amortise the query load across all neighbours. Bit
-    // equivalence with the scalar path is preserved because Query() is the
-    // canonical primitive that ComputePairVectors itself delegates to.
+    // equivalence with the scalar path is preserved because ComputePairVectors
+    // delegates to the same Query() distance primitive.
     if (not current_neighbors.empty()) {
         // De-duplicate against `seen` and skip self-loops before issuing the
         // batched Query so we never spend SIMD cycles on rows we will discard.

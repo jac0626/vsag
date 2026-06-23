@@ -31,6 +31,8 @@ HGraph::Remove(const std::vector<int64_t>& ids, RemoveMode mode) {
     if (mode == RemoveMode::FORCE_REMOVE) {
         CHECK_ARGUMENT(this->support_force_remove(),
                        "force remove requires index_param.support_force_remove to be true");
+        CHECK_ARGUMENT(not this->support_duplicate_,
+                       "force remove does not support duplicate detection yet");
         std::unique_lock<std::shared_mutex> wlock(this->force_remove_mutex_);
         for (const auto& id : ids) {
             delete_count += this->force_remove_one(id);
@@ -168,10 +170,10 @@ HGraph::force_remove_one(int64_t label) {
         this->find_new_entry_point();
     }
 
-    graph_force_remove_one(inner_id, basic_flatten_codes_, bottom_graph_);
+    graph_force_remove_one(inner_id, this->basic_read_codes_, bottom_graph_);
 
     for (const auto& route_graph : route_graphs_) {
-        graph_force_remove_one(inner_id, basic_flatten_codes_, route_graph);
+        graph_force_remove_one(inner_id, this->basic_read_codes_, route_graph);
     }
     InnerIdType swap_id = this->total_count_.load() - 1;
 

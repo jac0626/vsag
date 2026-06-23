@@ -18,6 +18,7 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <chrono>
+#include <cmath>
 #include <limits>
 #include <random>
 #include <sstream>
@@ -333,6 +334,123 @@ HGraphTestIndex::TestMemoryUsageDetail(const IndexPtr& index) {
 }  // namespace fixtures
 
 namespace {
+
+static fixtures::TestIndex::DatasetPtr
+MakeTinyDenseDataset(const std::vector<float>& vectors,
+                     const std::vector<int64_t>& ids,
+                     int64_t dim) {
+    auto dataset = vsag::Dataset::Make();
+    auto* copied_vectors = new float[vectors.size()];
+    auto* copied_ids = new int64_t[ids.size()];
+    std::copy(vectors.begin(), vectors.end(), copied_vectors);
+    std::copy(ids.begin(), ids.end(), copied_ids);
+    dataset->Dim(dim)
+        ->NumElements(static_cast<int64_t>(ids.size()))
+        ->Ids(copied_ids)
+        ->Float32Vectors(copied_vectors)
+        ->Owner(true);
+    return dataset;
+}
+
+static std::string
+GenerateTinyDuplicateHGraphParam(bool use_old_serial_format = false,
+                                 bool support_duplicate = true,
+                                 float duplicate_distance_threshold = 0.0F,
+                                 const std::string& quantization_str = "fp32",
+                                 bool store_raw_vector = false) {
+    fixtures::HGraphTestIndex::HGraphBuildParam build_param("l2", 2, quantization_str);
+    build_param.support_duplicate = support_duplicate;
+    build_param.thread_count = 1;
+    build_param.store_raw_vector = store_raw_vector;
+    auto param = fixtures::HGraphTestIndex::GenerateHGraphBuildParametersString(build_param);
+    auto json = vsag::JsonType::Parse(param);
+    if (duplicate_distance_threshold > 0.0F) {
+        json["index_param"]["duplicate_distance_threshold"].SetFloat(duplicate_distance_threshold);
+    }
+    if (use_old_serial_format) {
+        json["use_old_serial_format"].SetBool(true);
+    }
+    return json.Dump();
+}
+
+static fixtures::TestIndex::IndexPtr
+BuildTinyDuplicateHGraphIndex(const std::string& param) {
+    auto index = fixtures::TestIndex::TestFactory(fixtures::HGraphTestIndex::name, param, true);
+    auto first_duplicate = MakeTinyDenseDataset({1.0F, 0.0F}, {10}, 2);
+    auto second_duplicate = MakeTinyDenseDataset({1.0F, 0.0F}, {11}, 2);
+    REQUIRE(index->Add(first_duplicate).has_value());
+    REQUIRE(index->Add(second_duplicate).has_value());
+    return index;
+}
+
+static int64_t
+GetBasicFlattenDetailSize(const fixtures::TestIndex::IndexPtr& index) {
+    auto serialized = index->Serialize();
+    REQUIRE(serialized.has_value());
+    auto memory_detail = vsag::JsonType::Parse(index->GetMemoryUsageDetail());
+    return memory_detail["basic_flatten_codes"].GetInt();
+}
+
+static void
+RequireTinyDuplicateVectorAccess(const fixtures::TestIndex::IndexPtr& index) {
+    REQUIRE(index->CheckIdExist(10));
+    REQUIRE(index->CheckIdExist(11));
+
+    int64_t ids[2] = {10, 11};
+    auto raw_vectors = index->GetRawVectorByIds(ids, 2);
+    REQUIRE(raw_vectors.has_value());
+    REQUIRE(raw_vectors.value()->GetDim() == 2);
+    REQUIRE(raw_vectors.value()->GetNumElements() == 2);
+    auto* vectors = raw_vectors.value()->GetFloat32Vectors();
+    REQUIRE(std::fabs(vectors[0] - 1.0F) < 1e-6F);
+    REQUIRE(std::fabs(vectors[1]) < 1e-6F);
+    REQUIRE(std::fabs(vectors[2] - 1.0F) < 1e-6F);
+    REQUIRE(std::fabs(vectors[3]) < 1e-6F);
+
+    float query[2] = {1.0F, 0.0F};
+    auto first_distance = index->CalcDistanceById(query, 10);
+    auto second_distance = index->CalcDistanceById(query, 11);
+    REQUIRE(first_distance.has_value());
+    REQUIRE(second_distance.has_value());
+    REQUIRE(std::fabs(first_distance.value()) < 1e-6F);
+    REQUIRE(std::fabs(second_distance.value()) < 1e-6F);
+
+    auto batch_distances = index->CalDistanceById(query, ids, 2);
+    REQUIRE(batch_distances.has_value());
+    auto* distances = batch_distances.value()->GetDistances();
+    REQUIRE(std::fabs(distances[0]) < 1e-6F);
+    REQUIRE(std::fabs(distances[1]) < 1e-6F);
+}
+
+static void
+RequireTinyDuplicateSearch(const fixtures::TestIndex::IndexPtr& index) {
+    auto query = MakeTinyDenseDataset({1.0F, 0.0F}, {10}, 2);
+    auto graph_result = index->KnnSearch(query, 1, R"({"hgraph":{"ef_search":16}})");
+    REQUIRE(graph_result.has_value());
+    REQUIRE(graph_result.value()->GetDim() == 1);
+    REQUIRE((graph_result.value()->GetIds()[0] == 10 || graph_result.value()->GetIds()[0] == 11));
+    REQUIRE(std::fabs(graph_result.value()->GetDistances()[0]) < 1e-6F);
+
+    auto brute_force_result =
+        index->KnnSearch(query, 2, R"({"hgraph":{"ef_search":16,"brute_force_threshold":1.0}})");
+    REQUIRE(brute_force_result.has_value());
+    REQUIRE(brute_force_result.value()->GetDim() == 2);
+
+    std::vector<int64_t> result_ids(brute_force_result.value()->GetIds(),
+                                    brute_force_result.value()->GetIds() + 2);
+    std::sort(result_ids.begin(), result_ids.end());
+    REQUIRE(result_ids == std::vector<int64_t>{10, 11});
+
+    auto* distances = brute_force_result.value()->GetDistances();
+    REQUIRE(std::fabs(distances[0]) < 1e-6F);
+    REQUIRE(std::fabs(distances[1]) < 1e-6F);
+}
+
+static void
+RequireTinyDuplicateLogicalCorrectness(const fixtures::TestIndex::IndexPtr& index) {
+    RequireTinyDuplicateVectorAccess(index);
+    RequireTinyDuplicateSearch(index);
+}
 
 static void
 RequireRangeSearchDisableReorderChangesResult(const fixtures::TestIndex::IndexPtr& index,
@@ -1587,6 +1705,404 @@ static void
 TestHGraphDuplicateSerializeCompressed(const fixtures::HGraphTestIndexPtr& test_index,
                                        const fixtures::HGraphResourcePtr& resource) {
     RunHGraphDuplicateChecks(test_index, resource, "compressed", false, true);
+}
+
+TEST_CASE("HGraph duplicate stores shared vectors once", "[ft][build][duplicate][hgraph][pr]") {
+    using namespace fixtures;
+
+    auto param = GenerateTinyDuplicateHGraphParam();
+    auto duplicate_index = BuildTinyDuplicateHGraphIndex(param);
+
+    auto single_index = TestIndex::TestFactory(HGraphTestIndex::name, param, true);
+    auto single_vector = MakeTinyDenseDataset({1.0F, 0.0F}, {30}, 2);
+    REQUIRE(single_index->Add(single_vector).has_value());
+
+    auto distinct_index = TestIndex::TestFactory(HGraphTestIndex::name, param, true);
+    auto first_distinct = MakeTinyDenseDataset({1.0F, 0.0F}, {20}, 2);
+    auto second_distinct = MakeTinyDenseDataset({0.0F, 1.0F}, {21}, 2);
+    REQUIRE(distinct_index->Add(first_distinct).has_value());
+    REQUIRE(distinct_index->Add(second_distinct).has_value());
+
+    REQUIRE(GetBasicFlattenDetailSize(duplicate_index) == GetBasicFlattenDetailSize(single_index));
+    REQUIRE(GetBasicFlattenDetailSize(duplicate_index) < GetBasicFlattenDetailSize(distinct_index));
+    auto stats = vsag::JsonType::Parse(duplicate_index->GetStats());
+    REQUIRE(stats["code_slots"]["logical_count"].GetInt() == 2);
+    REQUIRE(stats["code_slots"]["physical_count"].GetInt() == 1);
+    auto memory_detail = vsag::JsonType::Parse(duplicate_index->GetMemoryUsageDetail());
+    REQUIRE(memory_detail["logical_code_count"].GetInt() == 2);
+    REQUIRE(memory_detail["physical_code_count"].GetInt() == 1);
+    RequireTinyDuplicateLogicalCorrectness(duplicate_index);
+}
+
+TEST_CASE("HGraph approximate duplicate shares representative stored vector",
+          "[ft][build][duplicate][hgraph][pr]") {
+    using namespace fixtures;
+
+    auto param = GenerateTinyDuplicateHGraphParam(false, true, 1.0F, "sq8", true);
+    auto approximate_index = TestIndex::TestFactory(HGraphTestIndex::name, param, true);
+    auto first_vector = MakeTinyDenseDataset({1.0F, 0.0F}, {10}, 2);
+    auto approximate_duplicate = MakeTinyDenseDataset({1.05F, 0.0F}, {11}, 2);
+    REQUIRE(approximate_index->Add(first_vector).has_value());
+    REQUIRE(approximate_index->Add(approximate_duplicate).has_value());
+
+    auto single_slot_index = TestIndex::TestFactory(HGraphTestIndex::name, param, true);
+    REQUIRE(single_slot_index->Add(first_vector).has_value());
+
+    auto two_slot_index = TestIndex::TestFactory(HGraphTestIndex::name, param, true);
+    auto far_vector = MakeTinyDenseDataset({0.0F, 10.0F}, {12}, 2);
+    REQUIRE(two_slot_index->Add(first_vector).has_value());
+    REQUIRE(two_slot_index->Add(far_vector).has_value());
+
+    REQUIRE(GetBasicFlattenDetailSize(approximate_index) ==
+            GetBasicFlattenDetailSize(single_slot_index));
+    REQUIRE(GetBasicFlattenDetailSize(approximate_index) <
+            GetBasicFlattenDetailSize(two_slot_index));
+    auto stats = vsag::JsonType::Parse(approximate_index->GetStats());
+    REQUIRE(stats["code_slots"]["logical_count"].GetInt() == 2);
+    REQUIRE(stats["code_slots"]["physical_count"].GetInt() == 1);
+
+    int64_t ids[2] = {10, 11};
+    auto raw_vectors = approximate_index->GetRawVectorByIds(ids, 2);
+    REQUIRE(raw_vectors.has_value());
+    auto* vectors = raw_vectors.value()->GetFloat32Vectors();
+    REQUIRE(std::fabs(vectors[0] - 1.0F) < 1e-6F);
+    REQUIRE(std::fabs(vectors[1]) < 1e-6F);
+    REQUIRE(std::fabs(vectors[2] - 1.0F) < 1e-6F);
+    REQUIRE(std::fabs(vectors[3]) < 1e-6F);
+
+    float first_query[2] = {1.0F, 0.0F};
+    float second_query[2] = {1.05F, 0.0F};
+    auto distance_to_first = approximate_index->CalcDistanceById(first_query, 11);
+    auto distance_to_second = approximate_index->CalcDistanceById(second_query, 11);
+    REQUIRE(distance_to_first.has_value());
+    REQUIRE(distance_to_second.has_value());
+    REQUIRE(std::fabs(distance_to_first.value()) < 1e-6F);
+    REQUIRE(distance_to_second.value() > 1e-4F);
+
+    auto deferred_param = GenerateTinyDuplicateHGraphParam(false, true, 1.0F, "rabitq");
+    auto deferred_index = TestIndex::TestFactory(HGraphTestIndex::name, deferred_param, true);
+    auto deferred_vectors = MakeTinyDenseDataset({1.0F, 0.0F, 1.05F, 0.0F}, {20, 21}, 2);
+    REQUIRE(deferred_index->Add(deferred_vectors).has_value());
+    auto deferred_stats = vsag::JsonType::Parse(deferred_index->GetStats());
+    REQUIRE(deferred_stats["code_slots"]["logical_count"].GetInt() == 2);
+    REQUIRE(deferred_stats["code_slots"]["physical_count"].GetInt() == 1);
+}
+
+TEST_CASE("HGraph duplicate update detaches shared stored vector",
+          "[ft][build][update][duplicate][hgraph][pr]") {
+    using namespace fixtures;
+
+    auto param = GenerateTinyDuplicateHGraphParam();
+    auto index = BuildTinyDuplicateHGraphIndex(param);
+    auto one_slot_size = GetBasicFlattenDetailSize(index);
+
+    auto distinct_index = TestIndex::TestFactory(HGraphTestIndex::name, param, true);
+    auto first_vector = MakeTinyDenseDataset({1.0F, 0.0F}, {20}, 2);
+    auto second_vector = MakeTinyDenseDataset({0.0F, 1.0F}, {21}, 2);
+    REQUIRE(distinct_index->Add(first_vector).has_value());
+    REQUIRE(distinct_index->Add(second_vector).has_value());
+    auto two_slot_size = GetBasicFlattenDetailSize(distinct_index);
+    REQUIRE(one_slot_size < two_slot_size);
+
+    auto updated_vector = MakeTinyDenseDataset({0.0F, 1.0F}, {11}, 2);
+    auto update_result = index->UpdateVector(11, updated_vector, true);
+    REQUIRE(update_result.has_value());
+    REQUIRE(update_result.value());
+
+    REQUIRE(GetBasicFlattenDetailSize(index) == two_slot_size);
+    auto stats = vsag::JsonType::Parse(index->GetStats());
+    REQUIRE(stats["code_slots"]["logical_count"].GetInt() == 2);
+    REQUIRE(stats["code_slots"]["physical_count"].GetInt() == 2);
+
+    int64_t ids[2] = {10, 11};
+    auto raw_vectors = index->GetRawVectorByIds(ids, 2);
+    REQUIRE(raw_vectors.has_value());
+    auto* vectors = raw_vectors.value()->GetFloat32Vectors();
+    REQUIRE(std::fabs(vectors[0] - 1.0F) < 1e-6F);
+    REQUIRE(std::fabs(vectors[1]) < 1e-6F);
+    REQUIRE(std::fabs(vectors[2]) < 1e-6F);
+    REQUIRE(std::fabs(vectors[3] - 1.0F) < 1e-6F);
+
+    float first_query[2] = {1.0F, 0.0F};
+    float second_query[2] = {0.0F, 1.0F};
+    auto first_distance = index->CalcDistanceById(first_query, 10);
+    auto old_query_to_updated = index->CalcDistanceById(first_query, 11);
+    auto updated_distance = index->CalcDistanceById(second_query, 11);
+    REQUIRE(first_distance.has_value());
+    REQUIRE(old_query_to_updated.has_value());
+    REQUIRE(updated_distance.has_value());
+    REQUIRE(std::fabs(first_distance.value()) < 1e-6F);
+    REQUIRE(old_query_to_updated.value() > 1.0F);
+    REQUIRE(std::fabs(updated_distance.value()) < 1e-6F);
+
+    auto updated_query = MakeTinyDenseDataset({0.0F, 1.0F}, {11}, 2);
+    auto brute_force_result = index->KnnSearch(
+        updated_query, 1, R"({"hgraph":{"ef_search":16,"brute_force_threshold":1.0}})");
+    REQUIRE(brute_force_result.has_value());
+    REQUIRE(brute_force_result.value()->GetIds()[0] == 11);
+    REQUIRE(std::fabs(brute_force_result.value()->GetDistances()[0]) < 1e-6F);
+}
+
+TEST_CASE("HGraph duplicate storage dedup survives concurrent add and search",
+          "[ft][build][concurrent][duplicate][hgraph][pr]") {
+    using namespace fixtures;
+
+    // The dedup mapping grows physical code storage lazily as new logical ids
+    // are added. This test stresses that growth against concurrent searches:
+    // a search resolving a logical id reads the flatten storage while another
+    // thread may be appending a brand-new physical slot. A `memory_io` backend
+    // is used on purpose because it reallocates (moves) the buffer on every
+    // growth, so any read that races an unsynchronised realloc faults
+    // deterministically instead of relying on the 128MB block boundary that
+    // `block_memory_io` only crosses rarely.
+    constexpr int64_t kDim = 16;
+    constexpr int64_t kGroupCount = 400;
+
+    HGraphTestIndex::HGraphBuildParam build_param("l2", kDim, "fp32");
+    build_param.support_duplicate = true;
+    build_param.thread_count = 4;
+    auto json =
+        vsag::JsonType::Parse(HGraphTestIndex::GenerateHGraphBuildParametersString(build_param));
+    json["index_param"]["base_io_type"].SetString("memory_io");
+    auto param = json.Dump();
+
+    auto index = TestIndex::TestFactory(HGraphTestIndex::name, param, true);
+
+    // Deterministic per-group vectors; ids 2*g and 2*g+1 are exact duplicates so
+    // half of the logical ids alias an existing physical slot and the other half
+    // append a fresh one.
+    auto make_group_vector = [&](int64_t group) {
+        std::vector<float> vec(static_cast<size_t>(kDim), 0.0F);
+        vec[group % kDim] = 1.0F + static_cast<float>(group);
+        vec[(group + 1) % kDim] = 0.5F;
+        return vec;
+    };
+
+    // Seed a small base so searches have a non-empty graph from the start.
+    constexpr int64_t kSeedGroups = 20;
+    for (int64_t g = 0; g < kSeedGroups; ++g) {
+        auto vec = make_group_vector(g);
+        REQUIRE(index->Add(MakeTinyDenseDataset(vec, {2 * g}, kDim)).has_value());
+        REQUIRE(index->Add(MakeTinyDenseDataset(vec, {2 * g + 1}, kDim)).has_value());
+    }
+
+    std::atomic<bool> failed{false};
+    std::atomic<bool> stop_search{false};
+
+    auto adder = [&]() {
+        for (int64_t g = kSeedGroups; g < kGroupCount; ++g) {
+            auto vec = make_group_vector(g);
+            if (not index->Add(MakeTinyDenseDataset(vec, {2 * g}, kDim)).has_value() or
+                not index->Add(MakeTinyDenseDataset(vec, {2 * g + 1}, kDim)).has_value()) {
+                failed.store(true);
+                return;
+            }
+        }
+    };
+
+    auto searcher = [&]() {
+        std::mt19937 rng(12345);
+        while (not stop_search.load(std::memory_order_acquire)) {
+            int64_t g = static_cast<int64_t>(rng() % kSeedGroups);
+            auto vec = make_group_vector(g);
+            auto query = MakeTinyDenseDataset(vec, {0}, kDim);
+            // Graph search resolves every visited candidate through the dedup
+            // code-slot mapping while the adder concurrently grows the physical
+            // storage, exercising the mapped-flatten read path against storage
+            // resize. (Brute-force search is intentionally avoided here: it
+            // scans [0, total_count_) directly and would race the not-yet-written
+            // codes of an in-flight Add independently of the dedup mapping.)
+            auto result = index->KnnSearch(query, 2, R"({"hgraph":{"ef_search":32}})");
+            if (not result.has_value()) {
+                failed.store(true);
+                return;
+            }
+        }
+    };
+
+    std::vector<std::thread> threads;
+    threads.emplace_back(adder);
+    for (int i = 0; i < 3; ++i) {
+        threads.emplace_back(searcher);
+    }
+    threads.front().join();  // wait for the adder
+    stop_search.store(true, std::memory_order_release);
+    for (size_t i = 1; i < threads.size(); ++i) {
+        threads[i].join();
+    }
+    REQUIRE_FALSE(failed.load());
+
+    // Every logical id must remain individually addressable, and each duplicate
+    // pair must resolve to the same stored vector after all the concurrent
+    // growth.
+    REQUIRE(index->GetNumElements() == 2 * kGroupCount);
+    for (int64_t g = 0; g < kGroupCount; g += 37) {
+        REQUIRE(index->CheckIdExist(2 * g));
+        REQUIRE(index->CheckIdExist(2 * g + 1));
+        auto vec = make_group_vector(g);
+        auto first = index->CalcDistanceById(vec.data(), 2 * g);
+        auto second = index->CalcDistanceById(vec.data(), 2 * g + 1);
+        REQUIRE(first.has_value());
+        REQUIRE(second.has_value());
+        REQUIRE(std::fabs(first.value()) < 1e-4F);
+        REQUIRE(std::fabs(second.value()) < 1e-4F);
+    }
+}
+
+TEST_CASE("HGraph duplicate storage dedup is disabled without support_duplicate",
+          "[ft][build][duplicate][compatibility][hgraph][pr]") {
+    using namespace fixtures;
+
+    auto param = GenerateTinyDuplicateHGraphParam(false, false);
+    auto equal_vector_index = BuildTinyDuplicateHGraphIndex(param);
+
+    auto distinct_index = TestIndex::TestFactory(HGraphTestIndex::name, param, true);
+    auto first_distinct = MakeTinyDenseDataset({1.0F, 0.0F}, {20}, 2);
+    auto second_distinct = MakeTinyDenseDataset({0.0F, 1.0F}, {21}, 2);
+    REQUIRE(distinct_index->Add(first_distinct).has_value());
+    REQUIRE(distinct_index->Add(second_distinct).has_value());
+
+    REQUIRE(GetBasicFlattenDetailSize(equal_vector_index) ==
+            GetBasicFlattenDetailSize(distinct_index));
+    RequireTinyDuplicateVectorAccess(equal_vector_index);
+}
+
+TEST_CASE("HGraph duplicate code-slot mapping survives serialize",
+          "[ft][serialize][duplicate][hgraph][pr]") {
+    using namespace fixtures;
+
+    auto param = GenerateTinyDuplicateHGraphParam();
+    auto index = BuildTinyDuplicateHGraphIndex(param);
+    auto serialize_binary = index->Serialize();
+    REQUIRE(serialize_binary.has_value());
+
+    auto restored_index = TestIndex::TestFactory(HGraphTestIndex::name, param, true);
+    auto deserialize_result = restored_index->Deserialize(serialize_binary.value());
+    REQUIRE(deserialize_result.has_value());
+    REQUIRE(GetBasicFlattenDetailSize(restored_index) == GetBasicFlattenDetailSize(index));
+    RequireTinyDuplicateLogicalCorrectness(restored_index);
+}
+
+TEST_CASE("HGraph duplicate old serial layout keeps logical vector access",
+          "[ft][serialize][duplicate][compatibility][hgraph][pr]") {
+    using namespace fixtures;
+
+    auto old_param = GenerateTinyDuplicateHGraphParam(true);
+    auto old_index = BuildTinyDuplicateHGraphIndex(old_param);
+    auto serialize_binary = old_index->Serialize();
+    REQUIRE(serialize_binary.has_value());
+
+    auto current_param = GenerateTinyDuplicateHGraphParam();
+    auto restored_index = TestIndex::TestFactory(HGraphTestIndex::name, current_param, true);
+    auto deserialize_result = restored_index->Deserialize(serialize_binary.value());
+    REQUIRE(deserialize_result.has_value());
+    // The old serial layout carries no code-slot mapping, so a current
+    // mapping-capable reader rebuilds an identity mapping: every logical id keeps
+    // its own physical slot (no dedup). Both labels must remain individually
+    // addressable with their original vectors. Note: we intentionally do not
+    // compare flatten sizes against `old_index` here — a current-format index is
+    // shrunk to its physical count on Serialize() while an old-format index is
+    // not, so the two sizes are not comparable.
+    REQUIRE(restored_index->GetNumElements() == old_index->GetNumElements());
+    auto restored_stats = vsag::JsonType::Parse(restored_index->GetStats());
+    REQUIRE(restored_stats["code_slots"]["logical_count"].GetInt() == 2);
+    REQUIRE(restored_stats["code_slots"]["physical_count"].GetInt() == 2);
+    RequireTinyDuplicateVectorAccess(restored_index);
+}
+
+TEST_CASE("HGraph duplicate mapped serial data rejects non-mapping readers",
+          "[ft][serialize][duplicate][compatibility][hgraph][pr]") {
+    using namespace fixtures;
+
+    auto param = GenerateTinyDuplicateHGraphParam();
+    auto index = BuildTinyDuplicateHGraphIndex(param);
+    auto serialize_binary = index->Serialize();
+    REQUIRE(serialize_binary.has_value());
+
+    auto old_param = GenerateTinyDuplicateHGraphParam(true);
+    auto old_reader = TestIndex::TestFactory(HGraphTestIndex::name, old_param, true);
+    auto old_reader_result = old_reader->Deserialize(serialize_binary.value());
+    REQUIRE_FALSE(old_reader_result.has_value());
+    REQUIRE(old_reader_result.error().type == vsag::ErrorType::INVALID_ARGUMENT);
+
+    auto no_duplicate_param = GenerateTinyDuplicateHGraphParam(false, false);
+    auto no_duplicate_reader =
+        TestIndex::TestFactory(HGraphTestIndex::name, no_duplicate_param, true);
+    auto no_duplicate_reader_result = no_duplicate_reader->Deserialize(serialize_binary.value());
+    REQUIRE_FALSE(no_duplicate_reader_result.has_value());
+    REQUIRE(no_duplicate_reader_result.error().type == vsag::ErrorType::INVALID_ARGUMENT);
+}
+
+TEST_CASE("HGraph duplicate rejects unsupported ODescent and force remove paths",
+          "[ft][build][duplicate][compatibility][hgraph][pr]") {
+    using namespace fixtures;
+
+    auto odescent_json = vsag::JsonType::Parse(GenerateTinyDuplicateHGraphParam());
+    odescent_json["index_param"]["graph_type"].SetString("odescent");
+    auto odescent_index = TestIndex::TestFactory(HGraphTestIndex::name, odescent_json.Dump(), true);
+    auto build_data = MakeTinyDenseDataset({1.0F, 0.0F, 0.0F, 1.0F}, {10, 11}, 2);
+    auto build_result = odescent_index->Build(build_data);
+    REQUIRE_FALSE(build_result.has_value());
+    REQUIRE(build_result.error().type == vsag::ErrorType::INVALID_ARGUMENT);
+
+    auto force_remove_json = vsag::JsonType::Parse(GenerateTinyDuplicateHGraphParam());
+    force_remove_json["index_param"]["support_remove"].SetBool(true);
+    auto force_remove_index =
+        TestIndex::TestFactory(HGraphTestIndex::name, force_remove_json.Dump(), true);
+    REQUIRE(force_remove_index->Add(MakeTinyDenseDataset({1.0F, 0.0F}, {10}, 2)).has_value());
+    auto remove_result = force_remove_index->Remove(10, vsag::RemoveMode::FORCE_REMOVE);
+    REQUIRE_FALSE(remove_result.has_value());
+    REQUIRE(remove_result.error().type == vsag::ErrorType::INVALID_ARGUMENT);
+    REQUIRE(force_remove_index->CheckIdExist(10));
+}
+
+TEST_CASE("HGraph duplicate merge fails before mixing logical and physical ids",
+          "[ft][merge][duplicate][compatibility][hgraph][pr]") {
+    using namespace fixtures;
+
+    auto param = GenerateTinyDuplicateHGraphParam();
+    auto target = TestIndex::TestFactory(HGraphTestIndex::name, param, true);
+    auto source = BuildTinyDuplicateHGraphIndex(param);
+    vsag::IdMapFunction id_map = [](int64_t id) { return std::make_tuple(true, id); };
+    std::vector<vsag::MergeUnit> merge_units{{source, id_map}};
+    auto merge_result = target->Merge(merge_units);
+    REQUIRE_FALSE(merge_result.has_value());
+    REQUIRE(merge_result.error().type == vsag::ErrorType::UNSUPPORTED_INDEX_OPERATION);
+    REQUIRE(target->GetNumElements() == 0);
+}
+
+TEST_CASE("HGraph duplicate ignores imported build cache and uses normal build",
+          "[ft][build][cache][duplicate][compatibility][hgraph][pr]") {
+    using namespace fixtures;
+
+    auto param = GenerateTinyDuplicateHGraphParam();
+    std::vector<float> vectors{1.0F, 0.0F, 1.0F, 0.0F, 0.0F, 1.0F};
+    std::vector<int64_t> ids{10, 11, 12};
+    std::vector<std::string> source_ids{"source-10", "source-11", "source-12"};
+    auto make_dataset = [&]() {
+        return vsag::Dataset::Make()
+            ->Dim(2)
+            ->NumElements(3)
+            ->Ids(ids.data())
+            ->Float32Vectors(vectors.data())
+            ->SourceID(source_ids.data())
+            ->Owner(false);
+    };
+
+    auto baseline = TestIndex::TestFactory(HGraphTestIndex::name, param, true);
+    REQUIRE(baseline->Build(make_dataset()).has_value());
+    std::stringstream cache;
+    REQUIRE(baseline->ExportCache(cache).has_value());
+
+    auto rebuilt = TestIndex::TestFactory(HGraphTestIndex::name, param, true);
+    REQUIRE(rebuilt->ImportCache(cache).has_value());
+    REQUIRE(rebuilt->Build(make_dataset()).has_value());
+    REQUIRE(rebuilt->GetNumElements() == 3);
+
+    auto stats = vsag::JsonType::Parse(rebuilt->GetStats());
+    REQUIRE(stats["build_cache_hit_rate"].Contains("skipped_reason"));
+    REQUIRE(stats["code_slots"]["logical_count"].GetInt() == 3);
+    REQUIRE(stats["code_slots"]["physical_count"].GetInt() == 2);
 }
 
 HGRAPH_PR_DAILY_CASE("HGraph Duplicate", "[ft][build][hgraph][duplicate]", TestHGraphDuplicate)

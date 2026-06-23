@@ -523,9 +523,18 @@ BasicSearcher::search_impl(const GraphInterfacePtr& graph,
             if (min_distance <= inner_search_param.duplicate_distance_threshold) {
                 inner_search_param.duplicate_id = min_index;
             }
-        } else if (inner_search_param.duplicate_query_id < flatten->TotalCount() &&
-                   flatten->CompareVectors(inner_search_param.duplicate_query_id, min_index)) {
-            inner_search_param.duplicate_id = min_index;
+        } else {
+            bool is_exact_duplicate = false;
+            if (inner_search_param.duplicate_query_vector != nullptr) {
+                is_exact_duplicate =
+                    flatten->CompareVector(inner_search_param.duplicate_query_vector, min_index);
+            } else if (inner_search_param.duplicate_query_id < flatten->TotalCount()) {
+                is_exact_duplicate =
+                    flatten->CompareVectors(inner_search_param.duplicate_query_id, min_index);
+            }
+            if (is_exact_duplicate) {
+                inner_search_param.duplicate_id = min_index;
+            }
         }
     }
 

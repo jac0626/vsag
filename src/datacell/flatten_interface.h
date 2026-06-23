@@ -16,9 +16,11 @@
 #pragma once
 
 #include <algorithm>
+#include <cstring>
 #include <limits>
 #include <shared_mutex>
 #include <string>
+#include <vector>
 
 #include "basic_types.h"
 #include "flatten_datacell_parameter.h"
@@ -100,15 +102,33 @@ public:
 
     bool
     CompareVectors(InnerIdType id1, InnerIdType id2) {
-        bool release1, release2;
+        bool release1 = false;
+        bool release2 = false;
         const auto* codes1 = this->GetCodesById(id1, release1);
         const auto* codes2 = this->GetCodesById(id2, release2);
-        bool result = (std::memcmp(codes1, codes2, this->code_size_) == 0);
-        if (release1) {
+        bool result = codes1 != nullptr && codes2 != nullptr &&
+                      std::memcmp(codes1, codes2, this->code_size_) == 0;
+        if (release1 && codes1 != nullptr) {
             this->Release(codes1);
         }
-        if (release2) {
+        if (release2 && codes2 != nullptr) {
             this->Release(codes2);
+        }
+        return result;
+    }
+
+    virtual bool
+    CompareVector(const void* vector, InnerIdType id) {
+        std::vector<uint8_t> query_codes(this->code_size_);
+        if (not this->Encode(static_cast<const float*>(vector), query_codes.data())) {
+            return false;
+        }
+        bool release = false;
+        const auto* stored_codes = this->GetCodesById(id, release);
+        bool result = stored_codes != nullptr &&
+                      std::memcmp(query_codes.data(), stored_codes, this->code_size_) == 0;
+        if (release && stored_codes != nullptr) {
+            this->Release(stored_codes);
         }
         return result;
     }

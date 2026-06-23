@@ -15,6 +15,9 @@
 
 #pragma once
 
+#include <atomic>
+#include <memory>
+#include <mutex>
 #include <random>
 #include <shared_mutex>
 #include <string>
@@ -38,6 +41,8 @@
 #include "index/iterator_filter.h"
 #include "index_common_param.h"
 #include "index_feature_list.h"
+#include "storage/stream_reader.h"
+#include "storage/stream_writer.h"
 #include "typing.h"
 #include "utils/lock_strategy.h"
 #include "utils/util_functions.h"
@@ -46,6 +51,65 @@
 #include "vsag/index_features.h"
 
 namespace vsag {
+
+struct HGraphCodeSlotMapping {
+    explicit HGraphCodeSlotMapping(Allocator* allocator);
+
+    void
+    ResizeLogical(InnerIdType new_size);
+
+    void
+    CommitNewSlot(InnerIdType inner_id, InnerIdType code_slot_id);
+
+    void
+    BindExistingSlot(InnerIdType inner_id, InnerIdType code_slot_id);
+
+    [[nodiscard]] InnerIdType
+    Resolve(InnerIdType inner_id) const;
+
+    void
+    ResolveBatch(const InnerIdType* inner_ids, InnerIdType* code_slot_ids, InnerIdType count) const;
+
+    [[nodiscard]] InnerIdType
+    PhysicalCount() const;
+
+    [[nodiscard]] InnerIdType
+    LogicalCount() const;
+
+    [[nodiscard]] bool
+    IsMapped(InnerIdType inner_id) const;
+
+    [[nodiscard]] bool
+    IsSharedSlot(InnerIdType inner_id) const;
+
+    void
+    Serialize(StreamWriter& writer, InnerIdType logical_count) const;
+
+    void
+    Deserialize(StreamReader& reader);
+
+    void
+    InitIdentity(InnerIdType logical_count);
+
+    [[nodiscard]] int64_t
+    GetMemoryUsage() const;
+
+private:
+    void
+    ResizeLogicalNoLock(InnerIdType new_size);
+
+    [[nodiscard]] InnerIdType
+    ResolveNoLock(InnerIdType inner_id) const;
+
+    void
+    DecreaseSlotRefNoLock(InnerIdType code_slot_id);
+
+    Allocator* allocator_{nullptr};
+    Vector<InnerIdType> logical_to_code_ids_;
+    Vector<uint32_t> code_slot_ref_counts_;
+    InnerIdType physical_count_{0};
+    mutable std::shared_mutex mutex_;
+};
 
 // HGraph index was introduced since v0.12
 class HGraph : public InnerIndexInterface {
@@ -279,7 +343,7 @@ public:
     add_one_point(const void* data, int level, InnerIdType id);
 
     void
-    insert_persistent_codes(const void* data, InnerIdType inner_id);
+    insert_persistent_codes(const void* data, InnerIdType inner_id, bool lock_add_mutex = true);
 
     void
     add_one_point(const void* data, int level, InnerIdType id, bool insert_codes);
@@ -385,6 +449,34 @@ private:
     void
     cal_memory_usage();
 
+    void
+    init_code_slot_mapping();
+
+    [[nodiscard]] bool
+    has_code_slot_mapping() const {
+        return this->code_slot_mapping_ != nullptr;
+    }
+
+    void
+    refresh_code_read_views();
+
+    [[nodiscard]] FlattenInterfacePtr
+    get_reorder_read_codes() const {
+        return reorder_by_base_ ? basic_read_codes_ : precise_read_codes_;
+    }
+
+    [[nodiscard]] InnerIdType
+    resolve_code_slot_id(InnerIdType inner_id) const;
+
+    void
+    resize_persistent_code_storage_unlocked(InnerIdType new_size);
+
+    void
+    write_persistent_codes_unlocked(const void* data, InnerIdType code_slot_id);
+
+    void
+    shrink_persistent_code_storage() const;
+
     [[nodiscard]] bool
     has_precise_reorder() const {
         return use_reorder_ and not reorder_by_base_;
@@ -393,11 +485,6 @@ private:
     [[nodiscard]] bool
     support_force_remove() const {
         return support_force_remove_;
-    }
-
-    [[nodiscard]] FlattenInterfacePtr
-    get_reorder_codes() const {
-        return reorder_by_base_ ? basic_flatten_codes_ : high_precise_codes_;
     }
 
     void
@@ -490,6 +577,9 @@ private:
 private:
     FlattenInterfacePtr basic_flatten_codes_{nullptr};
     FlattenInterfacePtr high_precise_codes_{nullptr};
+    FlattenInterfacePtr basic_read_codes_{nullptr};
+    FlattenInterfacePtr precise_read_codes_{nullptr};
+    FlattenInterfacePtr raw_read_codes_{nullptr};
 
     Vector<GraphInterfacePtr> route_graphs_;
     GraphInterfacePtr bottom_graph_{nullptr};
@@ -543,6 +633,8 @@ private:
     bool support_duplicate_{false};
     bool support_force_remove_{false};
     float duplicate_distance_threshold_{0.0F};
+    std::shared_ptr<HGraphCodeSlotMapping> code_slot_mapping_{nullptr};
+    mutable std::shared_mutex code_slot_storage_mutex_;
 
     bool persist_source_id_{false};
 

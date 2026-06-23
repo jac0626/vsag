@@ -137,7 +137,7 @@ HGraph::KnnSearch(const DatasetPtr& query,
             for (auto i = static_cast<int64_t>(this->route_graphs_.size() - 1); i >= 0; --i) {
                 auto result = this->search_one_graph(query_data,
                                                      this->route_graphs_[i],
-                                                     this->basic_flatten_codes_,
+                                                     this->basic_read_codes_,
                                                      search_param,
                                                      (VisitedListPtr) nullptr,
                                                      &ctx);
@@ -161,7 +161,7 @@ HGraph::KnnSearch(const DatasetPtr& query,
 
         search_result = this->search_one_graph(query_data,
                                                this->bottom_graph_,
-                                               this->basic_flatten_codes_,
+                                               this->basic_read_codes_,
                                                search_param,
                                                iter_filter_ctx,
                                                &ctx,
@@ -169,7 +169,7 @@ HGraph::KnnSearch(const DatasetPtr& query,
 
         if (use_reorder_ and search_param.enable_reorder) {
             this->reorder(query_data,
-                          this->get_reorder_codes(),
+                          this->get_reorder_read_codes(),
                           search_result,
                           k,
                           iter_filter_ctx,
@@ -177,7 +177,7 @@ HGraph::KnnSearch(const DatasetPtr& query,
                           rabitq_lower_bound_candidates_ptr);
         } else if (search_param.enable_reorder and params.rabitq_one_bit_search) {
             this->reorder(
-                query_data, this->basic_flatten_codes_, search_result, k, iter_filter_ctx, ctx);
+                query_data, this->basic_read_codes_, search_result, k, iter_filter_ctx, ctx);
         }
     }
 
@@ -289,12 +289,12 @@ HGraph::brute_force_search(const void* query,
                            QueryContext* ctx) const {
     Allocator* alloc = (ctx != nullptr && ctx->alloc != nullptr) ? ctx->alloc : this->allocator_;
 
-    auto flatten = this->basic_flatten_codes_;
+    auto flatten = this->basic_read_codes_;
     if (this->has_precise_reorder()) {
-        flatten = this->high_precise_codes_;
+        flatten = this->precise_read_codes_;
     }
     if (this->create_new_raw_vector_ && this->raw_vector_ != nullptr) {
-        flatten = this->raw_vector_;
+        flatten = this->raw_read_codes_;
     }
 
     DistHeapPtr result;
@@ -381,7 +381,7 @@ HGraph::RangeSearch(const DatasetPtr& query,
     for (auto i = static_cast<int64_t>(this->route_graphs_.size() - 1); i >= 0; --i) {
         auto result = this->search_one_graph(raw_query,
                                              this->route_graphs_[i],
-                                             this->basic_flatten_codes_,
+                                             this->basic_read_codes_,
                                              search_param,
                                              (VisitedListPtr) nullptr,
                                              &ctx);
@@ -415,7 +415,7 @@ HGraph::RangeSearch(const DatasetPtr& query,
     if (not brute_force_used) {
         search_result = this->search_one_graph(raw_query,
                                                this->bottom_graph_,
-                                               this->basic_flatten_codes_,
+                                               this->basic_read_codes_,
                                                search_param,
                                                (VisitedListPtr) nullptr,
                                                &ctx);
@@ -423,11 +423,11 @@ HGraph::RangeSearch(const DatasetPtr& query,
 
     if (not brute_force_used and use_reorder_ and search_param.enable_reorder) {
         this->reorder(
-            raw_query, this->get_reorder_codes(), search_result, limited_size, nullptr, ctx);
+            raw_query, this->get_reorder_read_codes(), search_result, limited_size, nullptr, ctx);
     } else if (not brute_force_used and search_param.enable_reorder and
                params.rabitq_one_bit_search) {
         this->reorder(
-            raw_query, this->basic_flatten_codes_, search_result, limited_size, nullptr, ctx);
+            raw_query, this->basic_read_codes_, search_result, limited_size, nullptr, ctx);
     }
 
     if (limited_size > 0) {
@@ -489,12 +489,12 @@ HGraph::SearchWithRequest(const SearchRequest& request) const {
         reasoning_ctx->InitializeExpectedTargets(expected_labels_vec, label_to_inner_id);
 
         const auto* const query_vector = get_data(query);
-        auto precise_flatten = this->basic_flatten_codes_;
+        auto precise_flatten = this->basic_read_codes_;
         if (use_reorder_) {
-            precise_flatten = this->high_precise_codes_;
+            precise_flatten = this->precise_read_codes_;
         }
         if (create_new_raw_vector_) {
-            precise_flatten = this->raw_vector_;
+            precise_flatten = this->raw_read_codes_;
         }
         auto computer = precise_flatten->FactoryComputer(query_vector);
         for (const auto& pair : label_to_inner_id) {
@@ -521,7 +521,7 @@ HGraph::SearchWithRequest(const SearchRequest& request) const {
     const auto* raw_query = get_data(query);
     for (auto i = static_cast<int64_t>(this->route_graphs_.size() - 1); i >= 0; --i) {
         auto result = this->search_one_graph(
-            raw_query, this->route_graphs_[i], this->basic_flatten_codes_, search_param, vt, &ctx);
+            raw_query, this->route_graphs_[i], this->basic_read_codes_, search_param, vt, &ctx);
         search_param.ep = result->Top().second;
     }
 
@@ -585,7 +585,7 @@ HGraph::SearchWithRequest(const SearchRequest& request) const {
     if (not brute_force_used) {
         search_result = this->search_one_graph(raw_query,
                                                this->bottom_graph_,
-                                               this->basic_flatten_codes_,
+                                               this->basic_read_codes_,
                                                search_param,
                                                vt,
                                                &ctx,
@@ -596,7 +596,7 @@ HGraph::SearchWithRequest(const SearchRequest& request) const {
 
     if (not brute_force_used and use_reorder_ and search_param.enable_reorder) {
         this->reorder(raw_query,
-                      this->get_reorder_codes(),
+                      this->get_reorder_read_codes(),
                       search_result,
                       k,
                       nullptr,
@@ -604,7 +604,7 @@ HGraph::SearchWithRequest(const SearchRequest& request) const {
                       rabitq_lower_bound_candidates_ptr);
     } else if (not brute_force_used and search_param.enable_reorder and
                params.rabitq_one_bit_search) {
-        this->reorder(raw_query, this->basic_flatten_codes_, search_result, k, nullptr, ctx);
+        this->reorder(raw_query, this->basic_read_codes_, search_result, k, nullptr, ctx);
     }
 
     while (search_result->Size() > k) {

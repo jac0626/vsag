@@ -82,6 +82,33 @@ most users need; the exhaustive list is in [Index Parameters](../resources/index
 | `base_file_path` / `precise_file_path` | string | — | File path; required when the corresponding `*_io_type` is disk-backed (`buffer_io`, `async_io`, `mmap_io`) |
 | `hgraph_init_capacity` | int | `100` | Initial capacity hint (doesn't cap the final size) |
 
+## Duplicate handling
+
+When `support_duplicate: true`, HGraph detects whether an inserted vector duplicates
+one already in the index and, when it does, lets the new entry **share the existing
+vector's physical storage** instead of allocating its own copy. Each label still keeps
+its own identity for search and update, while labels in the same duplicate group share
+the underlying quantized codes and optional high-precision or raw-vector copies. For
+workloads with many duplicates, this cuts the flatten storage footprint roughly in
+proportion to the duplicate ratio.
+
+- **Exact duplicates** (`duplicate_distance_threshold: 0.0`, the default) are detected
+  with a byte-exact code comparison.
+- **Approximate duplicates** (`duplicate_distance_threshold > 0.0`) are detected by the
+  nearest-candidate distance. Once classified as a duplicate, the new label shares the
+  representative vector's storage and its original input vector is not retained;
+  `GetRawVectorByIds()` and distance-by-ID APIs read the representative vector.
+- Regardless of the duplicate-detection mode, a newly classified duplicate shares
+  the group's physical storage slot.
+- **`UpdateVector`** on a label that shares a slot transparently detaches it onto a fresh
+  slot before applying the update, so updating one duplicate never affects the others.
+- **Serialization** is forward-compatible: an index that uses storage deduplication writes
+  an extra `code_slot_mapping_version` marker. A reader that is not configured for duplicate
+  storage refuses such a payload with `INVALID_ARGUMENT` rather than silently misreading it,
+  and reading a legacy (non-deduplicated) payload transparently falls back to a 1:1 mapping.
+- **Limitation:** `Merge()` is not supported on an index that carries a duplicate storage
+  mapping and returns `UNSUPPORTED_INDEX_OPERATION`.
+
 ## Supported input data types
 
 The `dtype` field in the top-level build config selects how `Dataset` interprets the raw vector

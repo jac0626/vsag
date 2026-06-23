@@ -247,6 +247,9 @@ HGraph::Serialize(StreamWriter& writer) const {
     if (this->ignore_reorder_) {
         this->use_reorder_ = false;
     }
+    if (this->has_code_slot_mapping()) {
+        this->shrink_persistent_code_storage();
+    }
 
     // FIXME(wxyu): this option is used for special purposes, like compatibility testing
     if (this->use_old_serial_format_) {
@@ -269,6 +272,9 @@ HGraph::Serialize(StreamWriter& writer) const {
     }
 
     this->serialize_label_info(writer);
+    if (this->has_code_slot_mapping()) {
+        this->code_slot_mapping_->Serialize(writer, this->total_count_.load());
+    }
     this->basic_flatten_codes_->Serialize(writer);
     this->bottom_graph_->Serialize(writer);
     if (this->has_precise_reorder()) {
@@ -293,6 +299,9 @@ HGraph::Serialize(StreamWriter& writer) const {
     metadata->Set(BASIC_INFO, jsonify_basic_info);
     if (this->support_duplicate_) {
         metadata->Set("duplicate_format_version", 1);
+        if (this->has_code_slot_mapping()) {
+            metadata->Set("code_slot_mapping_version", 1);
+        }
     }
     logger::debug(jsonify_basic_info.Dump());
 
@@ -332,6 +341,10 @@ HGraph::Deserialize(StreamReader& reader) {
         if (this->use_attribute_filter_ and this->attr_filter_index_ != nullptr) {
             this->attr_filter_index_->Deserialize(reader);
         }
+        if (this->has_code_slot_mapping()) {
+            this->code_slot_mapping_->InitIdentity(this->total_count_);
+            this->refresh_code_read_views();
+        }
     } else {  // create like `else if ( ver in [v0.15, v0.17] )` here if need in the future
         logger::debug("parse with new version format");
 
@@ -347,8 +360,20 @@ HGraph::Deserialize(StreamReader& reader) {
             dup_version = metadata->Get("duplicate_format_version").GetInt();
         }
         this->label_table_->is_legacy_duplicate_format_ = (dup_version == 0);
+        bool has_code_slot_mapping = false;
+        if (metadata->Get("code_slot_mapping_version").IsNumberInteger()) {
+            has_code_slot_mapping = metadata->Get("code_slot_mapping_version").GetInt() > 0;
+        }
+        if (has_code_slot_mapping && not this->has_code_slot_mapping()) {
+            throw VsagException(ErrorType::INVALID_ARGUMENT,
+                                "HGraph index contains duplicate code-slot mapping, but current "
+                                "index configuration cannot load it");
+        }
 
         this->deserialize_label_info(buffer_reader);
+        if (has_code_slot_mapping && this->has_code_slot_mapping()) {
+            this->code_slot_mapping_->Deserialize(buffer_reader);
+        }
 
         this->basic_flatten_codes_->Deserialize(buffer_reader);
         this->bottom_graph_->Deserialize(buffer_reader);
@@ -367,7 +392,14 @@ HGraph::Deserialize(StreamReader& reader) {
         if (this->extra_info_size_ > 0 && this->extra_infos_ != nullptr) {
             this->extra_infos_->Deserialize(buffer_reader);
         }
-        this->total_count_ = this->basic_flatten_codes_->TotalCount();
+        if (has_code_slot_mapping && this->has_code_slot_mapping()) {
+            this->total_count_ = this->code_slot_mapping_->LogicalCount();
+        } else {
+            this->total_count_ = this->basic_flatten_codes_->TotalCount();
+            if (this->has_code_slot_mapping()) {
+                this->code_slot_mapping_->InitIdentity(this->total_count_);
+            }
+        }
 
         if (this->use_attribute_filter_ and this->attr_filter_index_ != nullptr) {
             this->attr_filter_index_->Deserialize(buffer_reader);
@@ -379,6 +411,21 @@ HGraph::Deserialize(StreamReader& reader) {
         if (this->raw_vector_ != nullptr) {
             this->has_raw_vector_ = true;
         }
+        if (has_code_slot_mapping && this->has_code_slot_mapping()) {
+            auto physical_count = this->code_slot_mapping_->PhysicalCount();
+            CHECK_ARGUMENT(this->basic_flatten_codes_->TotalCount() == physical_count,
+                           "corrupted index: basic codes count does not match code-slot mapping");
+            if (this->has_precise_reorder()) {
+                CHECK_ARGUMENT(
+                    this->high_precise_codes_->TotalCount() == physical_count,
+                    "corrupted index: precise codes count does not match code-slot mapping");
+            }
+            if (create_new_raw_vector_) {
+                CHECK_ARGUMENT(this->raw_vector_->TotalCount() == physical_count,
+                               "corrupted index: raw codes count does not match code-slot mapping");
+            }
+        }
+        this->refresh_code_read_views();
     }
     this->cal_memory_usage();
 
@@ -406,6 +453,11 @@ HGraph::GetMemoryUsageDetail() const {
     memory_usage["route_graph"].SetInt(route_graph_size);
     if (this->extra_info_size_ > 0 && this->extra_infos_ != nullptr) {
         memory_usage["extra_infos"].SetInt(this->extra_infos_->CalcSerializeSize());
+    }
+    if (this->has_code_slot_mapping()) {
+        memory_usage["code_slot_mapping"].SetInt(this->code_slot_mapping_->GetMemoryUsage());
+        memory_usage["logical_code_count"].SetInt(this->total_count_.load());
+        memory_usage["physical_code_count"].SetInt(this->code_slot_mapping_->PhysicalCount());
     }
     memory_usage["__total_size__"].SetInt(this->CalSerializeSize());
     return memory_usage.Dump();

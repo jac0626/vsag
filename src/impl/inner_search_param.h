@@ -61,6 +61,7 @@ public:
     // deal with duplicate ids
     mutable int64_t duplicate_id{-1};
     InnerIdType duplicate_query_id{std::numeric_limits<InnerIdType>::max()};
+    const void* duplicate_query_vector{nullptr};
     bool find_duplicate{false};
     float duplicate_distance_threshold{0.0F};
 
