@@ -1149,6 +1149,8 @@ struct AutoTuningRequest {
 
 ```json
 {
+  "version": 1,
+  "index_type": "hgraph",
   "source": {
     "type": "existing_index",
     "index": "<IndexPtr>"
@@ -1179,6 +1181,44 @@ struct AutoTuningRequest {
 }
 ```
 
+当前代码新增了内部 JSON 契约层：
+
+```cpp
+AutoTuningApiParseResult
+ParseAutoTuningRequestJson(const std::string& request_json,
+                           const AutoTuningApiContext& context);
+
+std::string
+SerializeAutoTuningReportJson(const AutoTuningReport& report);
+```
+
+`AutoTuningApiContext` 承载不能直接从 JSON 反序列化的 C++ 对象：
+
+```cpp
+struct AutoTuningApiContext {
+    IndexPtr index;
+    DatasetPtr queries;
+    DatasetPtr ground_truth;
+};
+```
+
+因此 P0 JSON request 只表达语义配置；`source.index`、`workload.queries` 和
+`workload.ground_truth` 对应的实际对象仍由调用方通过 `AutoTuningApiContext` 传入。
+
+P0 JSON parser 当前明确拒绝以下输入：
+
+- `source.type != existing_index`，返回 `unsupported_source_type`。
+- `index_type != hgraph`，返回 `unsupported_index_type`。
+- 非 `search_space.search.hgraph.ef_search` 的 search 参数路径，返回 `unsupported_parameter`。
+- 非空 `search_space.build` 或 `search_space.quantizer`，返回 `unsupported_search_space`。
+- `evaluation.successive_halving.enabled = true`，返回 `unsupported_evaluation_strategy`。
+- `evaluation.warmup_query_count`，返回 `unsupported_evaluation_option`。
+- 非空 `config.build_parameters`，返回 `unsupported_config`。
+- `objective.primary` 非 `latency`，返回 `unsupported_objective`。
+- `objective.constraints`，返回 `unsupported_objective`。
+- `budget`，返回 `unsupported_budget`。
+- `output`，返回 `unsupported_output`。
+
 P0 已实现：
 
 - `index_type = hgraph` 的特化路径
@@ -1194,6 +1234,8 @@ P0 已实现：
 - tuning elapsed time
 - recommendation
 - best effort
+- P0 JSON request parser
+- P0 JSON report serializer
 - 内部 POC target：`hgraph_auto_tuning_poc`
 
 P0 未实现但已有 pipeline 槽位：
@@ -1206,7 +1248,7 @@ P0 未实现但已有 pipeline 槽位：
 - successive halving
 - budget enforcement
 - Pareto frontier
-- CLI/file schema 解析
+- public CLI/file request loading
 
 ## 19. 设计约束和建议
 

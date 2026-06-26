@@ -369,12 +369,18 @@ cmake --build build --target hgraph_auto_tuning_poc --parallel 96
   --base-count 10000 \
   --query-count 100 \
   --target-recall 0.90
+
+# 同时写出机器可读 JSON report
+./build/examples/cpp/hgraph_auto_tuning_poc \
+  --json-output /tmp/hgraph_auto_tuning_report.json
 ```
 
 该 POC 位于 `src/tuning/hgraph_auto_tuning_poc.cpp`。默认使用小型内存数据集；传入
 `--dataset` 时从 HDF5 读取真实 dense float32 数据，例如 SIFT128。POC 会构建 HGraph，
 在当前 base 子集内直接计算精确 L2 ground truth，然后调用 `AutoTuningPipeline` 输出输入摘要、
 准备阶段耗时、tuning 总耗时、stage report、trial report 和 `ef_search` recommendation。
+传入 `--json-output` 时，POC 会把 `AutoTuningReport` 的稳定 JSON 表达写到指定文件；这样可以
+避开启动日志对 stdout 的影响，方便脚本解析。
 等 tuning API 迁到 public header 后，再移动到正式 `examples/cpp/` 示例。
 
 当前 SIFT128 POC 验证结果：

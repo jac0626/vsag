@@ -15,6 +15,8 @@
 
 
 set (TUNING_SRC
+        auto_tuning_api.cpp
+        auto_tuning_api.h
         evaluation_runner.cpp
         evaluation_runner.h
         evaluation_result.h

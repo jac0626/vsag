@@ -19,6 +19,7 @@
 #include <chrono>
 #include <cstdlib>
 #include <exception>
+#include <fstream>
 #include <iostream>
 #include <random>
 #include <stdexcept>
@@ -26,12 +27,13 @@
 #include <utility>
 #include <vector>
 
-#include "tuning/tuning_pipeline.h"
+#include "tuning/auto_tuning_api.h"
 
 namespace {
 
 struct PocOptions {
     std::string dataset_path;
+    std::string json_output_path;
     uint64_t base_count = 0;
     uint64_t query_count = 0;
     uint64_t topk = 10;
@@ -60,7 +62,8 @@ PrintUsage(const char* binary) {
               << "  " << binary << "\n"
               << "  " << binary
               << " --dataset /root/data/sift-128-euclidean.hdf5"
-                 " --base-count 10000 --query-count 100 --target-recall 0.90\n";
+                 " --base-count 10000 --query-count 100 --target-recall 0.90"
+                 " --json-output /tmp/hgraph_auto_tuning_report.json\n";
 }
 
 uint64_t
@@ -90,6 +93,8 @@ ParseOptions(int argc, char** argv) {
         }
         if (arg == "--dataset") {
             options.dataset_path = require_value(arg);
+        } else if (arg == "--json-output") {
+            options.json_output_path = require_value(arg);
         } else if (arg == "--base-count") {
             options.base_count = ParseUint64(require_value(arg), arg);
         } else if (arg == "--query-count") {
@@ -431,6 +436,18 @@ PrintRecommendation(const vsag::AutoTuningReport& report) {
     }
 }
 
+void
+WriteJsonReport(const vsag::AutoTuningReport& report, const std::string& path) {
+    if (path.empty()) {
+        return;
+    }
+    std::ofstream output(path);
+    if (not output.is_open()) {
+        throw std::runtime_error("failed to open json output path: " + path);
+    }
+    output << vsag::SerializeAutoTuningReportJson(report) << std::endl;
+}
+
 }  // namespace
 
 int
@@ -482,6 +499,7 @@ main(int argc, char** argv) {
         PrintStages(report);
         PrintTrials(report);
         PrintRecommendation(report);
+        WriteJsonReport(report, options.json_output_path);
 
         return report.Succeeded() ? EXIT_SUCCESS : EXIT_FAILURE;
     } catch (const std::exception& e) {
