@@ -25,6 +25,7 @@ add_subdirectory (algorithm)
 add_subdirectory (utils)
 add_subdirectory (factory)
 add_subdirectory (analyzer)
+add_subdirectory (tuning)
 
 file (GLOB CPP_SRCS "*.cpp")
 list (FILTER CPP_SRCS EXCLUDE REGEX "_test.cpp")
@@ -62,8 +63,10 @@ foreach (_lib vsag vsag_static)
             $<INSTALL_INTERFACE:${CMAKE_INSTALL_INCLUDEDIR}>)
 endforeach ()
 
-set (VSAG_DEP_LIBS antlr4-autogen antlr4-runtime diskann simd io quantizer storage utils factory analyzer
-      datacell ${IMPL_LIBS} ${ALGORITHM_LIBS} attr pthread m dl fmt::fmt nlohmann_json::nlohmann_json roaring ${BLAS_LIBRARIES})
+set (VSAG_DEP_LIBS
+        antlr4-autogen antlr4-runtime diskann simd io quantizer storage utils factory analyzer
+        tuning datacell ${IMPL_LIBS} ${ALGORITHM_LIBS} attr pthread m dl fmt::fmt
+        nlohmann_json::nlohmann_json roaring ${BLAS_LIBRARIES})
 
 # `vsag_src_common` aggregates third-party include paths and link
 # dependencies (fmt::fmt, nlohmann_json::nlohmann_json, tsl::robin_map, and
