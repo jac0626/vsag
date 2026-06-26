@@ -131,8 +131,20 @@ target_link_libraries (501_quantization_transform vsag)
 add_executable (321_index_fp16_hgraph 321_index_fp16_hgraph.cpp)
 target_link_libraries (321_index_fp16_hgraph vsag)
 
-add_executable (322_feature_hgraph_brute_force_threshold 322_feature_hgraph_brute_force_threshold.cpp)
+add_executable (322_feature_hgraph_brute_force_threshold
+        322_feature_hgraph_brute_force_threshold.cpp)
 target_link_libraries (322_feature_hgraph_brute_force_threshold vsag)
 
 add_executable(323_index_hgraph_rabitq_split 323_index_hgraph_rabitq_split.cpp)
 target_link_libraries(323_index_hgraph_rabitq_split vsag)
+
+if (ENABLE_TOOLS AND ENABLE_CXX11_ABI)
+    add_executable(hgraph_auto_tuning_poc ../../src/tuning/hgraph_auto_tuning_poc.cpp)
+    target_link_libraries(hgraph_auto_tuning_poc
+        vsag_static
+        vsag_hdf5_headers
+        ${HDF5_CPP_STATIC_LIBRARY}
+        ${HDF5_C_STATIC_LIBRARY}
+        z dl)
+    add_dependencies(hgraph_auto_tuning_poc hdf5)
+endif ()

@@ -15,6 +15,8 @@
 #include "tuning/ef_search_tuner.h"
 
 #include <nlohmann/json.hpp>
+#include <string>
+#include <vector>
 
 #include "framework/test_dataset_pool.h"
 #include "unittest.h"
@@ -96,4 +98,61 @@ TEST_CASE("ef search tuner keeps best effort when target recall is unreachable",
     REQUIRE_FALSE(report.recommendation.has_value());
     REQUIRE(report.best_effort.has_value());
     REQUIRE(report.best_effort->status == vsag::TuningTrialStatus::COMPLETED);
+}
+
+TEST_CASE("ef search tuner preserves base search parameters and applies recall threshold",
+          "[ut][tuning]") {
+    std::vector<std::string> observed_parameters;
+    vsag::EfSearchTuner tuner([&observed_parameters](const vsag::EvaluationRequest& request) {
+        observed_parameters.push_back(request.search_parameters);
+        auto parameters = nlohmann::json::parse(request.search_parameters);
+        const auto ef_search = parameters["hgraph"]["ef_search"].get<uint64_t>();
+
+        vsag::EvaluationResult result;
+        result.query_count = request.query_count;
+        result.recall.average = ef_search >= 80 ? 0.95 : 0.50;
+        result.qps = ef_search >= 80 ? 100.0 : 200.0;
+        return result;
+    });
+
+    vsag::EfSearchTuningRequest request;
+    request.topk = 10;
+    request.query_count = 8;
+    request.target_recall = 0.90;
+    request.base_search_parameters = R"({"hgraph":{"factor":2,"ef_search":1},"other":true})";
+    request.ef_search_candidates = {10, 80};
+
+    const auto report = tuner.Tune(request);
+
+    REQUIRE(report.recommendation.has_value());
+    REQUIRE(report.recommendation->candidate.ef_search == 80);
+    REQUIRE(report.best_effort.has_value());
+    REQUIRE(report.best_effort->candidate.ef_search == 80);
+    REQUIRE(observed_parameters.size() == 2);
+    for (const auto& parameter : observed_parameters) {
+        auto parsed = nlohmann::json::parse(parameter);
+        REQUIRE(parsed["hgraph"]["factor"].get<uint64_t>() == 2);
+        REQUIRE(parsed["other"].get<bool>());
+    }
+}
+
+TEST_CASE("ef search tuner fails trials with invalid base search parameters", "[ut][tuning]") {
+    vsag::EfSearchTuner tuner([](const vsag::EvaluationRequest&) {
+        vsag::EvaluationResult result;
+        result.recall.average = 1.0;
+        return result;
+    });
+
+    vsag::EfSearchTuningRequest request;
+    request.topk = 10;
+    request.target_recall = 0.90;
+    request.base_search_parameters = "{invalid";
+    request.ef_search_candidates = {10};
+
+    const auto report = tuner.Tune(request);
+
+    REQUIRE(report.trials.size() == 1);
+    REQUIRE(report.trials[0].status == vsag::TuningTrialStatus::FAILED);
+    REQUIRE_FALSE(report.recommendation.has_value());
+    REQUIRE_FALSE(report.best_effort.has_value());
 }

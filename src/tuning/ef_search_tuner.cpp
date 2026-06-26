@@ -17,6 +17,8 @@
 #include <fmt/format.h>
 
 #include <algorithm>
+#include <limits>
+#include <nlohmann/json.hpp>
 #include <utility>
 
 #include "common.h"
@@ -33,12 +35,36 @@ NormalizeCandidates(std::vector<uint64_t> candidates) {
 
 uint64_t
 MaxEfSearch(uint64_t topk) {
+    if (topk > std::numeric_limits<uint64_t>::max() / static_cast<uint64_t>(AMPLIFICATION_FACTOR)) {
+        return std::numeric_limits<uint64_t>::max();
+    }
     return std::max<uint64_t>(static_cast<uint64_t>(AMPLIFICATION_FACTOR) * topk, 1000);
 }
 
-std::string
-MakeSearchParameters(const std::string& index_name, uint64_t ef_search) {
-    return fmt::format(R"({{"{}":{{"ef_search":{}}}}})", index_name, ef_search);
+bool
+MakeSearchParameters(const std::string& base_search_parameters,
+                     const std::string& index_name,
+                     uint64_t ef_search,
+                     std::string& search_parameters,
+                     std::string& error_message) {
+    try {
+        auto parameters = base_search_parameters.empty()
+                              ? nlohmann::json::object()
+                              : nlohmann::json::parse(base_search_parameters);
+        if (not parameters.is_object()) {
+            error_message = "base search parameters must be a json object";
+            return false;
+        }
+        if (not parameters.contains(index_name) || not parameters[index_name].is_object()) {
+            parameters[index_name] = nlohmann::json::object();
+        }
+        parameters[index_name]["ef_search"] = ef_search;
+        search_parameters = parameters.dump();
+        return true;
+    } catch (const std::exception& e) {
+        error_message = fmt::format("failed to parse base search parameters: {}", e.what());
+        return false;
+    }
 }
 
 bool
@@ -51,7 +77,14 @@ IsBetterBestEffort(const EfSearchTrialResult& lhs, const EfSearchTrialResult& rh
 
 }  // namespace
 
-EfSearchTuner::EfSearchTuner(InMemoryEvaluationRunner runner) : runner_(std::move(runner)) {
+EfSearchTuner::EfSearchTuner() : EfSearchTuner(InMemoryEvaluationRunner()) {
+}
+
+EfSearchTuner::EfSearchTuner(InMemoryEvaluationRunner runner)
+    : evaluator_([runner](const EvaluationRequest& request) { return runner.Run(request); }) {
+}
+
+EfSearchTuner::EfSearchTuner(EvaluationFunction evaluator) : evaluator_(std::move(evaluator)) {
 }
 
 EfSearchTuningReport
@@ -91,9 +124,17 @@ EfSearchTuner::Tune(const EfSearchTuningRequest& request) const {
         evaluation_request.ground_truth = request.ground_truth;
         evaluation_request.topk = request.topk;
         evaluation_request.query_count = request.query_count;
-        evaluation_request.search_parameters = MakeSearchParameters(request.index_name, ef_search);
+        if (not MakeSearchParameters(request.base_search_parameters,
+                                     request.index_name,
+                                     ef_search,
+                                     evaluation_request.search_parameters,
+                                     trial.message)) {
+            trial.status = TuningTrialStatus::FAILED;
+            report.trials.push_back(trial);
+            continue;
+        }
 
-        trial.evaluation = runner_.Run(evaluation_request);
+        trial.evaluation = evaluator_(evaluation_request);
         if (trial.evaluation.Succeeded()) {
             trial.status = TuningTrialStatus::COMPLETED;
             if (not report.best_effort.has_value() ||

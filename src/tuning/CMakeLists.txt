@@ -20,6 +20,8 @@ set (TUNING_SRC
         evaluation_result.h
         ef_search_tuner.cpp
         ef_search_tuner.h
+        tuning_pipeline.cpp
+        tuning_pipeline.h
 )
 
 add_library (tuning OBJECT ${TUNING_SRC})

@@ -15,6 +15,7 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <string>
 #include <vector>
@@ -50,6 +51,7 @@ struct EfSearchTuningRequest {
     uint64_t query_count = 0;
     double target_recall = 0.0;
     std::string index_name = "hgraph";
+    std::string base_search_parameters;
     std::vector<uint64_t> ef_search_candidates;
 };
 
@@ -61,13 +63,17 @@ struct EfSearchTuningReport {
 
 class EfSearchTuner {
 public:
-    explicit EfSearchTuner(InMemoryEvaluationRunner runner = InMemoryEvaluationRunner());
+    using EvaluationFunction = std::function<EvaluationResult(const EvaluationRequest&)>;
+
+    EfSearchTuner();
+    explicit EfSearchTuner(InMemoryEvaluationRunner runner);
+    explicit EfSearchTuner(EvaluationFunction evaluator);
 
     [[nodiscard]] EfSearchTuningReport
     Tune(const EfSearchTuningRequest& request) const;
 
 private:
-    InMemoryEvaluationRunner runner_;
+    EvaluationFunction evaluator_;
 };
 
 }  // namespace vsag

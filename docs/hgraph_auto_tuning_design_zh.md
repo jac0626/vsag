@@ -187,6 +187,10 @@ CLI 应调用核心调优模块，不应重复实现调优算法。
 
 ## 8. 请求模型
 
+> API 输入输出的完整设计见
+> [`vsag_auto_tuning_api_design_zh.md`](vsag_auto_tuning_api_design_zh.md)。本节只保留早期
+> CLI 配置草图，后续讨论以 API 设计文档为准。
+
 未来 CLI 配置可以类似：
 
 ```yaml
@@ -345,6 +349,67 @@ P0 验收标准：
 - 输出包含所有 trial metrics，而不是只有最终推荐。
 - 同一输入配置可重复执行，输出结果可比较。
 
+当前内部 POC target：
+
+```bash
+cmake -B build \
+  -DENABLE_EXAMPLES=ON \
+  -DENABLE_TOOLS=ON \
+  -DENABLE_INTEL_MKL=ON \
+  -DENABLE_TESTS=ON \
+  -DENABLE_MOCKIMPL=OFF
+cmake --build build --target hgraph_auto_tuning_poc --parallel 96
+
+# synthetic 小数据
+./build/examples/cpp/hgraph_auto_tuning_poc
+
+# SIFT128 真实数据子集
+./build/examples/cpp/hgraph_auto_tuning_poc \
+  --dataset /root/data/sift-128-euclidean.hdf5 \
+  --base-count 10000 \
+  --query-count 100 \
+  --target-recall 0.90
+```
+
+该 POC 位于 `src/tuning/hgraph_auto_tuning_poc.cpp`。默认使用小型内存数据集；传入
+`--dataset` 时从 HDF5 读取真实 dense float32 数据，例如 SIFT128。POC 会构建 HGraph，
+在当前 base 子集内直接计算精确 L2 ground truth，然后调用 `AutoTuningPipeline` 输出输入摘要、
+准备阶段耗时、tuning 总耗时、stage report、trial report 和 `ef_search` recommendation。
+等 tuning API 迁到 public header 后，再移动到正式 `examples/cpp/` 示例。
+
+当前 SIFT128 POC 验证结果：
+
+```text
+source = /root/data/sift-128-euclidean.hdf5
+HDF5 train = (1000000, 128) float32
+HDF5 test = (10000, 128) float32
+base_count = 10000
+query_count = 100
+topk = 10
+target_recall = 0.90
+base_search_parameters = {"hgraph":{"factor":2}}
+ef_search_candidates = {0, 10, 20, 40, 80, 160, 320, 1201}
+
+load_elapsed_ms = 15.9445
+build_index_elapsed_ms = 12167.7
+ground_truth_elapsed_ms = 524.287
+tuning_elapsed_ms = 513.664
+
+ef_search = 0    -> skipped, ef_search must be greater than 0
+ef_search = 10   -> recall = 0.884, latency_avg_ms = 0.286231, qps = 3493.68
+ef_search = 20   -> recall = 0.959, latency_avg_ms = 0.348663, qps = 2868.1
+ef_search = 40   -> recall = 0.985, latency_avg_ms = 0.474116, qps = 2109.19
+ef_search = 80   -> recall = 0.997, latency_avg_ms = 0.720731, qps = 1387.48
+ef_search = 160  -> recall = 0.999, latency_avg_ms = 1.17306, qps = 852.47
+ef_search = 320  -> recall = 0.999, latency_avg_ms = 2.04497, qps = 489.005
+ef_search = 1201 -> skipped, ef_search must be no greater than 1000
+
+recommendation = ef_search 20
+```
+
+这个验证仍然是 `existing_index` 语义：`build_index_elapsed_ms` 是 POC 外层为制造输入索引而记录
+的准备阶段耗时，不计入 `AutoTuningPipeline::Tune()` 的 `tuning_elapsed_ms`。
+
 ### 10.2 P1：representation + `ef_search` 联合调优
 
 范围：
@@ -445,6 +510,7 @@ ef_search: [50, 100, 200, 400, 800, 1000]
 | `latency_detail_ms` | latency 分位，例如 `p50`、`p90`、`p95`、`p99`。 |
 | `memory_bytes` | index memory usage 或 peak memory，取决于 evaluator 模式。 |
 | `build_time_s` | build candidate 的构建时间。 |
+| `tuning_elapsed_ms` | 调优流程总 wall-clock 时间，从进入 tuner 到生成报告。 |
 
 报告必须明确 memory 表示的是当前 index memory、estimated memory，还是 peak process memory。
 
