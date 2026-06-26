@@ -106,6 +106,11 @@ TEST_CASE("auto tuning pipeline runs all P0 stages with explicit skipped stages"
     REQUIRE(report.Succeeded());
     REQUIRE(report.request.index_name == "hgraph");
     REQUIRE(report.request.source_type == "existing_index");
+    REQUIRE(report.request.source_capabilities.has_index);
+    REQUIRE_FALSE(report.request.source_capabilities.has_base);
+    REQUIRE_FALSE(report.request.source_capabilities.has_build_parameters);
+    REQUIRE(report.request.source_capabilities.supports_search_tuning);
+    REQUIRE_FALSE(report.request.source_capabilities.supports_rebuild_tuning);
     REQUIRE(report.request.topk == static_cast<uint64_t>(dataset->top_k));
     REQUIRE(report.request.requested_query_count == 8);
     REQUIRE(report.request.effective_query_count == 8);
@@ -271,6 +276,12 @@ TEST_CASE("auto tuning pipeline executes HGraph rebuild candidates", "[ut][tunin
 
     REQUIRE(report.Succeeded());
     REQUIRE(evaluation_count == 2);
+    REQUIRE(report.request.source_type == "existing_index");
+    REQUIRE(report.request.source_capabilities.has_index);
+    REQUIRE(report.request.source_capabilities.has_base);
+    REQUIRE(report.request.source_capabilities.has_build_parameters);
+    REQUIRE(report.request.source_capabilities.supports_search_tuning);
+    REQUIRE(report.request.source_capabilities.supports_rebuild_tuning);
     REQUIRE(report.stages.size() == 10);
     REQUIRE(report.stages[5].stage == vsag::TuningStage::CANDIDATE_VALIDATION);
     REQUIRE(report.stages[5].input_count == 2);
@@ -343,7 +354,7 @@ TEST_CASE("auto tuning pipeline requires base dataset for rebuild candidates", "
     REQUIRE(report.stages[5].stage == vsag::TuningStage::CANDIDATE_VALIDATION);
     REQUIRE(report.stages[5].status == vsag::TuningStageStatus::FAILED);
     REQUIRE(report.stages[5].message ==
-            "base dataset is required for build or quantizer candidate validation");
+            "source capability does not support rebuild tuning: base dataset is required");
 }
 
 TEST_CASE("auto tuning pipeline requires build parameters for rebuild candidates", "[ut][tuning]") {
@@ -370,7 +381,7 @@ TEST_CASE("auto tuning pipeline requires build parameters for rebuild candidates
     REQUIRE(report.stages[5].stage == vsag::TuningStage::CANDIDATE_VALIDATION);
     REQUIRE(report.stages[5].status == vsag::TuningStageStatus::FAILED);
     REQUIRE(report.stages[5].message ==
-            "build parameters are required for build or quantizer candidate validation");
+            "source capability does not support rebuild tuning: build parameters are required");
 }
 
 TEST_CASE("auto tuning pipeline reports successive halving as not implemented", "[ut][tuning]") {

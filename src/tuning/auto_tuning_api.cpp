@@ -279,6 +279,15 @@ ParameterSpacesToJson(const std::vector<TuningParameterSpace>& parameter_spaces)
 }
 
 JsonType
+SourceCapabilitiesToJson(const TuningSourceCapabilities& capabilities) {
+    return JsonType{{"has_index", capabilities.has_index},
+                    {"has_base", capabilities.has_base},
+                    {"has_build_parameters", capabilities.has_build_parameters},
+                    {"supports_search_tuning", capabilities.supports_search_tuning},
+                    {"supports_rebuild_tuning", capabilities.supports_rebuild_tuning}};
+}
+
+JsonType
 RequestSummaryToJson(const AutoTuningRequestSummary& request) {
     JsonType search_space = JsonType::object();
     if (not request.build_parameter_spaces.empty()) {
@@ -296,7 +305,9 @@ RequestSummaryToJson(const AutoTuningRequestSummary& request) {
 
     return JsonType{
         {"index_type", request.index_name},
-        {"source", JsonType{{"type", request.source_type}}},
+        {"source",
+         JsonType{{"type", request.source_type},
+                  {"capabilities", SourceCapabilitiesToJson(request.source_capabilities)}}},
         {"workload", JsonType{{"topk", request.topk}}},
         {"config",
          JsonType{{"build_parameters",

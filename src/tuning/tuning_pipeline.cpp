@@ -60,6 +60,18 @@ CountTrials(const TuningTrialReport& report, TuningTrialStatus status) {
         }));
 }
 
+TuningSourceCapabilities
+MakeSourceCapabilities(const AutoTuningRequest& request) {
+    TuningSourceCapabilities capabilities;
+    capabilities.has_index = request.index != nullptr;
+    capabilities.has_base = request.base != nullptr;
+    capabilities.has_build_parameters = not request.build_parameters.empty();
+    capabilities.supports_search_tuning = capabilities.has_index;
+    capabilities.supports_rebuild_tuning =
+        capabilities.has_base && capabilities.has_build_parameters;
+    return capabilities;
+}
+
 std::vector<uint64_t>
 NormalizeEfSearchCandidates(std::vector<uint64_t> candidates) {
     std::sort(candidates.begin(), candidates.end());
@@ -265,6 +277,7 @@ MakeRequestSummary(const AutoTuningRequest& request) {
     AutoTuningRequestSummary summary;
     summary.index_name = request.index_name;
     summary.source_type = request.source_type;
+    summary.source_capabilities = MakeSourceCapabilities(request);
     summary.topk = request.topk;
     summary.requested_query_count = request.query_count;
     summary.target_recall = request.target_recall;
@@ -505,12 +518,21 @@ bool
 ValidateRebuildCandidate(const AutoTuningRequest& request,
                          const TuningCandidate& candidate,
                          std::string& error_message) {
-    if (request.base == nullptr) {
-        error_message = "base dataset is required for build or quantizer candidate validation";
-        return false;
-    }
-    if (request.build_parameters.empty()) {
-        error_message = "build parameters are required for build or quantizer candidate validation";
+    const auto capabilities = MakeSourceCapabilities(request);
+    if (not capabilities.supports_rebuild_tuning) {
+        if (not capabilities.has_base && not capabilities.has_build_parameters) {
+            error_message =
+                "source capability does not support rebuild tuning: base dataset and build "
+                "parameters are required";
+            return false;
+        }
+        if (not capabilities.has_base) {
+            error_message =
+                "source capability does not support rebuild tuning: base dataset is required";
+            return false;
+        }
+        error_message =
+            "source capability does not support rebuild tuning: build parameters are required";
         return false;
     }
 

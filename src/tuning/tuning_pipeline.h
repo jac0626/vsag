@@ -56,6 +56,14 @@ struct TuningParameterSpace {
     std::vector<std::string> values;
 };
 
+struct TuningSourceCapabilities {
+    bool has_index = false;
+    bool has_base = false;
+    bool has_build_parameters = false;
+    bool supports_search_tuning = false;
+    bool supports_rebuild_tuning = false;
+};
+
 // Internal request for HGraph V1 skeleton tuning.
 // The caller owns input object lifetime and ground-truth preparation.
 struct AutoTuningRequest {
@@ -83,6 +91,7 @@ struct AutoTuningRequest {
 struct AutoTuningRequestSummary {
     std::string index_name = "hgraph";
     std::string source_type = "existing_index";
+    TuningSourceCapabilities source_capabilities;
     uint64_t topk = 0;
     uint64_t requested_query_count = 0;
     uint64_t effective_query_count = 0;

@@ -83,7 +83,13 @@ RequireRequestJsonContract(const nlohmann::json& request) {
                        "search_space",
                        "evaluation",
                        "budget"});
-    RequireObjectKeys(request["source"], {"type"});
+    RequireObjectKeys(request["source"], {"type", "capabilities"});
+    RequireObjectKeys(request["source"]["capabilities"],
+                      {"has_index",
+                       "has_base",
+                       "has_build_parameters",
+                       "supports_search_tuning",
+                       "supports_rebuild_tuning"});
     RequireObjectKeys(request["workload"], {"topk"});
     RequireObjectKeys(request["config"], {"build_parameters", "search_parameters"});
     RequireObjectKeys(request["objective"], {"primary", "recall_at_k"});
@@ -259,6 +265,13 @@ TEST_CASE("auto tuning api parses P0 json and serializes report", "[ut][tuning]"
     REQUIRE(report_json["status"].get<std::string>() == "succeeded");
     REQUIRE(report_json["request"]["index_type"].get<std::string>() == "hgraph");
     REQUIRE(report_json["request"]["source"]["type"].get<std::string>() == "existing_index");
+    REQUIRE(report_json["request"]["source"]["capabilities"]["has_index"].get<bool>());
+    REQUIRE(report_json["request"]["source"]["capabilities"]["has_base"].get<bool>());
+    REQUIRE_FALSE(
+        report_json["request"]["source"]["capabilities"]["has_build_parameters"].get<bool>());
+    REQUIRE(report_json["request"]["source"]["capabilities"]["supports_search_tuning"].get<bool>());
+    REQUIRE_FALSE(
+        report_json["request"]["source"]["capabilities"]["supports_rebuild_tuning"].get<bool>());
     REQUIRE(report_json["request"]["workload"]["topk"].get<uint64_t>() ==
             static_cast<uint64_t>(dataset->top_k));
     REQUIRE(report_json["request"]["config"]["build_parameters"].is_null());
@@ -333,6 +346,12 @@ TEST_CASE("auto tuning api builds baseline hgraph for raw dataset P0 request", "
     const auto report_json = nlohmann::json::parse(vsag::SerializeAutoTuningReportJson(report));
     RequireReportJsonContract(report_json);
     REQUIRE(report_json["request"]["source"]["type"].get<std::string>() == "raw_dataset");
+    REQUIRE(report_json["request"]["source"]["capabilities"]["has_index"].get<bool>());
+    REQUIRE(report_json["request"]["source"]["capabilities"]["has_base"].get<bool>());
+    REQUIRE(report_json["request"]["source"]["capabilities"]["has_build_parameters"].get<bool>());
+    REQUIRE(report_json["request"]["source"]["capabilities"]["supports_search_tuning"].get<bool>());
+    REQUIRE(
+        report_json["request"]["source"]["capabilities"]["supports_rebuild_tuning"].get<bool>());
     REQUIRE(report_json["request"]["config"]["build_parameters"]["index_param"]["max_degree"]
                 .get<uint64_t>() == 16);
     REQUIRE(report_json["request"]["evaluation"]["effective_query_count"].get<uint64_t>() == 8);
@@ -380,6 +399,60 @@ TEST_CASE("auto tuning api serializes rebuild candidate patches", "[ut][tuning]"
         report_json["trials"][0]["candidate"]["hgraph.base_quantization_type"].get<std::string>() ==
         "fp32");
     REQUIRE(report_json["trials"][0]["candidate"]["hgraph.ef_search"].get<uint64_t>() == 10);
+    REQUIRE(report_json["recommendation"]["candidate"]["hgraph.max_degree"].get<uint64_t>() == 16);
+    REQUIRE(report_json["recommendation"]["candidate"]["hgraph.base_quantization_type"]
+                .get<std::string>() == "fp32");
+    REQUIRE(report_json["recommendation"]["candidate"]["hgraph.ef_search"].get<uint64_t>() == 20);
+}
+
+TEST_CASE("auto tuning api supports existing index rebuild when source has base data",
+          "[ut][tuning]") {
+    fixtures::TestDatasetPool pool;
+    auto dataset = pool.GetDatasetAndCreate(16, 200, "l2");
+    auto index = BuildHGraphIndex(dataset);
+
+    auto request = MakeValidRequestJson(static_cast<uint64_t>(dataset->top_k), 8, 0.95);
+    request["config"]["build_parameters"] =
+        nlohmann::json::parse(MakeHGraphBuildParameters(dataset->dim_));
+    request["search_space"]["build"] = {{"hgraph.max_degree", {{"values", {16}}}}};
+    request["search_space"]["quantizer"] = {
+        {"hgraph.base_quantization_type", {{"values", {"fp32"}}}}};
+    request["search_space"]["search"]["hgraph.ef_search"]["values"] = {10, 20};
+
+    auto parse_result =
+        vsag::PrepareAutoTuningRequestJson(request.dump(), MakeContext(index, dataset));
+    REQUIRE(parse_result.Succeeded());
+    REQUIRE(parse_result.request.source_type == "existing_index");
+    REQUIRE(parse_result.request.index == index);
+    REQUIRE(parse_result.request.base == dataset->base_);
+
+    vsag::EfSearchTuner tuner([](const vsag::EvaluationRequest& request) {
+        auto parameters = nlohmann::json::parse(request.search_parameters);
+        const auto ef_search = parameters["hgraph"]["ef_search"].get<uint64_t>();
+
+        vsag::EvaluationResult result;
+        result.query_count = request.query_count;
+        result.recall.average = ef_search >= 20 ? 0.96 : 0.80;
+        result.latency.average_ms = static_cast<double>(ef_search);
+        return result;
+    });
+
+    vsag::AutoTuningPipeline pipeline(tuner);
+    const auto report = pipeline.Tune(parse_result.request);
+    REQUIRE(report.Succeeded());
+    REQUIRE(report.request.source_type == "existing_index");
+    REQUIRE(report.request.source_capabilities.has_index);
+    REQUIRE(report.request.source_capabilities.has_base);
+    REQUIRE(report.request.source_capabilities.has_build_parameters);
+    REQUIRE(report.request.source_capabilities.supports_search_tuning);
+    REQUIRE(report.request.source_capabilities.supports_rebuild_tuning);
+
+    const auto report_json = nlohmann::json::parse(vsag::SerializeAutoTuningReportJson(report));
+    RequireReportJsonContract(report_json);
+    REQUIRE(report_json["request"]["source"]["type"].get<std::string>() == "existing_index");
+    REQUIRE(
+        report_json["request"]["source"]["capabilities"]["supports_rebuild_tuning"].get<bool>());
+    REQUIRE(report_json["trials"].size() == 2);
     REQUIRE(report_json["recommendation"]["candidate"]["hgraph.max_degree"].get<uint64_t>() == 16);
     REQUIRE(report_json["recommendation"]["candidate"]["hgraph.base_quantization_type"]
                 .get<std::string>() == "fp32");

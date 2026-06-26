@@ -968,7 +968,14 @@ best_effort
 {
   "index_type": "hgraph",
   "source": {
-    "type": "existing_index"
+    "type": "existing_index",
+    "capabilities": {
+      "has_index": true,
+      "has_base": true,
+      "has_build_parameters": false,
+      "supports_search_tuning": true,
+      "supports_rebuild_tuning": false
+    }
   },
   "workload": {
     "topk": 10
@@ -1010,6 +1017,17 @@ best_effort
 `evaluation.query_count` 是输入中请求的 query 数；`evaluation.effective_query_count` 是 pipeline
 实际用于评估的 query 数。`query_count = 0` 表示使用全部 query，因此这两个值可能不同。
 `budget.max_trials = 0` 表示不限制 trial 数。
+
+`request.source.capabilities` 是 prepare 后的能力摘要，不是用户输入 JSON 中必须提供的字段。它
+用于说明当前 request 能否执行某类 stage：
+
+| 字段 | 语义 |
+| --- | --- |
+| `has_index` | 已绑定 baseline index，可执行 search/runtime trial。 |
+| `has_base` | 已绑定 base/raw vectors，可作为 rebuild source。 |
+| `has_build_parameters` | 已提供 build parameter baseline/template。 |
+| `supports_search_tuning` | 当前 V1 定义为 `has_index`。 |
+| `supports_rebuild_tuning` | 当前 V1 定义为 `has_base && has_build_parameters`。 |
 
 ### 15.1 Stage Result
 
@@ -1498,7 +1516,7 @@ V1 skeleton JSON parser 当前接受但 stage 仍可能报告运行期失败的�
 - `source.type = existing_index` 且 `config.build_parameters` 非空，作为 rebuild metadata/baseline
   保存到 request。
 - 如果 request 声明 build/quantizer tuning，但没有 `AutoTuningApiContext::base` 或没有
-  `config.build_parameters`，trial execution 会失败并给出明确原因。
+  `config.build_parameters`，candidate validation 会失败并给出明确原因。
 
 当前 HGraph V1 skeleton 已实现：
 
@@ -1513,6 +1531,7 @@ V1 skeleton JSON parser 当前接受但 stage 仍可能报告运行期失败的�
 - `search_space.search.hgraph.ef_search`
 - `budget.max_trials`
 - `config.build_parameters` 作为 existing index metadata 或 raw dataset baseline
+- `request.source.capabilities` 输出，用于审计 source 是否支持 search/rebuild tuning
 - `search_space.build` / `search_space.quantizer` / `search_space.search` 的离散参数空间保存和枚举
 - V1 skeleton candidate generation：对已保存的 build、quantizer、search 参数空间做朴素笛卡尔枚举
 - V1 skeleton candidate validation：集中校验参数 path/value、rebuild source、build config 和

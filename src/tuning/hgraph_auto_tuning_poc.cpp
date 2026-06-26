@@ -85,6 +85,10 @@ PrintUsage(const char* binary) {
     std::cout << "  " << binary
               << " --request-json src/tuning/examples/hgraph_auto_tuning_rebuild_request.json"
                  " --json-output /tmp/hgraph_auto_tuning_rebuild_report.json\n";
+    std::cout << "  " << binary
+              << " --request-json "
+                 "src/tuning/examples/hgraph_auto_tuning_existing_index_rebuild_request.json"
+                 " --json-output /tmp/hgraph_auto_tuning_existing_index_rebuild_report.json\n";
 }
 
 uint64_t
