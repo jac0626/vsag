@@ -25,6 +25,38 @@
 
 namespace {
 
+void
+RequireObjectKeys(const nlohmann::json& object, const std::vector<std::string>& keys) {
+    REQUIRE(object.is_object());
+    REQUIRE(static_cast<uint64_t>(object.size()) == static_cast<uint64_t>(keys.size()));
+    for (const auto& key : keys) {
+        REQUIRE(object.contains(key));
+    }
+}
+
+void
+RequireExampleRequestContract(const std::string& request_json) {
+    const auto request = nlohmann::json::parse(request_json);
+    RequireObjectKeys(request,
+                      {"version",
+                       "index_type",
+                       "source",
+                       "workload",
+                       "config",
+                       "objective",
+                       "search_space",
+                       "evaluation",
+                       "budget"});
+    RequireObjectKeys(request["source"], {"type"});
+    REQUIRE(request["index_type"].get<std::string>() == "hgraph");
+    REQUIRE(request["workload"].contains("topk"));
+    REQUIRE(request["config"].contains("search_parameters"));
+    REQUIRE(request["objective"].contains("recall_at_k"));
+    REQUIRE(request["search_space"].contains("search"));
+    REQUIRE(request["evaluation"].contains("query_count"));
+    REQUIRE(request["budget"].contains("max_trials"));
+}
+
 std::string
 MakeHGraphBuildParameters(uint64_t dim) {
     nlohmann::json index_param{{"base_quantization_type", "fp32"},
@@ -74,6 +106,7 @@ TEST_CASE("auto tuning request examples parse and prepare", "[ut][tuning]") {
 
     SECTION("existing index") {
         auto request_json = ReadExample("hgraph_auto_tuning_existing_index_request.json");
+        RequireExampleRequestContract(request_json);
 
         auto parse_result = vsag::ParseAutoTuningRequestJson(request_json);
         REQUIRE(parse_result.Succeeded());
@@ -88,6 +121,7 @@ TEST_CASE("auto tuning request examples parse and prepare", "[ut][tuning]") {
 
     SECTION("raw dataset") {
         auto request_json = ReadExample("hgraph_auto_tuning_raw_dataset_request.json");
+        RequireExampleRequestContract(request_json);
 
         auto parse_result = vsag::ParseAutoTuningRequestJson(request_json);
         REQUIRE(parse_result.Succeeded());
@@ -103,6 +137,7 @@ TEST_CASE("auto tuning request examples parse and prepare", "[ut][tuning]") {
 
     SECTION("max trials") {
         auto request_json = ReadExample("hgraph_auto_tuning_max_trials_request.json");
+        RequireExampleRequestContract(request_json);
 
         auto parse_result = vsag::ParseAutoTuningRequestJson(request_json);
         REQUIRE(parse_result.Succeeded());
@@ -111,6 +146,7 @@ TEST_CASE("auto tuning request examples parse and prepare", "[ut][tuning]") {
 
     SECTION("rebuild tuning") {
         auto request_json = ReadExample("hgraph_auto_tuning_rebuild_request.json");
+        RequireExampleRequestContract(request_json);
 
         auto parse_result = vsag::ParseAutoTuningRequestJson(request_json);
         REQUIRE(parse_result.Succeeded());

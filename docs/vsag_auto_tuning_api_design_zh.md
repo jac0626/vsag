@@ -945,7 +945,24 @@ max(100 * topk, 1000) = 1000
 
 `request` 是本次 tuning 输入的机器可读摘要，用来支持结果回放、审计和文档化。它不是
 `AutoTuningApiContext` 的完整序列化，因此不会包含真实的 `IndexPtr`、`DatasetPtr` 或向量
-内容。P0 当前输出的 `request` 形态如下：
+内容。
+
+V1 skeleton 当前固定输出字段为：
+
+```text
+version
+succeeded
+status
+request
+elapsed_ms
+stages
+trials
+recommendation
+best_effort
+```
+
+`pareto_frontier`、`summary` 等字段是长期扩展项，当前实现不输出。V1 skeleton 当前输出的
+`request` 形态如下：
 
 ```json
 {
@@ -1004,6 +1021,21 @@ max(100 * topk, 1000) = 1000
   "input_count": 8,
   "output_count": 7
 }
+```
+
+V1 skeleton 当前固定 stage 顺序为：
+
+```text
+workload_validation
+search_space_construction
+build_parameter_tuning
+quantizer_tuning
+candidate_generation
+candidate_validation
+candidate_pruning
+trial_planning
+trial_execution
+selection
 ```
 
 Stage status：

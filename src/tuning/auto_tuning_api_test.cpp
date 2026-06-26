@@ -24,6 +24,118 @@
 
 namespace {
 
+void
+RequireObjectKeys(const nlohmann::json& object, const std::vector<std::string>& keys) {
+    REQUIRE(object.is_object());
+    REQUIRE(static_cast<uint64_t>(object.size()) == static_cast<uint64_t>(keys.size()));
+    for (const auto& key : keys) {
+        REQUIRE(object.contains(key));
+    }
+}
+
+void
+RequireStageJsonContract(const nlohmann::json& stage) {
+    RequireObjectKeys(stage, {"stage", "status", "message", "input_count", "output_count"});
+    REQUIRE(stage["stage"].is_string());
+    REQUIRE(stage["status"].is_string());
+    REQUIRE(stage["message"].is_string());
+    REQUIRE(stage["input_count"].is_number_unsigned());
+    REQUIRE(stage["output_count"].is_number_unsigned());
+}
+
+void
+RequireEvaluationJsonContract(const nlohmann::json& evaluation) {
+    RequireObjectKeys(
+        evaluation,
+        {"status", "error_message", "query_count", "recall", "latency", "qps", "memory_bytes"});
+    RequireObjectKeys(evaluation["recall"], {"average", "p0", "p10", "p30", "p50", "p70", "p90"});
+    RequireObjectKeys(evaluation["latency"],
+                      {"average_ms", "p50_ms", "p90_ms", "p95_ms", "p99_ms"});
+}
+
+void
+RequireTrialJsonContract(const nlohmann::json& trial) {
+    RequireObjectKeys(trial,
+                      {"trial_id",
+                       "candidate",
+                       "parameters_patch",
+                       "search_parameters_patch",
+                       "status",
+                       "message",
+                       "evaluation"});
+    REQUIRE(trial["trial_id"].is_number_unsigned());
+    REQUIRE(trial["candidate"].is_object());
+    REQUIRE(trial["parameters_patch"].is_object());
+    REQUIRE(trial["search_parameters_patch"].is_object());
+    REQUIRE(trial["status"].is_string());
+    REQUIRE(trial["message"].is_string());
+    RequireEvaluationJsonContract(trial["evaluation"]);
+}
+
+void
+RequireRequestJsonContract(const nlohmann::json& request) {
+    RequireObjectKeys(request,
+                      {"index_type",
+                       "source",
+                       "workload",
+                       "config",
+                       "objective",
+                       "search_space",
+                       "evaluation",
+                       "budget"});
+    RequireObjectKeys(request["source"], {"type"});
+    RequireObjectKeys(request["workload"], {"topk"});
+    RequireObjectKeys(request["config"], {"build_parameters", "search_parameters"});
+    RequireObjectKeys(request["objective"], {"primary", "recall_at_k"});
+    RequireObjectKeys(request["objective"]["recall_at_k"], {"min"});
+    RequireObjectKeys(request["evaluation"],
+                      {"query_count", "effective_query_count", "successive_halving"});
+    RequireObjectKeys(request["evaluation"]["successive_halving"], {"enabled"});
+    RequireObjectKeys(request["budget"], {"max_trials"});
+}
+
+void
+RequireReportJsonContract(const nlohmann::json& report) {
+    RequireObjectKeys(report,
+                      {"version",
+                       "succeeded",
+                       "status",
+                       "request",
+                       "elapsed_ms",
+                       "stages",
+                       "trials",
+                       "recommendation",
+                       "best_effort"});
+    REQUIRE(report["version"].get<uint64_t>() == 1);
+    REQUIRE(report["succeeded"].is_boolean());
+    REQUIRE(report["status"].is_string());
+    RequireRequestJsonContract(report["request"]);
+    REQUIRE(report["elapsed_ms"].is_number());
+    REQUIRE(report["stages"].is_array());
+    REQUIRE(report["trials"].is_array());
+    for (const auto& stage : report["stages"]) {
+        RequireStageJsonContract(stage);
+    }
+    for (const auto& trial : report["trials"]) {
+        RequireTrialJsonContract(trial);
+    }
+    if (not report["recommendation"].is_null()) {
+        RequireTrialJsonContract(report["recommendation"]);
+    }
+    if (not report["best_effort"].is_null()) {
+        RequireTrialJsonContract(report["best_effort"]);
+    }
+}
+
+void
+RequireStageOrder(const nlohmann::json& stages, const std::vector<std::string>& expected_stages) {
+    REQUIRE(stages.is_array());
+    REQUIRE(static_cast<uint64_t>(stages.size()) == static_cast<uint64_t>(expected_stages.size()));
+    for (uint64_t i = 0; i < static_cast<uint64_t>(expected_stages.size()); ++i) {
+        REQUIRE(stages[i]["stage"].get<std::string>() == expected_stages[i]);
+    }
+}
+
 std::string
 MakeHGraphBuildParameters(uint64_t dim) {
     nlohmann::json index_param{{"base_quantization_type", "fp32"},
@@ -130,6 +242,18 @@ TEST_CASE("auto tuning api parses P0 json and serializes report", "[ut][tuning]"
     REQUIRE(report.recommendation->candidate.ef_search == 20);
 
     const auto report_json = nlohmann::json::parse(vsag::SerializeAutoTuningReportJson(report));
+    RequireReportJsonContract(report_json);
+    RequireStageOrder(report_json["stages"],
+                      {"workload_validation",
+                       "search_space_construction",
+                       "build_parameter_tuning",
+                       "quantizer_tuning",
+                       "candidate_generation",
+                       "candidate_validation",
+                       "candidate_pruning",
+                       "trial_planning",
+                       "trial_execution",
+                       "selection"});
     REQUIRE(report_json["version"].get<uint64_t>() == 1);
     REQUIRE(report_json["succeeded"].get<bool>());
     REQUIRE(report_json["status"].get<std::string>() == "succeeded");
@@ -207,6 +331,7 @@ TEST_CASE("auto tuning api builds baseline hgraph for raw dataset P0 request", "
     REQUIRE(report.recommendation->candidate.ef_search == 20);
 
     const auto report_json = nlohmann::json::parse(vsag::SerializeAutoTuningReportJson(report));
+    RequireReportJsonContract(report_json);
     REQUIRE(report_json["request"]["source"]["type"].get<std::string>() == "raw_dataset");
     REQUIRE(report_json["request"]["config"]["build_parameters"]["index_param"]["max_degree"]
                 .get<uint64_t>() == 16);
@@ -248,6 +373,7 @@ TEST_CASE("auto tuning api serializes rebuild candidate patches", "[ut][tuning]"
     REQUIRE(report.Succeeded());
 
     const auto report_json = nlohmann::json::parse(vsag::SerializeAutoTuningReportJson(report));
+    RequireReportJsonContract(report_json);
     REQUIRE(report_json["trials"].size() == 2);
     REQUIRE(report_json["trials"][0]["candidate"]["hgraph.max_degree"].get<uint64_t>() == 16);
     REQUIRE(
@@ -492,6 +618,7 @@ TEST_CASE("auto tuning api serializes best effort without recommendation", "[ut]
     REQUIRE(report.best_effort.has_value());
 
     const auto report_json = nlohmann::json::parse(vsag::SerializeAutoTuningReportJson(report));
+    RequireReportJsonContract(report_json);
     REQUIRE_FALSE(report_json["succeeded"].get<bool>());
     REQUIRE(report_json["status"].get<std::string>() == "failed");
     REQUIRE(report_json["recommendation"].is_null());
