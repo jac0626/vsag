@@ -73,6 +73,9 @@ public:
     [[nodiscard]] EfSearchTuningReport
     Tune(const EfSearchTuningRequest& request) const;
 
+    [[nodiscard]] EvaluationResult
+    Evaluate(const EvaluationRequest& request) const;
+
 private:
     EvaluationFunction evaluator_;
 };

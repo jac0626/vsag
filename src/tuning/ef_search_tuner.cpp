@@ -87,6 +87,11 @@ EfSearchTuner::EfSearchTuner(InMemoryEvaluationRunner runner)
 EfSearchTuner::EfSearchTuner(EvaluationFunction evaluator) : evaluator_(std::move(evaluator)) {
 }
 
+EvaluationResult
+EfSearchTuner::Evaluate(const EvaluationRequest& request) const {
+    return evaluator_(request);
+}
+
 EfSearchTuningReport
 EfSearchTuner::Tune(const EfSearchTuningRequest& request) const {
     EfSearchTuningReport report;
@@ -142,7 +147,7 @@ EfSearchTuner::Tune(const EfSearchTuningRequest& request) const {
             continue;
         }
 
-        trial.evaluation = evaluator_(evaluation_request);
+        trial.evaluation = Evaluate(evaluation_request);
         if (trial.evaluation.Succeeded()) {
             trial.status = TuningTrialStatus::COMPLETED;
             if (not report.best_effort.has_value() ||

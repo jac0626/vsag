@@ -14,12 +14,17 @@
 
 #include "tuning/tuning_pipeline.h"
 
+#include <fmt/format.h>
+
 #include <algorithm>
 #include <chrono>
 #include <exception>
 #include <limits>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <utility>
+
+#include "common.h"
 
 namespace vsag {
 namespace {
@@ -52,6 +57,77 @@ CountTrials(const EfSearchTuningReport& report, TuningTrialStatus status) {
         std::count_if(report.trials.begin(), report.trials.end(), [status](const auto& trial) {
             return trial.status == status;
         }));
+}
+
+std::vector<uint64_t>
+NormalizeEfSearchCandidates(std::vector<uint64_t> candidates) {
+    std::sort(candidates.begin(), candidates.end());
+    candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+    return candidates;
+}
+
+uint64_t
+MaxEfSearch(uint64_t topk) {
+    if (topk > std::numeric_limits<uint64_t>::max() / static_cast<uint64_t>(AMPLIFICATION_FACTOR)) {
+        return std::numeric_limits<uint64_t>::max();
+    }
+    return std::max<uint64_t>(static_cast<uint64_t>(AMPLIFICATION_FACTOR) * topk, 1000);
+}
+
+bool
+ReadUint64CandidateValue(const std::string& value, uint64_t& output) {
+    try {
+        const auto json_value = nlohmann::json::parse(value);
+        if (json_value.is_number_unsigned()) {
+            output = json_value.get<uint64_t>();
+            return true;
+        }
+        if (json_value.is_number_integer()) {
+            const auto signed_value = json_value.get<int64_t>();
+            if (signed_value < 0) {
+                return false;
+            }
+            output = static_cast<uint64_t>(signed_value);
+            return true;
+        }
+    } catch (const std::exception&) {
+        return false;
+    }
+    return false;
+}
+
+bool
+MakeSearchParameters(const std::string& base_search_parameters,
+                     const std::string& index_name,
+                     uint64_t ef_search,
+                     std::string& search_parameters,
+                     std::string& error_message) {
+    try {
+        auto parameters = base_search_parameters.empty()
+                              ? nlohmann::json::object()
+                              : nlohmann::json::parse(base_search_parameters);
+        if (not parameters.is_object()) {
+            error_message = "base search parameters must be a json object";
+            return false;
+        }
+        if (not parameters.contains(index_name) || not parameters[index_name].is_object()) {
+            parameters[index_name] = nlohmann::json::object();
+        }
+        parameters[index_name]["ef_search"] = ef_search;
+        search_parameters = parameters.dump();
+        return true;
+    } catch (const std::exception& e) {
+        error_message = fmt::format("failed to parse base search parameters: {}", e.what());
+        return false;
+    }
+}
+
+bool
+IsBetterBestEffort(const EfSearchTrialResult& lhs, const EfSearchTrialResult& rhs) {
+    if (lhs.evaluation.recall.average != rhs.evaluation.recall.average) {
+        return lhs.evaluation.recall.average > rhs.evaluation.recall.average;
+    }
+    return lhs.candidate.ef_search < rhs.candidate.ef_search;
 }
 
 double
@@ -159,22 +235,6 @@ MakeRequestSummary(const AutoTuningRequest& request) {
     return summary;
 }
 
-EfSearchTuningRequest
-MakeEfSearchTuningRequest(const AutoTuningRequest& request) {
-    EfSearchTuningRequest ef_request;
-    ef_request.index = request.index;
-    ef_request.queries = request.queries;
-    ef_request.ground_truth = request.ground_truth;
-    ef_request.topk = request.topk;
-    ef_request.query_count = request.query_count;
-    ef_request.target_recall = request.target_recall;
-    ef_request.index_name = request.index_name;
-    ef_request.base_search_parameters = request.base_search_parameters;
-    ef_request.ef_search_candidates = request.ef_search_candidates;
-    ef_request.max_trials = request.max_trials;
-    return ef_request;
-}
-
 std::vector<TuningParameterSpace>
 MakeEfSearchParameterSpaces(const AutoTuningRequest& request) {
     if (not request.search_parameter_spaces.empty()) {
@@ -220,6 +280,68 @@ ExpandCandidates(std::vector<TuningCandidate>& candidates,
 uint64_t
 CandidateCount(const TuningState& state) {
     return static_cast<uint64_t>(state.candidates.size());
+}
+
+std::vector<uint64_t>
+ExtractEfSearchCandidates(const std::vector<TuningCandidate>& candidates) {
+    std::vector<uint64_t> ef_search_candidates;
+    for (const auto& candidate : candidates) {
+        for (const auto& patch : candidate.patches) {
+            if (patch.path != "hgraph.ef_search") {
+                continue;
+            }
+            uint64_t ef_search = 0;
+            if (ReadUint64CandidateValue(patch.value, ef_search)) {
+                ef_search_candidates.push_back(ef_search);
+            }
+        }
+    }
+    return NormalizeEfSearchCandidates(std::move(ef_search_candidates));
+}
+
+EfSearchTuningReport
+PlanEfSearchTrials(const AutoTuningRequest& request,
+                   const std::vector<TuningCandidate>& candidates) {
+    EfSearchTuningReport report;
+    const auto ef_search_candidates = ExtractEfSearchCandidates(candidates);
+    const auto max_ef_search = MaxEfSearch(request.topk);
+    uint64_t trial_id = 0;
+    uint64_t attempted_trials = 0;
+
+    for (const auto ef_search : ef_search_candidates) {
+        EfSearchTrialResult trial;
+        trial.trial_id = trial_id++;
+        trial.candidate.ef_search = ef_search;
+
+        if (ef_search == 0) {
+            trial.status = TuningTrialStatus::SKIPPED;
+            trial.message = "ef_search must be greater than 0";
+            report.trials.push_back(trial);
+            continue;
+        }
+        if (request.topk == 0) {
+            trial.status = TuningTrialStatus::SKIPPED;
+            trial.message = "topk must be greater than 0";
+            report.trials.push_back(trial);
+            continue;
+        }
+        if (ef_search > max_ef_search) {
+            trial.status = TuningTrialStatus::SKIPPED;
+            trial.message = fmt::format("ef_search must be no greater than {}", max_ef_search);
+            report.trials.push_back(trial);
+            continue;
+        }
+        if (request.max_trials > 0 && attempted_trials >= request.max_trials) {
+            trial.status = TuningTrialStatus::SKIPPED;
+            trial.message = fmt::format("budget exceeded: max_trials = {}", request.max_trials);
+            report.trials.push_back(trial);
+            continue;
+        }
+
+        ++attempted_trials;
+        report.trials.push_back(trial);
+    }
+    return report;
 }
 
 class WorkloadValidationStage final : public TuningStageExecutor {
@@ -368,14 +490,7 @@ public:
                           CandidateCount(state)));
             return;
         }
-        if (runtime.ef_search_tuner == nullptr) {
-            state.report.stages.push_back(
-                MakeStage(Stage(), TuningStageStatus::FAILED, "ef_search tuner is required"));
-            state.should_stop = true;
-            return;
-        }
-
-        state.ef_search = runtime.ef_search_tuner->Tune(MakeEfSearchTuningRequest(state.request));
+        state.ef_search = PlanEfSearchTrials(state.request, state.candidates);
         state.report.ef_search = state.ef_search;
 
         const auto skipped_trials = CountTrials(state.ef_search, TuningTrialStatus::SKIPPED);
@@ -434,7 +549,7 @@ public:
     }
 
     void
-    Run(TuningState& state, const TuningStageRuntime&) const override {
+    Run(TuningState& state, const TuningStageRuntime& runtime) const override {
         if (state.request.enable_build_parameter_tuning || state.request.enable_quantizer_tuning) {
             state.report.stages.push_back(
                 MakeStage(Stage(),
@@ -445,6 +560,43 @@ public:
             state.should_stop = true;
             return;
         }
+
+        if (runtime.ef_search_tuner == nullptr) {
+            state.report.stages.push_back(
+                MakeStage(Stage(), TuningStageStatus::FAILED, "ef_search tuner is required"));
+            state.should_stop = true;
+            return;
+        }
+
+        for (auto& trial : state.ef_search.trials) {
+            if (trial.status == TuningTrialStatus::SKIPPED) {
+                continue;
+            }
+
+            EvaluationRequest evaluation_request;
+            evaluation_request.index = state.request.index;
+            evaluation_request.queries = state.request.queries;
+            evaluation_request.ground_truth = state.request.ground_truth;
+            evaluation_request.topk = state.request.topk;
+            evaluation_request.query_count = state.request.query_count;
+            if (not MakeSearchParameters(state.request.base_search_parameters,
+                                         state.request.index_name,
+                                         trial.candidate.ef_search,
+                                         evaluation_request.search_parameters,
+                                         trial.message)) {
+                trial.status = TuningTrialStatus::FAILED;
+                continue;
+            }
+
+            trial.evaluation = runtime.ef_search_tuner->Evaluate(evaluation_request);
+            if (trial.evaluation.Succeeded()) {
+                trial.status = TuningTrialStatus::COMPLETED;
+            } else {
+                trial.status = TuningTrialStatus::FAILED;
+                trial.message = trial.evaluation.error_message;
+            }
+        }
+        state.report.ef_search = state.ef_search;
 
         const auto skipped_trials = CountTrials(state.ef_search, TuningTrialStatus::SKIPPED);
         const auto runnable_trials =
@@ -472,6 +624,23 @@ public:
 
     void
     Run(TuningState& state, const TuningStageRuntime&) const override {
+        state.ef_search.recommendation.reset();
+        state.ef_search.best_effort.reset();
+        for (const auto& trial : state.ef_search.trials) {
+            if (trial.status != TuningTrialStatus::COMPLETED) {
+                continue;
+            }
+            if (not state.ef_search.best_effort.has_value() ||
+                IsBetterBestEffort(trial, state.ef_search.best_effort.value())) {
+                state.ef_search.best_effort = trial;
+            }
+            if (not state.ef_search.recommendation.has_value() &&
+                trial.evaluation.recall.average >= state.request.target_recall) {
+                state.ef_search.recommendation = trial;
+            }
+        }
+
+        state.report.ef_search = state.ef_search;
         state.report.recommendation = state.ef_search.recommendation;
         state.report.best_effort = state.ef_search.best_effort;
         state.report.stages.push_back(MakeStage(

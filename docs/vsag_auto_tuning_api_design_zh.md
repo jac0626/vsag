@@ -1442,6 +1442,8 @@ P0 已实现：
 - `config.build_parameters` 作为 existing index metadata 或 raw dataset baseline
 - `search_space.build` / `search_space.quantizer` / `search_space.search` 的离散参数空间保存
 - V1 skeleton candidate generation：对已保存的 build、quantizer、search 参数空间做朴素笛卡尔枚举
+- search-only trial execution：通过统一 candidate/trial 流执行 HGraph `ef_search` search trial
+- selection stage：从已完成 trial 中计算 recommendation 和 best effort
 - stage report
 - trial report
 - report request summary
@@ -1464,6 +1466,7 @@ V1 skeleton 已经或正在落地的框架槽位：
 - `AutoTuningPlanner`
 - planner-driven linear pipeline executor
 - exhaustive candidate expansion skeleton
+- stage-based search-only pruning、trial execution 和 selection
 
 P0 兼容路径仍只真实调 HGraph `ef_search`，但 execution path 不应再写死在
 `AutoTuningPipeline::Tune()` 里。
