@@ -249,6 +249,44 @@ TEST_CASE("auto tuning pipeline marks trial execution failure", "[ut][tuning]") 
     REQUIRE(report.ef_search.trials[0].status == vsag::TuningTrialStatus::FAILED);
 }
 
+TEST_CASE("auto tuning pipeline propagates max trial budget", "[ut][tuning]") {
+    fixtures::TestDatasetPool pool;
+    auto dataset = pool.GetDatasetAndCreate(16, 200, "l2");
+    auto index = BuildHGraphIndex(dataset);
+
+    uint64_t evaluation_count = 0;
+    vsag::EfSearchTuner ef_tuner([&evaluation_count](const vsag::EvaluationRequest&) {
+        ++evaluation_count;
+
+        vsag::EvaluationResult result;
+        result.recall.average = 1.0;
+        return result;
+    });
+
+    vsag::AutoTuningRequest request;
+    request.index = index;
+    request.queries = dataset->query_;
+    request.ground_truth = dataset->ground_truth_;
+    request.topk = static_cast<uint64_t>(dataset->top_k);
+    request.query_count = 8;
+    request.max_trials = 1;
+    request.ef_search_candidates = {10, 80};
+
+    vsag::AutoTuningPipeline pipeline(ef_tuner);
+    const auto report = pipeline.Tune(request);
+
+    REQUIRE(report.Succeeded());
+    REQUIRE(evaluation_count == 1);
+    REQUIRE(report.ef_search.trials.size() == 2);
+    REQUIRE(report.ef_search.trials[0].status == vsag::TuningTrialStatus::COMPLETED);
+    REQUIRE(report.ef_search.trials[1].status == vsag::TuningTrialStatus::SKIPPED);
+    REQUIRE(report.ef_search.trials[1].message == "budget exceeded: max_trials = 1");
+    REQUIRE(report.stages[5].stage == vsag::TuningStage::CANDIDATE_PRUNING);
+    REQUIRE(report.stages[5].output_count == 1);
+    REQUIRE(report.stages[6].stage == vsag::TuningStage::TRIAL_PLANNING);
+    REQUIRE(report.stages[6].input_count == 1);
+}
+
 TEST_CASE("auto tuning pipeline keeps best effort when no candidate meets recall target",
           "[ut][tuning]") {
     fixtures::TestDatasetPool pool;

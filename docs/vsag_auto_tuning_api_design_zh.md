@@ -1224,7 +1224,7 @@ P0 JSON parser 当前明确拒绝以下输入：
 - `source.type = raw_dataset` 且缺少 `config.build_parameters`，返回 `missing_field`。
 - `objective.primary` 非 `latency`，返回 `unsupported_objective`。
 - `objective.constraints`，返回 `unsupported_objective`。
-- `budget`，返回 `unsupported_budget`。
+- `budget` 中除 `max_trials` 以外的非空字段，返回 `unsupported_budget`。
 - `output`，返回 `unsupported_output`。
 
 P0 已实现：
@@ -1238,6 +1238,7 @@ P0 已实现：
 - `target_recall`
 - `config.search_parameters`
 - `search_space.search.hgraph.ef_search`
+- `budget.max_trials`
 - stage report
 - trial report
 - tuning elapsed time
@@ -1254,7 +1255,7 @@ P0 未实现但已有 pipeline 槽位：
 - raw dataset 场景下的 build 参数调优
 - raw dataset 场景下的 quantizer 调优
 - successive halving
-- budget enforcement
+- timeout、memory、working directory 等预算控制
 - Pareto frontier
 - public CLI/file request loading
 

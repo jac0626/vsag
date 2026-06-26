@@ -61,6 +61,7 @@ struct AutoTuningRequest {
     std::string index_name = "hgraph";
     std::string base_search_parameters;
     std::vector<uint64_t> ef_search_candidates;
+    uint64_t max_trials = 0;
     bool enable_build_parameter_tuning = false;
     bool enable_quantizer_tuning = false;
     bool enable_successive_halving = false;

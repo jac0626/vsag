@@ -93,6 +93,7 @@ EfSearchTuner::Tune(const EfSearchTuningRequest& request) const {
     const auto candidates = NormalizeCandidates(request.ef_search_candidates);
     const auto max_ef_search = MaxEfSearch(request.topk);
     uint64_t trial_id = 0;
+    uint64_t attempted_trials = 0;
 
     for (const auto ef_search : candidates) {
         EfSearchTrialResult trial;
@@ -117,6 +118,13 @@ EfSearchTuner::Tune(const EfSearchTuningRequest& request) const {
             report.trials.push_back(trial);
             continue;
         }
+        if (request.max_trials > 0 && attempted_trials >= request.max_trials) {
+            trial.status = TuningTrialStatus::SKIPPED;
+            trial.message = fmt::format("budget exceeded: max_trials = {}", request.max_trials);
+            report.trials.push_back(trial);
+            continue;
+        }
+        ++attempted_trials;
 
         EvaluationRequest evaluation_request;
         evaluation_request.index = request.index;

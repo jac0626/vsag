@@ -83,9 +83,10 @@ TEST_CASE("auto tuning api parses P0 json and serializes report", "[ut][tuning]"
     auto dataset = pool.GetDatasetAndCreate(16, 200, "l2");
     auto index = BuildHGraphIndex(dataset);
 
-    const auto request_json =
-        MakeValidRequestJson(static_cast<uint64_t>(dataset->top_k), 8, 0.95).dump();
-    auto parse_result = vsag::ParseAutoTuningRequestJson(request_json, MakeContext(index, dataset));
+    auto request = MakeValidRequestJson(static_cast<uint64_t>(dataset->top_k), 8, 0.95);
+    request["budget"] = {{"max_trials", 2}};
+    auto parse_result =
+        vsag::ParseAutoTuningRequestJson(request.dump(), MakeContext(index, dataset));
 
     REQUIRE(parse_result.Succeeded());
     REQUIRE(parse_result.request.index == index);
@@ -96,6 +97,7 @@ TEST_CASE("auto tuning api parses P0 json and serializes report", "[ut][tuning]"
     REQUIRE(parse_result.request.target_recall == 0.95);
     REQUIRE(parse_result.request.index_name == "hgraph");
     REQUIRE(parse_result.request.ef_search_candidates == std::vector<uint64_t>{0, 10, 20, 1201});
+    REQUIRE(parse_result.request.max_trials == 2);
 
     vsag::EfSearchTuner tuner([](const vsag::EvaluationRequest& request) {
         auto parameters = nlohmann::json::parse(request.search_parameters);
@@ -260,9 +262,9 @@ TEST_CASE("auto tuning api rejects unsupported P0 request fields", "[ut][tuning]
         REQUIRE(result.error_code == "unsupported_evaluation_option");
     }
 
-    SECTION("budget") {
+    SECTION("unsupported budget field") {
         auto request = MakeValidRequestJson(10, 8, 0.95);
-        request["budget"] = {{"max_trials", 2}};
+        request["budget"] = {{"timeout_seconds", 10}};
 
         const auto result = vsag::ParseAutoTuningRequestJson(request.dump(), context);
 

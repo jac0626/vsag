@@ -38,6 +38,7 @@ struct PocOptions {
     std::string source_type = "existing_index";
     uint64_t base_count = 0;
     uint64_t query_count = 0;
+    uint64_t max_trials = 0;
     uint64_t topk = 10;
     double target_recall = 0.80;
 };
@@ -68,7 +69,8 @@ PrintUsage(const char* binary) {
                  " --json-output /tmp/hgraph_auto_tuning_report.json\n"
               << "  " << binary
               << " --source-type raw_dataset"
-                 " --json-output /tmp/hgraph_auto_tuning_raw_report.json\n";
+                 " --json-output /tmp/hgraph_auto_tuning_raw_report.json\n"
+              << "  " << binary << " --max-trials 2\n";
 }
 
 uint64_t
@@ -106,6 +108,8 @@ ParseOptions(int argc, char** argv) {
             options.base_count = ParseUint64(require_value(arg), arg);
         } else if (arg == "--query-count") {
             options.query_count = ParseUint64(require_value(arg), arg);
+        } else if (arg == "--max-trials") {
+            options.max_trials = ParseUint64(require_value(arg), arg);
         } else if (arg == "--topk") {
             options.topk = ParseUint64(require_value(arg), arg);
         } else if (arg == "--target-recall") {
@@ -328,6 +332,9 @@ MakeAutoTuningRequestJson(const PocOptions& options, uint64_t dim) {
          {{"search", {{"hgraph.ef_search", {{"values", {0, 10, 20, 40, 80, 160, 320, 1201}}}}}}}},
         {"evaluation",
          {{"query_count", options.query_count}, {"successive_halving", {{"enabled", false}}}}}};
+    if (options.max_trials > 0) {
+        request["budget"] = {{"max_trials", options.max_trials}};
+    }
     if (options.source_type == "raw_dataset") {
         request["config"]["build_parameters"] =
             nlohmann::json::parse(MakeHGraphBuildParameters(dim));
@@ -416,6 +423,7 @@ PrintInput(const PocOptions& options, const DatasetBundle& bundle) {
     std::cout << "  dim=" << bundle.dim << std::endl;
     std::cout << "  topk=" << options.topk << std::endl;
     std::cout << "  target_recall=" << options.target_recall << std::endl;
+    std::cout << "  max_trials=" << options.max_trials << std::endl;
     std::cout << "  base_search_parameters={\"hgraph\":{\"factor\":2}}" << std::endl;
     std::cout << "  ef_search_candidates={0,10,20,40,80,160,320,1201}" << std::endl;
 }

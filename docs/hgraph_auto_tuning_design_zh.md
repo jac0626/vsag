@@ -378,6 +378,11 @@ cmake --build build --target hgraph_auto_tuning_poc --parallel 96
 ./build/examples/cpp/hgraph_auto_tuning_poc \
   --source-type raw_dataset \
   --json-output /tmp/hgraph_auto_tuning_raw_report.json
+
+# 只评估前 2 个合法 ef_search candidate，剩余合法 candidate 标记为 budget exceeded
+./build/examples/cpp/hgraph_auto_tuning_poc \
+  --max-trials 2 \
+  --json-output /tmp/hgraph_auto_tuning_budget_report.json
 ```
 
 该 POC 位于 `src/tuning/hgraph_auto_tuning_poc.cpp`。默认使用小型内存数据集；传入
@@ -389,6 +394,8 @@ cmake --build build --target hgraph_auto_tuning_poc --parallel 96
 `--source-type existing_index` 是默认值，表示 POC 在调用 tuning 前先构建存量索引；
 `--source-type raw_dataset` 表示通过内部 JSON API 层用 `config.build_parameters` 构建 baseline
 HGraph，然后复用同一条 `ef_search` tuning pipeline。
+`--max-trials` 对应 `budget.max_trials`，只限制合法 candidate 的实际评估次数；静态非法 candidate
+仍会被跳过并保留原始原因。
 等 tuning API 迁到 public header 后，再移动到正式 `examples/cpp/` 示例。
 
 当前 SIFT128 POC 验证结果：

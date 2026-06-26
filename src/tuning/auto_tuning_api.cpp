@@ -292,11 +292,6 @@ ParseVersion(const JsonType& root) {
 
 AutoTuningApiParseResult
 ParseUnsupportedRootControls(const JsonType& root) {
-    auto result = RejectPresentField(
-        root, "budget", "unsupported_budget", "P0 auto tuning does not support budget controls");
-    if (not result.Succeeded()) {
-        return result;
-    }
     return RejectPresentField(
         root, "output", "unsupported_output", "P0 auto tuning does not support output controls");
 }
@@ -543,6 +538,32 @@ ParseEvaluation(const JsonType& root, AutoTuningRequest& request) {
 }
 
 AutoTuningApiParseResult
+ParseBudget(const JsonType& root, AutoTuningRequest& request) {
+    if (not root.contains("budget") || root.at("budget").is_null()) {
+        return {};
+    }
+    if (not root.at("budget").is_object()) {
+        return InvalidArgument("invalid_field", "$.budget must be an object");
+    }
+
+    const auto& budget = root.at("budget");
+    if (budget.contains("max_trials")) {
+        auto result = ReadRequiredUint64(budget, "max_trials", "$.budget", request.max_trials);
+        if (not result.Succeeded()) {
+            return result;
+        }
+    }
+
+    for (const auto& item : budget.items()) {
+        if (item.key() == "max_trials" || item.value().is_null()) {
+            continue;
+        }
+        return Unsupported("unsupported_budget", "P0 auto tuning only supports budget.max_trials");
+    }
+    return {};
+}
+
+AutoTuningApiParseResult
 PrepareSource(SourceType source_type,
               const AutoTuningApiContext& context,
               const ParsedConfig& parsed_config,
@@ -640,6 +661,10 @@ ParseAutoTuningRequestJson(const std::string& request_json, const AutoTuningApiC
         return parse_result;
     }
     parse_result = ParseEvaluation(root, result.request);
+    if (not parse_result.Succeeded()) {
+        return parse_result;
+    }
+    parse_result = ParseBudget(root, result.request);
     if (not parse_result.Succeeded()) {
         return parse_result;
     }

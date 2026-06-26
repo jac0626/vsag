@@ -53,6 +53,7 @@ struct EfSearchTuningRequest {
     std::string index_name = "hgraph";
     std::string base_search_parameters;
     std::vector<uint64_t> ef_search_candidates;
+    uint64_t max_trials = 0;
 };
 
 struct EfSearchTuningReport {

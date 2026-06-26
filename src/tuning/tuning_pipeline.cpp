@@ -221,6 +221,7 @@ AutoTuningPipeline::Tune(const AutoTuningRequest& request) const {
     ef_request.index_name = request.index_name;
     ef_request.base_search_parameters = request.base_search_parameters;
     ef_request.ef_search_candidates = request.ef_search_candidates;
+    ef_request.max_trials = request.max_trials;
 
     report.ef_search = ef_search_tuner_.Tune(ef_request);
 
@@ -229,7 +230,7 @@ AutoTuningPipeline::Tune(const AutoTuningRequest& request) const {
         static_cast<uint64_t>(report.ef_search.trials.size()) - skipped_trials;
     report.stages.push_back(MakeStage(TuningStage::CANDIDATE_PRUNING,
                                       TuningStageStatus::COMPLETED,
-                                      "pruned invalid ef_search candidates",
+                                      "skipped invalid or budgeted ef_search candidates",
                                       static_cast<uint64_t>(report.ef_search.trials.size()),
                                       runnable_trials));
 

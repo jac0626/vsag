@@ -156,3 +156,33 @@ TEST_CASE("ef search tuner fails trials with invalid base search parameters", "[
     REQUIRE_FALSE(report.recommendation.has_value());
     REQUIRE_FALSE(report.best_effort.has_value());
 }
+
+TEST_CASE("ef search tuner skips runnable candidates after max trial budget", "[ut][tuning]") {
+    uint64_t evaluation_count = 0;
+    vsag::EfSearchTuner tuner([&evaluation_count](const vsag::EvaluationRequest&) {
+        ++evaluation_count;
+
+        vsag::EvaluationResult result;
+        result.recall.average = evaluation_count == 1 ? 0.50 : 0.95;
+        return result;
+    });
+
+    vsag::EfSearchTuningRequest request;
+    request.topk = 10;
+    request.target_recall = 0.90;
+    request.ef_search_candidates = {0, 10, 20, 40, 1201};
+    request.max_trials = 2;
+
+    const auto report = tuner.Tune(request);
+
+    REQUIRE(evaluation_count == 2);
+    REQUIRE(report.trials.size() == 5);
+    REQUIRE(report.trials[0].status == vsag::TuningTrialStatus::SKIPPED);
+    REQUIRE(report.trials[1].status == vsag::TuningTrialStatus::COMPLETED);
+    REQUIRE(report.trials[2].status == vsag::TuningTrialStatus::COMPLETED);
+    REQUIRE(report.trials[3].status == vsag::TuningTrialStatus::SKIPPED);
+    REQUIRE(report.trials[3].message == "budget exceeded: max_trials = 2");
+    REQUIRE(report.trials[4].status == vsag::TuningTrialStatus::SKIPPED);
+    REQUIRE(report.recommendation.has_value());
+    REQUIRE(report.recommendation->candidate.ef_search == 20);
+}
