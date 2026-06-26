@@ -55,8 +55,8 @@ struct TuningParameterSpace {
     std::vector<std::string> values;
 };
 
-// P0 internal request for HGraph existing-index ef_search tuning.
-// The caller owns index construction and ground-truth preparation.
+// Internal request for HGraph V1 skeleton tuning.
+// The caller owns input object lifetime and ground-truth preparation.
 struct AutoTuningRequest {
     IndexPtr index = nullptr;
     DatasetPtr base = nullptr;
@@ -98,13 +98,15 @@ struct AutoTuningRequestSummary {
     bool enable_successive_halving = false;
 };
 
-// P0 internal report. elapsed_ms covers AutoTuningPipeline::Tune() only.
+// Internal report. elapsed_ms covers AutoTuningPipeline::Tune() only.
 struct AutoTuningReport {
     AutoTuningRequestSummary request;
     std::vector<TuningStageResult> stages;
+    TuningTrialReport trial_report;
+    // Compatibility mirror for the original search-only report field.
     EfSearchTuningReport ef_search;
-    std::optional<EfSearchTrialResult> recommendation;
-    std::optional<EfSearchTrialResult> best_effort;
+    std::optional<TuningTrialResult> recommendation;
+    std::optional<TuningTrialResult> best_effort;
     double elapsed_ms = 0.0;
 
     [[nodiscard]] bool
@@ -124,7 +126,7 @@ struct TuningState {
     AutoTuningRequest request;
     AutoTuningReport report;
     std::vector<TuningCandidate> candidates;
-    EfSearchTuningReport ef_search;
+    TuningTrialReport trial_report;
     bool should_stop = false;
 };
 

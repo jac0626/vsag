@@ -125,6 +125,7 @@ TEST_CASE("auto tuning pipeline runs all P0 stages with explicit skipped stages"
     REQUIRE(report.stages[7].status == vsag::TuningStageStatus::COMPLETED);
     REQUIRE(report.recommendation.has_value());
     REQUIRE(report.best_effort.has_value());
+    REQUIRE(report.ef_search.trials.size() == report.trial_report.trials.size());
 }
 
 TEST_CASE("auto tuning pipeline fails early for invalid workloads", "[ut][tuning]") {
@@ -275,8 +276,8 @@ TEST_CASE("auto tuning pipeline executes HGraph rebuild candidates", "[ut][tunin
     REQUIRE(report.stages[5].output_count == 2);
     REQUIRE(report.stages[7].stage == vsag::TuningStage::TRIAL_EXECUTION);
     REQUIRE(report.stages[7].status == vsag::TuningStageStatus::COMPLETED);
-    REQUIRE(report.ef_search.trials.size() == 2);
-    REQUIRE(report.ef_search.trials[0].candidate.patches.size() == 3);
+    REQUIRE(report.trial_report.trials.size() == 2);
+    REQUIRE(report.trial_report.trials[0].candidate.patches.size() == 3);
     REQUIRE(report.recommendation.has_value());
     REQUIRE(report.recommendation->candidate.ef_search == 20);
 }
@@ -385,8 +386,8 @@ TEST_CASE("auto tuning pipeline marks trial execution failure", "[ut][tuning]") 
     REQUIRE(report.stages.size() == 8);
     REQUIRE(report.stages[7].stage == vsag::TuningStage::TRIAL_EXECUTION);
     REQUIRE(report.stages[7].status == vsag::TuningStageStatus::FAILED);
-    REQUIRE(report.ef_search.trials.size() == 1);
-    REQUIRE(report.ef_search.trials[0].status == vsag::TuningTrialStatus::FAILED);
+    REQUIRE(report.trial_report.trials.size() == 1);
+    REQUIRE(report.trial_report.trials[0].status == vsag::TuningTrialStatus::FAILED);
 }
 
 TEST_CASE("auto tuning pipeline propagates max trial budget", "[ut][tuning]") {
@@ -417,10 +418,10 @@ TEST_CASE("auto tuning pipeline propagates max trial budget", "[ut][tuning]") {
 
     REQUIRE(report.Succeeded());
     REQUIRE(evaluation_count == 1);
-    REQUIRE(report.ef_search.trials.size() == 2);
-    REQUIRE(report.ef_search.trials[0].status == vsag::TuningTrialStatus::COMPLETED);
-    REQUIRE(report.ef_search.trials[1].status == vsag::TuningTrialStatus::SKIPPED);
-    REQUIRE(report.ef_search.trials[1].message == "budget exceeded: max_trials = 1");
+    REQUIRE(report.trial_report.trials.size() == 2);
+    REQUIRE(report.trial_report.trials[0].status == vsag::TuningTrialStatus::COMPLETED);
+    REQUIRE(report.trial_report.trials[1].status == vsag::TuningTrialStatus::SKIPPED);
+    REQUIRE(report.trial_report.trials[1].message == "budget exceeded: max_trials = 1");
     REQUIRE(report.stages[5].stage == vsag::TuningStage::CANDIDATE_PRUNING);
     REQUIRE(report.stages[5].output_count == 1);
     REQUIRE(report.stages[6].stage == vsag::TuningStage::TRIAL_PLANNING);

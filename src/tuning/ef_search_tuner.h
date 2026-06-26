@@ -36,18 +36,28 @@ struct TuningParameterPatch {
     std::string value;
 };
 
-struct EfSearchCandidate {
+struct TuningCandidateReport {
     uint64_t ef_search = 0;
     std::vector<TuningParameterPatch> patches;
 };
 
-struct EfSearchTrialResult {
+struct TuningTrialResult {
     uint64_t trial_id = 0;
-    EfSearchCandidate candidate;
+    TuningCandidateReport candidate;
     TuningTrialStatus status = TuningTrialStatus::COMPLETED;
     std::string message;
     EvaluationResult evaluation;
 };
+
+struct TuningTrialReport {
+    std::vector<TuningTrialResult> trials;
+    std::optional<TuningTrialResult> recommendation;
+    std::optional<TuningTrialResult> best_effort;
+};
+
+using EfSearchCandidate = TuningCandidateReport;
+using EfSearchTrialResult = TuningTrialResult;
+using EfSearchTuningReport = TuningTrialReport;
 
 struct EfSearchTuningRequest {
     IndexPtr index = nullptr;
@@ -60,12 +70,6 @@ struct EfSearchTuningRequest {
     std::string base_search_parameters;
     std::vector<uint64_t> ef_search_candidates;
     uint64_t max_trials = 0;
-};
-
-struct EfSearchTuningReport {
-    std::vector<EfSearchTrialResult> trials;
-    std::optional<EfSearchTrialResult> recommendation;
-    std::optional<EfSearchTrialResult> best_effort;
 };
 
 class EfSearchTuner {

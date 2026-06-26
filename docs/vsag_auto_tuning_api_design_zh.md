@@ -1317,7 +1317,7 @@ P0 的成功条件：
 
 ## 19. 当前实现子集
 
-当前代码中的 `AutoTuningRequest` 是上面长期 API 的 HGraph P0 子集：
+当前代码中的 `AutoTuningRequest` 是上面长期 API 的 HGraph V1 skeleton 子集：
 
 ```cpp
 struct AutoTuningRequest {
@@ -1340,6 +1340,21 @@ struct AutoTuningRequest {
     bool enable_build_parameter_tuning;
     bool enable_quantizer_tuning;
     bool enable_successive_halving;
+};
+```
+
+当前代码中的 `AutoTuningReport` 已经使用通用 trial report 承载 search/build/quantizer 候选；
+`ef_search` 字段作为早期 search-only 路径的兼容镜像保留：
+
+```cpp
+struct AutoTuningReport {
+    AutoTuningRequestSummary request;
+    std::vector<TuningStageResult> stages;
+    TuningTrialReport trial_report;
+    EfSearchTuningReport ef_search;  // compatibility mirror
+    std::optional<TuningTrialResult> recommendation;
+    std::optional<TuningTrialResult> best_effort;
+    double elapsed_ms;
 };
 ```
 
@@ -1451,7 +1466,7 @@ V1 skeleton JSON parser 当前接受但 stage 仍可能报告运行期失败的�
 - 如果 request 声明 build/quantizer tuning，但没有 `AutoTuningApiContext::base` 或没有
   `config.build_parameters`，trial execution 会失败并给出明确原因。
 
-P0 已实现：
+当前 HGraph V1 skeleton 已实现：
 
 - `index_type = hgraph` 的特化路径
 - `existing_index` + `IndexPtr`
@@ -1470,6 +1485,7 @@ P0 已实现：
 - raw dataset 或 existing index + base 场景下的 build candidate rebuild/evaluate
 - raw dataset 或 existing index + base 场景下的 quantizer candidate rebuild/evaluate
 - trial candidate 输出完整 `parameters_patch`
+- `trial_report` 作为通用 trial 输出，`ef_search` 作为兼容镜像
 - selection stage：在满足 recall 的候选中按 latency 计算 recommendation，并计算 best effort
 - stage report
 - trial report
@@ -1477,10 +1493,10 @@ P0 已实现：
 - tuning elapsed time
 - recommendation
 - best effort
-- P0 JSON request parser
+- V1 skeleton JSON request parser
 - P0 request prepare 层
 - planner-driven V1 stage skeleton
-- P0 JSON report serializer
+- V1 skeleton JSON report serializer
 - 内部 POC target：`hgraph_auto_tuning_poc`
 - 内部 POC `--request-json` 文件入口和示例 request
 

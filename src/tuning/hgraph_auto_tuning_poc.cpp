@@ -615,7 +615,7 @@ PrintStages(const vsag::AutoTuningReport& report) {
 }
 
 std::string
-CandidateDescription(const vsag::EfSearchCandidate& candidate) {
+CandidateDescription(const vsag::TuningCandidateReport& candidate) {
     nlohmann::json result = nlohmann::json::object();
     for (const auto& patch : candidate.patches) {
         try {
@@ -633,7 +633,7 @@ CandidateDescription(const vsag::EfSearchCandidate& candidate) {
 void
 PrintTrials(const vsag::AutoTuningReport& report) {
     std::cout << "\nTrial report:" << std::endl;
-    for (const auto& trial : report.ef_search.trials) {
+    for (const auto& trial : report.trial_report.trials) {
         std::cout << "  trial=" << trial.trial_id
                   << " candidate=" << CandidateDescription(trial.candidate)
                   << " status=" << TrialStatusName(trial.status);

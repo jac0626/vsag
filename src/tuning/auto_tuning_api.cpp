@@ -238,7 +238,7 @@ ParseJsonForReport(const std::string& value) {
 }
 
 JsonType
-CandidateToJson(const EfSearchCandidate& candidate) {
+CandidateToJson(const TuningCandidateReport& candidate) {
     JsonType result = JsonType::object();
     for (const auto& patch : candidate.patches) {
         result[patch.path] = ParseJsonForReport(patch.value);
@@ -250,7 +250,7 @@ CandidateToJson(const EfSearchCandidate& candidate) {
 }
 
 JsonType
-SearchPatchToJson(const EfSearchCandidate& candidate) {
+SearchPatchToJson(const TuningCandidateReport& candidate) {
     JsonType result = JsonType::object();
     for (const auto& patch : candidate.patches) {
         if (patch.path == "hgraph.ef_search") {
@@ -337,7 +337,7 @@ EvaluationToJson(const EvaluationResult& evaluation) {
 }
 
 JsonType
-TrialToJson(const EfSearchTrialResult& trial) {
+TrialToJson(const TuningTrialResult& trial) {
     return JsonType{{"trial_id", trial.trial_id},
                     {"candidate", CandidateToJson(trial.candidate)},
                     {"parameters_patch", CandidateToJson(trial.candidate)},
@@ -873,7 +873,7 @@ SerializeAutoTuningReportJson(const AutoTuningReport& report) {
     }
 
     JsonType trials = JsonType::array();
-    for (const auto& trial : report.ef_search.trials) {
+    for (const auto& trial : report.trial_report.trials) {
         trials.push_back(TrialToJson(trial));
     }
 

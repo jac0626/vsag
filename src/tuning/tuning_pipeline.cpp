@@ -53,7 +53,7 @@ HasFailedStage(const std::vector<TuningStageResult>& stages) {
 }
 
 uint64_t
-CountTrials(const EfSearchTuningReport& report, TuningTrialStatus status) {
+CountTrials(const TuningTrialReport& report, TuningTrialStatus status) {
     return static_cast<uint64_t>(
         std::count_if(report.trials.begin(), report.trials.end(), [status](const auto& trial) {
             return trial.status == status;
@@ -158,7 +158,7 @@ MakeSearchParameters(const std::string& base_search_parameters,
 }
 
 bool
-IsLowerCostTrial(const EfSearchTrialResult& lhs, const EfSearchTrialResult& rhs) {
+IsLowerCostTrial(const TuningTrialResult& lhs, const TuningTrialResult& rhs) {
     if (lhs.evaluation.latency.average_ms != rhs.evaluation.latency.average_ms) {
         return lhs.evaluation.latency.average_ms < rhs.evaluation.latency.average_ms;
     }
@@ -169,7 +169,7 @@ IsLowerCostTrial(const EfSearchTrialResult& lhs, const EfSearchTrialResult& rhs)
 }
 
 bool
-IsBetterBestEffort(const EfSearchTrialResult& lhs, const EfSearchTrialResult& rhs) {
+IsBetterBestEffort(const TuningTrialResult& lhs, const TuningTrialResult& rhs) {
     if (lhs.evaluation.recall.average != rhs.evaluation.recall.average) {
         return lhs.evaluation.recall.average > rhs.evaluation.recall.average;
     }
@@ -465,17 +465,17 @@ BuildCandidateIndex(const std::string& index_name,
     return index.value();
 }
 
-EfSearchTuningReport
+TuningTrialReport
 PlanEfSearchTrials(const AutoTuningRequest& request,
                    const std::vector<TuningCandidate>& candidates) {
-    EfSearchTuningReport report;
+    TuningTrialReport report;
     const auto ef_search_candidates = ExtractEfSearchCandidates(candidates);
     const auto max_ef_search = MaxEfSearch(request.topk);
     uint64_t trial_id = 0;
     uint64_t attempted_trials = 0;
 
     for (const auto ef_search : ef_search_candidates) {
-        EfSearchTrialResult trial;
+        TuningTrialResult trial;
         trial.trial_id = trial_id++;
         trial.candidate.ef_search = ef_search;
         trial.candidate.patches.push_back({"hgraph.ef_search", std::to_string(ef_search)});
@@ -511,16 +511,16 @@ PlanEfSearchTrials(const AutoTuningRequest& request,
     return report;
 }
 
-EfSearchTuningReport
+TuningTrialReport
 PlanFullCandidateTrials(const AutoTuningRequest& request,
                         const std::vector<TuningCandidate>& candidates) {
-    EfSearchTuningReport report;
+    TuningTrialReport report;
     const auto max_ef_search = MaxEfSearch(request.topk);
     uint64_t trial_id = 0;
     uint64_t attempted_trials = 0;
 
     for (const auto& candidate : candidates) {
-        EfSearchTrialResult trial;
+        TuningTrialResult trial;
         trial.trial_id = trial_id++;
         trial.candidate.patches = candidate.patches;
 
@@ -703,11 +703,11 @@ public:
             return;
         }
         if (state.request.enable_build_parameter_tuning || state.request.enable_quantizer_tuning) {
-            state.ef_search = PlanFullCandidateTrials(state.request, state.candidates);
-            state.report.ef_search = state.ef_search;
-            const auto skipped_trials = CountTrials(state.ef_search, TuningTrialStatus::SKIPPED);
-            const auto failed_trials = CountTrials(state.ef_search, TuningTrialStatus::FAILED);
-            const auto runnable_trials = static_cast<uint64_t>(state.ef_search.trials.size()) -
+            state.trial_report = PlanFullCandidateTrials(state.request, state.candidates);
+            state.report.trial_report = state.trial_report;
+            const auto skipped_trials = CountTrials(state.trial_report, TuningTrialStatus::SKIPPED);
+            const auto failed_trials = CountTrials(state.trial_report, TuningTrialStatus::FAILED);
+            const auto runnable_trials = static_cast<uint64_t>(state.trial_report.trials.size()) -
                                          skipped_trials - failed_trials;
             state.report.stages.push_back(
                 MakeStage(Stage(),
@@ -717,17 +717,17 @@ public:
                           runnable_trials));
             return;
         }
-        state.ef_search = PlanEfSearchTrials(state.request, state.candidates);
-        state.report.ef_search = state.ef_search;
+        state.trial_report = PlanEfSearchTrials(state.request, state.candidates);
+        state.report.trial_report = state.trial_report;
 
-        const auto skipped_trials = CountTrials(state.ef_search, TuningTrialStatus::SKIPPED);
+        const auto skipped_trials = CountTrials(state.trial_report, TuningTrialStatus::SKIPPED);
         const auto runnable_trials =
-            static_cast<uint64_t>(state.ef_search.trials.size()) - skipped_trials;
+            static_cast<uint64_t>(state.trial_report.trials.size()) - skipped_trials;
         state.report.stages.push_back(
             MakeStage(Stage(),
                       TuningStageStatus::COMPLETED,
                       "skipped invalid or budgeted ef_search candidates",
-                      static_cast<uint64_t>(state.ef_search.trials.size()),
+                      static_cast<uint64_t>(state.trial_report.trials.size()),
                       runnable_trials));
     }
 };
@@ -749,9 +749,9 @@ public:
         }
 
         if (state.request.enable_build_parameter_tuning || state.request.enable_quantizer_tuning) {
-            const auto skipped_trials = CountTrials(state.ef_search, TuningTrialStatus::SKIPPED);
-            const auto failed_trials = CountTrials(state.ef_search, TuningTrialStatus::FAILED);
-            const auto runnable_trials = static_cast<uint64_t>(state.ef_search.trials.size()) -
+            const auto skipped_trials = CountTrials(state.trial_report, TuningTrialStatus::SKIPPED);
+            const auto failed_trials = CountTrials(state.trial_report, TuningTrialStatus::FAILED);
+            const auto runnable_trials = static_cast<uint64_t>(state.trial_report.trials.size()) -
                                          skipped_trials - failed_trials;
             state.report.stages.push_back(MakeStage(Stage(),
                                                     TuningStageStatus::COMPLETED,
@@ -761,9 +761,9 @@ public:
             return;
         }
 
-        const auto skipped_trials = CountTrials(state.ef_search, TuningTrialStatus::SKIPPED);
+        const auto skipped_trials = CountTrials(state.trial_report, TuningTrialStatus::SKIPPED);
         const auto runnable_trials =
-            static_cast<uint64_t>(state.ef_search.trials.size()) - skipped_trials;
+            static_cast<uint64_t>(state.trial_report.trials.size()) - skipped_trials;
         state.report.stages.push_back(MakeStage(Stage(),
                                                 TuningStageStatus::COMPLETED,
                                                 "using single-round full evaluation",
@@ -793,7 +793,7 @@ public:
             return;
         }
 
-        for (auto& trial : state.ef_search.trials) {
+        for (auto& trial : state.trial_report.trials) {
             if (trial.status == TuningTrialStatus::SKIPPED) {
                 continue;
             }
@@ -821,13 +821,13 @@ public:
                 trial.message = trial.evaluation.error_message;
             }
         }
-        state.report.ef_search = state.ef_search;
+        state.report.trial_report = state.trial_report;
 
-        const auto skipped_trials = CountTrials(state.ef_search, TuningTrialStatus::SKIPPED);
+        const auto skipped_trials = CountTrials(state.trial_report, TuningTrialStatus::SKIPPED);
         const auto runnable_trials =
-            static_cast<uint64_t>(state.ef_search.trials.size()) - skipped_trials;
-        const auto completed_trials = CountTrials(state.ef_search, TuningTrialStatus::COMPLETED);
-        const auto failed_trials = CountTrials(state.ef_search, TuningTrialStatus::FAILED);
+            static_cast<uint64_t>(state.trial_report.trials.size()) - skipped_trials;
+        const auto completed_trials = CountTrials(state.trial_report, TuningTrialStatus::COMPLETED);
+        const auto failed_trials = CountTrials(state.trial_report, TuningTrialStatus::FAILED);
         state.report.stages.push_back(
             MakeStage(Stage(),
                       failed_trials > 0 ? TuningStageStatus::FAILED : TuningStageStatus::COMPLETED,
@@ -859,7 +859,7 @@ private:
             return;
         }
 
-        for (auto& trial : state.ef_search.trials) {
+        for (auto& trial : state.trial_report.trials) {
             if (trial.status == TuningTrialStatus::SKIPPED ||
                 trial.status == TuningTrialStatus::FAILED) {
                 continue;
@@ -907,13 +907,13 @@ private:
                 trial.message = trial.evaluation.error_message;
             }
         }
-        state.report.ef_search = state.ef_search;
+        state.report.trial_report = state.trial_report;
 
-        const auto skipped_trials = CountTrials(state.ef_search, TuningTrialStatus::SKIPPED);
+        const auto skipped_trials = CountTrials(state.trial_report, TuningTrialStatus::SKIPPED);
         const auto runnable_trials =
-            static_cast<uint64_t>(state.ef_search.trials.size()) - skipped_trials;
-        const auto completed_trials = CountTrials(state.ef_search, TuningTrialStatus::COMPLETED);
-        const auto failed_trials = CountTrials(state.ef_search, TuningTrialStatus::FAILED);
+            static_cast<uint64_t>(state.trial_report.trials.size()) - skipped_trials;
+        const auto completed_trials = CountTrials(state.trial_report, TuningTrialStatus::COMPLETED);
+        const auto failed_trials = CountTrials(state.trial_report, TuningTrialStatus::FAILED);
         state.report.stages.push_back(
             MakeStage(Stage(),
                       failed_trials > 0 ? TuningStageStatus::FAILED : TuningStageStatus::COMPLETED,
@@ -935,26 +935,26 @@ public:
 
     void
     Run(TuningState& state, const TuningStageRuntime&) const override {
-        state.ef_search.recommendation.reset();
-        state.ef_search.best_effort.reset();
-        for (const auto& trial : state.ef_search.trials) {
+        state.trial_report.recommendation.reset();
+        state.trial_report.best_effort.reset();
+        for (const auto& trial : state.trial_report.trials) {
             if (trial.status != TuningTrialStatus::COMPLETED) {
                 continue;
             }
-            if (not state.ef_search.best_effort.has_value() ||
-                IsBetterBestEffort(trial, state.ef_search.best_effort.value())) {
-                state.ef_search.best_effort = trial;
+            if (not state.trial_report.best_effort.has_value() ||
+                IsBetterBestEffort(trial, state.trial_report.best_effort.value())) {
+                state.trial_report.best_effort = trial;
             }
             if (trial.evaluation.recall.average >= state.request.target_recall &&
-                (not state.ef_search.recommendation.has_value() ||
-                 IsLowerCostTrial(trial, state.ef_search.recommendation.value()))) {
-                state.ef_search.recommendation = trial;
+                (not state.trial_report.recommendation.has_value() ||
+                 IsLowerCostTrial(trial, state.trial_report.recommendation.value()))) {
+                state.trial_report.recommendation = trial;
             }
         }
 
-        state.report.ef_search = state.ef_search;
-        state.report.recommendation = state.ef_search.recommendation;
-        state.report.best_effort = state.ef_search.best_effort;
+        state.report.trial_report = state.trial_report;
+        state.report.recommendation = state.trial_report.recommendation;
+        state.report.best_effort = state.trial_report.best_effort;
         state.report.stages.push_back(MakeStage(
             Stage(),
             state.report.recommendation.has_value() ? TuningStageStatus::COMPLETED
@@ -1012,6 +1012,10 @@ AutoTuningPipeline::Tune(const AutoTuningRequest& request) const {
         stage->Run(state, runtime);
     }
 
+    state.report.trial_report = state.trial_report;
+    state.report.ef_search = state.trial_report;
+    state.report.recommendation = state.trial_report.recommendation;
+    state.report.best_effort = state.trial_report.best_effort;
     state.report.elapsed_ms = ElapsedMs(started_at);
     return state.report;
 }
