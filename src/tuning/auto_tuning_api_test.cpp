@@ -205,7 +205,7 @@ TEST_CASE("auto tuning api builds baseline hgraph for raw dataset P0 request", "
     REQUIRE(report_json["request"]["evaluation"]["effective_query_count"].get<uint64_t>() == 8);
 }
 
-TEST_CASE("auto tuning api rejects unsupported P0 request fields", "[ut][tuning]") {
+TEST_CASE("auto tuning api validates request fields", "[ut][tuning]") {
     SECTION("raw dataset source without build parameters") {
         auto request = MakeValidRequestJson(10, 8, 0.95);
         request["source"]["type"] = "raw_dataset";
@@ -233,16 +233,16 @@ TEST_CASE("auto tuning api rejects unsupported P0 request fields", "[ut][tuning]
         REQUIRE(result.error_code == "invalid_context");
     }
 
-    SECTION("existing index source with build parameters") {
+    SECTION("existing index source accepts build parameters as rebuild metadata") {
         auto request = MakeValidRequestJson(10, 8, 0.95);
         request["config"]["build_parameters"] =
             nlohmann::json::parse(MakeHGraphBuildParameters(16));
 
         const auto result = vsag::ParseAutoTuningRequestJson(request.dump());
 
-        REQUIRE_FALSE(result.Succeeded());
-        REQUIRE(result.status == vsag::AutoTuningApiStatus::UNSUPPORTED);
-        REQUIRE(result.error_code == "unsupported_config");
+        REQUIRE(result.Succeeded());
+        REQUIRE(nlohmann::json::parse(result.request.build_parameters)["dim"].get<uint64_t>() ==
+                16);
     }
 
     SECTION("non hgraph index type") {
@@ -256,15 +256,25 @@ TEST_CASE("auto tuning api rejects unsupported P0 request fields", "[ut][tuning]
         REQUIRE(result.error_code == "unsupported_index_type");
     }
 
-    SECTION("build search space") {
+    SECTION("build search space enters V1 skeleton stage") {
         auto request = MakeValidRequestJson(10, 8, 0.95);
         request["search_space"]["build"] = {{"hgraph.max_degree", {{"values", {16, 32}}}}};
 
         const auto result = vsag::ParseAutoTuningRequestJson(request.dump());
 
-        REQUIRE_FALSE(result.Succeeded());
-        REQUIRE(result.status == vsag::AutoTuningApiStatus::UNSUPPORTED);
-        REQUIRE(result.error_code == "unsupported_search_space");
+        REQUIRE(result.Succeeded());
+        REQUIRE(result.request.enable_build_parameter_tuning);
+    }
+
+    SECTION("quantizer search space enters V1 skeleton stage") {
+        auto request = MakeValidRequestJson(10, 8, 0.95);
+        request["search_space"]["quantizer"] = {
+            {"hgraph.base_quantization_type", {{"values", {"fp32", "sq8_uniform"}}}}};
+
+        const auto result = vsag::ParseAutoTuningRequestJson(request.dump());
+
+        REQUIRE(result.Succeeded());
+        REQUIRE(result.request.enable_quantizer_tuning);
     }
 
     SECTION("non hgraph parameter path") {
@@ -278,15 +288,14 @@ TEST_CASE("auto tuning api rejects unsupported P0 request fields", "[ut][tuning]
         REQUIRE(result.error_code == "unsupported_parameter");
     }
 
-    SECTION("successive halving") {
+    SECTION("successive halving enters V1 skeleton stage") {
         auto request = MakeValidRequestJson(10, 8, 0.95);
         request["evaluation"]["successive_halving"]["enabled"] = true;
 
         const auto result = vsag::ParseAutoTuningRequestJson(request.dump());
 
-        REQUIRE_FALSE(result.Succeeded());
-        REQUIRE(result.status == vsag::AutoTuningApiStatus::UNSUPPORTED);
-        REQUIRE(result.error_code == "unsupported_evaluation_strategy");
+        REQUIRE(result.Succeeded());
+        REQUIRE(result.request.enable_successive_halving);
     }
 
     SECTION("warmup query count") {

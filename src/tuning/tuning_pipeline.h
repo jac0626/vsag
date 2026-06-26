@@ -15,6 +15,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <string>
 #include <vector>
@@ -96,6 +97,53 @@ struct AutoTuningReport {
 
     [[nodiscard]] bool
     Succeeded() const;
+};
+
+struct TuningParameterPatch {
+    std::string path;
+    std::string value;
+};
+
+struct TuningCandidate {
+    uint64_t id = 0;
+    std::string index_name = "hgraph";
+    std::string source_type = "existing_index";
+    std::string build_parameters;
+    std::string search_parameters;
+    std::vector<TuningParameterPatch> patches;
+};
+
+struct TuningState {
+    AutoTuningRequest request;
+    AutoTuningReport report;
+    std::vector<TuningCandidate> candidates;
+    EfSearchTuningReport ef_search;
+    bool should_stop = false;
+};
+
+struct TuningStageRuntime {
+    const EfSearchTuner* ef_search_tuner = nullptr;
+};
+
+class TuningStageExecutor {
+public:
+    virtual ~TuningStageExecutor() = default;
+
+    [[nodiscard]] virtual TuningStage
+    Stage() const = 0;
+
+    virtual void
+    Run(TuningState& state, const TuningStageRuntime& runtime) const = 0;
+};
+
+struct TuningPlan {
+    std::vector<std::unique_ptr<TuningStageExecutor>> stages;
+};
+
+class AutoTuningPlanner {
+public:
+    [[nodiscard]] TuningPlan
+    Plan(const AutoTuningRequest& request) const;
 };
 
 class AutoTuningPipeline {

@@ -3,15 +3,15 @@
 > 状态：讨论草案。
 >
 > 本文档专注于自动调优框架的 API 输入输出模型。它不是最终用户手册；功能稳定后，应同步到
-> `docs/docs/{en,zh}/src/`。当前实现只覆盖本文档的 P0 子集：HGraph 存量索引的
-> `ef_search` 调优。
+> `docs/docs/{en,zh}/src/`。当前实现正在从 HGraph `ef_search` P0 演进到 V1 framework
+> skeleton：先把完整自动化链路和 stage/planner 边界落下来，再逐步优化调优效率。
 
 ## 1. 设计目标
 
 自动调优 API 需要同时支持两类入口：
 
-1. **存量索引调优**：用户已经有一个构建好的索引，主要调 search-time 参数，例如
-   `ef_search`。
+1. **存量索引调优**：用户已经有一个构建好的索引，可以直接调 search-time 参数；如果调用方还
+   提供 raw vector/base dataset 或索引自身支持重建/重量化能力，也可以调 build/quantizer 参数。
 2. **原始数据集调优**：用户提供 base dataset，框架可以构建多个候选索引，用于调 build 参数、
    quantizer 和 search 参数。
 
@@ -27,12 +27,14 @@ TuningRequest
         +-- base dataset or dataset path
 ```
 
-`source.type` 决定 pipeline 可以做什么。
+`source.type` 只描述用户提供的入口形态，不能单独决定 pipeline 可以做什么。真正的能力取决于
+`source.type`、`AutoTuningApiContext` 中是否有 base/raw vectors、索引本身能力、以及 backend
+是否支持对应参数空间。
 
-| Source | 主要用途 | 可调参数 | 注意事项 |
-| --- | --- | --- | --- |
-| `existing_index` | 存量索引 search 调优、线上回归 | search/runtime | 默认不 rebuild；build/quantizer 仅作元信息。 |
-| `raw_dataset` | 完整调优、离线探索、构建新索引 | build、quantizer、search/runtime 参数 | 需要 base dataset；成本更高。 |
+| Source | 主要用途 | 默认可调参数 | 扩展能力 | 注意事项 |
+| --- | --- | --- | --- | --- |
+| `existing_index` | 存量索引 search 调优、线上回归 | search/runtime | 如果有 rebuild source，可调 build/quantizer | baseline index 可作对照；不能因为 source 是 existing 就拒绝 rebuild 调优。 |
+| `raw_dataset` | 完整调优、离线探索、构建新索引 | build、quantizer、search/runtime | 无 baseline index 时每个候选都从 base 构建 | 成本更高。 |
 
 同时，VSAG 不只有 HGraph。完整 API 必须把 **索引类型** 作为一等概念，并明确列出支持范围：
 
@@ -48,6 +50,81 @@ TuningRequest
 
 不同索引类型的参数空间、合法性检查、候选生成策略、可应用方式都不同。API schema 可以统一，但
 执行时必须通过 `index_type` 路由到对应的 tuner backend。
+
+### 1.1 V1 Framework Skeleton 目标
+
+V1 的产品目标是 **自动化代替手工调参**，不是先解决调参速度。用户手工调参本来就需要反复改
+配置、build、跑 query、汇总指标；V1 先把这些步骤自动串起来，即使内部使用暴力枚举，也已经
+能降低手工成本。
+
+V1 明确采用 exhaustive enumeration：
+
+```text
+config = 用户提供的 fixed/baseline 参数
+search_space = 用户声明需要自动调的参数
+未出现在 search_space 的参数 = 从 config 继承，不调
+出现在 search_space 的参数 = 枚举 values
+多个参数组 = 朴素笛卡尔组合
+```
+
+因此 V1 不承诺快：
+
+- 不做智能 pruning。
+- 不做 Bayesian/learned search。
+- 不做 successive halving。
+- 不做跨 trial 的复杂构建缓存，最多做安全的去重。
+- raw dataset 或 existing index + base 场景下，build/quantizer candidate 可以触发多次 rebuild。
+
+V1 的验收标准是：
+
+1. 用户可以用 request 描述 build、quantizer、search 参数空间的任意子集。
+2. 框架只枚举 `search_space` 中声明的参数，未声明参数固定继承 `config`。
+3. 框架自动执行 candidate generation、基础合法性检查、trial execution、selection、report。
+4. 所有 completed、skipped、failed trial 都进入报告。
+5. 现有 HGraph `ef_search` 路径保持兼容。
+
+### 1.2 Stage/Planner 主干
+
+自动调优框架采用 planner-driven stage pipeline：
+
+```text
+Parse Request
+  -> Prepare Context
+  -> Planner 生成 TuningPlan
+  -> Pipeline 顺序执行 Stage
+  -> Report Builder 输出 AutoTuningReport/JSON
+```
+
+Pipeline 中流动的是 `TuningState`，其中包含 request、context、candidate set、trial set、stage
+results 和最终选择结果。每个 stage 统一遵守：
+
+```text
+TuningState in -> TuningState out
+```
+
+这样做的收益是：
+
+- 每个 stage 可以单独优化或替换。
+- 一个粗粒度 stage 后续可以拆成多个细粒度 stage，不影响 pipeline executor。
+- 不同 index backend 可以由 planner 组装不同 stage list。
+- V1 可以先使用暴力枚举 stage，后续替换为剪枝、successive halving 或其他优化 stage。
+
+V1 先使用线性 plan，不做 DAG：
+
+```text
+WorkloadValidationStage
+SearchSpaceConstructionStage
+BuildParameterTuningStage
+QuantizerTuningStage
+CandidateGenerationStage
+CandidatePruningStage
+TrialPlanningStage
+TrialExecutionStage
+SelectionStage
+```
+
+这些 stage 在 V1 skeleton 中都应该是真实的 stage 对象。当前未实现优化能力的 stage 可以输出
+`skipped` 或默认透传；但 framework 链路必须完整。
 
 ## 2. 顶层 Request Schema
 
@@ -182,19 +259,22 @@ sindi.query_prune_ratio
 | 职责 | 说明 |
 | --- | --- |
 | `ValidateSearchSpace` | 判断用户给的参数路径是否属于该索引，候选值是否合法。 |
-| `GenerateCandidates` | 从 search space 生成 typed candidates。 |
-| `PruneCandidate` | 做静态剪枝，例如范围、参数组合冲突、source 能力不满足。 |
+| `PlanStages` | 根据 index type、source capability、search space 和 budget 组装 stage list。 |
+| `GenerateCandidates` | 从 search space 生成 typed candidates；V1 使用显式 values 的笛卡尔枚举。 |
+| `ValidateCandidate` | 做静态合法性检查，例如范围、参数组合冲突、source 能力不满足。 |
 | `ApplyCandidate` | 把 candidate 应用到 search params、`Index::Tune()` 或 rebuild 参数。 |
-| `EvaluateCandidate` | 可复用通用 evaluator，也可补充索引特定指标。 |
-| `SelectRecommendation` | 使用通用 recommender 或索引特定 tie-breaker。 |
+| `EvaluateCandidate` | 复用通用 evaluator，也可补充索引特定指标。 |
+| `SelectRecommendation` | 使用通用 selector 或索引特定 tie-breaker。 |
 
-P0 可以先把这些职责折叠在 HGraph `ef_search` tuner 内部；但 API 设计上要给后续 backend 留位置。
+V1 skeleton 要把这些职责在框架层拆出 stage 边界；具体 stage 可以先使用朴素枚举或默认透传实现。
 
 ## 4. Source 输入
 
 ### 4.1 存量索引：`existing_index`
 
-适用于已有索引，默认只调低成本 search/runtime 参数。
+适用于已有索引。`existing_index` 表示用户有一个 baseline index，可以直接调低成本 search/runtime
+参数；它不表示 build/quantizer 永远不可调。如果调用方同时提供 base/raw vectors，或索引 backend
+暴露可重建/重量化能力，planner 可以组装 build/quantizer tuning stage。
 
 ```json
 {
@@ -226,6 +306,9 @@ struct ExistingIndexSource {
 - library-level API 优先使用 `IndexPtr`。
 - CLI/file API 可以使用 `serialized_index_path`，由工具层负责加载。
 - 对 `existing_index`，不要求用户提供 build 参数。
+- 如果 `search_space` 包含 build/quantizer 参数，则 V1 要求有 rebuild source，例如
+  `AutoTuningApiContext::base`。否则 validation 阶段应失败并说明 build/quantizer tuning requires
+  base dataset or rebuild capability。
 
 ### 4.2 原始数据集：`raw_dataset`
 
@@ -481,12 +564,15 @@ Ground truth 自动计算可能很贵，所以建议放在 `evaluation.ground_tr
 
 参数组语义：
 
-| 参数组 | 修改代价 | existing_index 默认支持 | raw_dataset 默认支持 |
-| --- | --- | --- | --- |
-| `search` | 低 | 是 | 是 |
-| `runtime` | 低 | 是 | 是 |
-| `quantizer` | 中 | 仅当 `Tune()` 或 raw vector 可用时 | 是 |
-| `build` | 高 | 否，除非额外提供 base 并允许 rebuild | 是 |
+| 参数组 | 修改代价 | existing_index 默认支持 | existing_index + rebuild source | raw_dataset 默认支持 |
+| --- | --- | --- | --- | --- |
+| `search` | 低 | 是 | 是 | 是 |
+| `runtime` | 低 | 是 | 是 | 是 |
+| `quantizer` | 中 | 否，除非索引支持原地 Tune | 是，通过 rebuild | 是 |
+| `build` | 高 | 否 | 是，通过 rebuild | 是 |
+
+这里的 rebuild source 在 V1 中先定义为 `AutoTuningApiContext::base != nullptr`；未来可以扩展为索引
+自身暴露 raw vector、或 backend 支持原地 `Tune()`。
 
 `values` 是最简单的离散候选。后续可以扩展：
 
@@ -1126,7 +1212,36 @@ public:
 };
 ```
 
-## 17. P0 内部契约
+## 17. V1 内部框架契约
+
+当前内部 C++ 实现的目标是一个薄的 V1 skeleton：
+
+```text
+AutoTuningRequest
+  -> AutoTuningPlanner::Plan()
+  -> TuningPlan(stage list)
+  -> AutoTuningPipeline executes stages
+  -> AutoTuningReport
+```
+
+V1 skeleton 不是最终 public API，但它要把完整自动调优链路的边界先落到代码里。能力可以是朴素
+或默认实现，但 stage 必须真实存在，便于后续替换：
+
+| Stage | V1 skeleton 行为 |
+| --- | --- |
+| workload validation | 校验 index/query/ground truth/topk/source capability。 |
+| search space construction | 从 request/config 建立 baseline candidate 和 search space 摘要。 |
+| build parameter tuning | V1 目标是 exhaustive enum；在未接具体参数前可以 skipped/default passthrough。 |
+| quantizer tuning | V1 目标是 exhaustive enum；在未接具体参数前可以 skipped/default passthrough。 |
+| candidate generation | 生成 candidate set；当前 HGraph `ef_search` 路径仍由 search stage 兼容生成。 |
+| candidate pruning | 做静态非法参数和 budget pruning。 |
+| trial planning | V1 默认 single-round full evaluation。 |
+| trial execution | 对 candidate 执行 build/search/evaluate。 |
+| selection | 按 objective 产出 recommendation 和 best effort。 |
+
+V1 skeleton 的重点不是优化搜索策略，而是让这些 stage 可以被 planner 组装、单独测试、单独替换。
+
+## 18. P0 兼容契约
 
 当前代码先固定 HGraph P0 内部契约。这个契约不是长期完整 API，也不是 public API；它只覆盖
 已经实现并通过 POC 验证的链路：
@@ -1186,7 +1301,7 @@ P0 的成功条件：
 如果所有已评估候选都达不到 `target_recall`，报告保留 `best_effort`，但
 `AutoTuningReport::Succeeded()` 返回 `false`。
 
-## 18. 当前实现子集
+## 19. 当前实现子集
 
 当前代码中的 `AutoTuningRequest` 是上面长期 API 的 HGraph P0 子集：
 
@@ -1292,20 +1407,25 @@ index，再把这个 index 交给现有 `AutoTuningPipeline` 调 `hgraph.ef_sear
 路径只解决“从原始数据集生成 baseline index 后调 search 参数”的输入形态，不表示
 build/quantizer 参数搜索已经实现。
 
-P0 JSON parser 当前明确拒绝以下输入：
+V1 skeleton JSON parser 当前明确拒绝以下输入：
 
 - `source.type` 不是 `existing_index` 或 `raw_dataset`，返回 `unsupported_source_type`。
 - `index_type != hgraph`，返回 `unsupported_index_type`。
 - 非 `search_space.search.hgraph.ef_search` 的 search 参数路径，返回 `unsupported_parameter`。
-- 非空 `search_space.build` 或 `search_space.quantizer`，返回 `unsupported_search_space`。
-- `evaluation.successive_halving.enabled = true`，返回 `unsupported_evaluation_strategy`。
 - `evaluation.warmup_query_count`，返回 `unsupported_evaluation_option`。
-- `source.type = existing_index` 且 `config.build_parameters` 非空，返回 `unsupported_config`。
 - `source.type = raw_dataset` 且缺少 `config.build_parameters`，返回 `missing_field`。
 - `objective.primary` 非 `latency`，返回 `unsupported_objective`。
 - `objective.constraints`，返回 `unsupported_objective`。
 - `budget` 中除 `max_trials` 以外的非空字段，返回 `unsupported_budget`。
 - `output`，返回 `unsupported_output`。
+
+V1 skeleton JSON parser 当前接受但 stage 仍可能报告 not implemented 的输入：
+
+- `search_space.build`，会设置 `enable_build_parameter_tuning = true`。
+- `search_space.quantizer`，会设置 `enable_quantizer_tuning = true`。
+- `evaluation.successive_halving.enabled = true`，会设置 `enable_successive_halving = true`。
+- `source.type = existing_index` 且 `config.build_parameters` 非空，作为 rebuild metadata/baseline
+  保存到 request。
 
 P0 已实现：
 
@@ -1319,6 +1439,8 @@ P0 已实现：
 - `config.search_parameters`
 - `search_space.search.hgraph.ef_search`
 - `budget.max_trials`
+- `config.build_parameters` 作为 existing index metadata 或 raw dataset baseline
+- `search_space.build` / `search_space.quantizer` 的 V1 skeleton flag 解析
 - stage report
 - trial report
 - report request summary
@@ -1327,11 +1449,24 @@ P0 已实现：
 - best effort
 - P0 JSON request parser
 - P0 request prepare 层
+- planner-driven V1 stage skeleton
 - P0 JSON report serializer
 - 内部 POC target：`hgraph_auto_tuning_poc`
 - 内部 POC `--request-json` 文件入口和示例 request
 
-P0 未实现但已有 pipeline 槽位：
+V1 skeleton 已经或正在落地的框架槽位：
+
+- `TuningState`
+- `TuningCandidate`
+- `TuningStage`
+- `TuningPlan`
+- `AutoTuningPlanner`
+- planner-driven linear pipeline executor
+
+P0 兼容路径仍只真实调 HGraph `ef_search`，但 execution path 不应再写死在
+`AutoTuningPipeline::Tune()` 里。
+
+未实现或未完成真实枚举能力：
 
 - 多索引 backend registry
 - IVF、Pyramid、BruteForce、SINDI 等其他索引类型
@@ -1342,13 +1477,14 @@ P0 未实现但已有 pipeline 槽位：
 - Pareto frontier
 - public CLI/file request loading
 
-## 19. 设计约束和建议
+## 20. 设计约束和建议
 
 1. `source` 不应承载 build 参数；它只描述输入来自哪里。
 2. `config` 是 baseline/current config；`search_space` 才是调参空间。
 3. `index_type` 必须决定 backend，不同索引类型不能共享硬编码参数规则。
 4. `search_space` 参数路径必须匹配 `index_type`，除非未来显式支持 composite index。
-5. 对存量索引，`config.build_parameters` 只能作为可选 metadata。
+5. 对存量索引，`config.build_parameters` 默认是 metadata；如果 request 声明 build/quantizer
+   tuning，则必须有 rebuild source 或 backend 原地调参能力。
 6. 对 raw dataset，如果要 build index，必须能得到完整 build parameters。来源可以是
    `config.build_parameters`、默认参数生成器，或二者合并。
 7. 所有 skipped/failed candidate 必须进入报告。

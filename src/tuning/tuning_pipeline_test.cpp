@@ -15,6 +15,7 @@
 #include "tuning/tuning_pipeline.h"
 
 #include <nlohmann/json.hpp>
+#include <vector>
 
 #include "framework/test_dataset_pool.h"
 #include "unittest.h"
@@ -59,6 +60,29 @@ BuildBruteForceIndex(const fixtures::TestDatasetPtr& dataset) {
 }
 
 }  // namespace
+
+TEST_CASE("auto tuning planner builds V1 stage skeleton", "[ut][tuning]") {
+    vsag::AutoTuningPlanner planner;
+    vsag::AutoTuningRequest request;
+    const auto plan = planner.Plan(request);
+
+    const std::vector<vsag::TuningStage> expected_stages{
+        vsag::TuningStage::WORKLOAD_VALIDATION,
+        vsag::TuningStage::SEARCH_SPACE_CONSTRUCTION,
+        vsag::TuningStage::BUILD_PARAMETER_TUNING,
+        vsag::TuningStage::QUANTIZER_TUNING,
+        vsag::TuningStage::CANDIDATE_GENERATION,
+        vsag::TuningStage::CANDIDATE_PRUNING,
+        vsag::TuningStage::TRIAL_PLANNING,
+        vsag::TuningStage::TRIAL_EXECUTION,
+        vsag::TuningStage::SELECTION,
+    };
+
+    REQUIRE(plan.stages.size() == expected_stages.size());
+    for (uint64_t i = 0; i < static_cast<uint64_t>(expected_stages.size()); ++i) {
+        REQUIRE(plan.stages[i]->Stage() == expected_stages[i]);
+    }
+}
 
 TEST_CASE("auto tuning pipeline runs all P0 stages with explicit skipped stages", "[ut][tuning]") {
     fixtures::TestDatasetPool pool;

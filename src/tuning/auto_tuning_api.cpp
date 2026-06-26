@@ -411,13 +411,12 @@ ParseConfig(const JsonType& root, SourceType source_type, AutoTuningRequest& req
     }
 
     if (source_type == SourceType::EXISTING_INDEX) {
-        result = ValidateUnsupportedObject(*config,
-                                           "build_parameters",
-                                           "unsupported_config",
-                                           "existing_index P0 auto tuning does not consume "
-                                           "config.build_parameters");
-        if (not result.Succeeded()) {
-            return result;
+        if (config->contains("build_parameters") && not config->at("build_parameters").is_null()) {
+            if (not config->at("build_parameters").is_object()) {
+                return InvalidArgument("invalid_field",
+                                       "$.config.build_parameters must be an object");
+            }
+            request.build_parameters = config->at("build_parameters").dump();
         }
     } else {
         const JsonType* build_parameters = nullptr;
@@ -478,6 +477,49 @@ ParseObjective(const JsonType& root, AutoTuningRequest& request) {
 }
 
 AutoTuningApiParseResult
+ValidateTuningSearchSpaceGroup(const JsonType& search_space,
+                               const std::string& group_name,
+                               const std::string& index_name,
+                               bool& enabled) {
+    enabled = false;
+    if (not search_space.contains(group_name) || search_space.at(group_name).is_null()) {
+        return {};
+    }
+    if (not search_space.at(group_name).is_object()) {
+        return InvalidArgument("invalid_field",
+                               "$.search_space." + group_name + " must be an object");
+    }
+
+    const auto prefix = index_name + ".";
+    for (const auto& item : search_space.at(group_name).items()) {
+        if (item.value().is_null()) {
+            continue;
+        }
+        if (item.key().rfind(prefix, 0) != 0) {
+            return Unsupported("unsupported_parameter",
+                               "P0 auto tuning only supports " + index_name + " parameter paths");
+        }
+        if (not item.value().is_object()) {
+            return InvalidArgument(
+                "invalid_field",
+                "$.search_space." + group_name + "." + item.key() + " must be an object");
+        }
+        if (not item.value().contains("values") || not item.value().at("values").is_array()) {
+            return InvalidArgument(
+                "invalid_field",
+                "$.search_space." + group_name + "." + item.key() + ".values must be an array");
+        }
+        if (item.value().at("values").empty()) {
+            return InvalidArgument(
+                "invalid_search_space",
+                "$.search_space." + group_name + "." + item.key() + ".values must not be empty");
+        }
+        enabled = true;
+    }
+    return {};
+}
+
+AutoTuningApiParseResult
 ParseSearchSpace(const JsonType& root, AutoTuningRequest& request) {
     const JsonType* search_space = nullptr;
     auto result = ReadRequiredObject(root, "search_space", "$", search_space);
@@ -485,26 +527,37 @@ ParseSearchSpace(const JsonType& root, AutoTuningRequest& request) {
         return result;
     }
 
-    result = ValidateUnsupportedObject(*search_space,
-                                       "build",
-                                       "unsupported_search_space",
-                                       "P0 auto tuning does not support build search space");
+    bool has_build_space = false;
+    result =
+        ValidateTuningSearchSpaceGroup(*search_space, "build", request.index_name, has_build_space);
     if (not result.Succeeded()) {
         return result;
     }
-    result = ValidateUnsupportedObject(*search_space,
-                                       "quantizer",
-                                       "unsupported_search_space",
-                                       "P0 auto tuning does not support quantizer search space");
+    request.enable_build_parameter_tuning = has_build_space;
+
+    bool has_quantizer_space = false;
+    result = ValidateTuningSearchSpaceGroup(
+        *search_space, "quantizer", request.index_name, has_quantizer_space);
     if (not result.Succeeded()) {
         return result;
     }
+    request.enable_quantizer_tuning = has_quantizer_space;
 
     const JsonType* search = nullptr;
-    result = ReadRequiredObject(*search_space, "search", "$.search_space", search);
-    if (not result.Succeeded()) {
-        return result;
+    const auto has_search_space =
+        search_space->contains("search") && not search_space->at("search").is_null();
+    if (not has_search_space) {
+        if (has_build_space || has_quantizer_space) {
+            return {};
+        }
+        return InvalidArgument("missing_field",
+                               "$.search_space.search is required unless build or quantizer "
+                               "search space is provided");
     }
+    if (not search_space->at("search").is_object()) {
+        return InvalidArgument("invalid_field", "$.search_space.search must be an object");
+    }
+    search = &search_space->at("search");
     if (search->size() != 1 || not search->contains("hgraph.ef_search")) {
         return Unsupported("unsupported_parameter",
                            "P0 auto tuning only supports search_space.search.hgraph.ef_search");
@@ -571,8 +624,7 @@ ParseEvaluation(const JsonType& root, AutoTuningRequest& request) {
                                        "$.evaluation.successive_halving.enabled must be a boolean");
             }
             if (successive_halving.at("enabled").get<bool>()) {
-                return Unsupported("unsupported_evaluation_strategy",
-                                   "P0 auto tuning does not support successive halving");
+                request.enable_successive_halving = true;
             }
         }
     }

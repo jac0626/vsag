@@ -18,6 +18,7 @@
 #include <chrono>
 #include <exception>
 #include <limits>
+#include <memory>
 #include <utility>
 
 namespace vsag {
@@ -155,6 +156,253 @@ MakeRequestSummary(const AutoTuningRequest& request) {
     return summary;
 }
 
+EfSearchTuningRequest
+MakeEfSearchTuningRequest(const AutoTuningRequest& request) {
+    EfSearchTuningRequest ef_request;
+    ef_request.index = request.index;
+    ef_request.queries = request.queries;
+    ef_request.ground_truth = request.ground_truth;
+    ef_request.topk = request.topk;
+    ef_request.query_count = request.query_count;
+    ef_request.target_recall = request.target_recall;
+    ef_request.index_name = request.index_name;
+    ef_request.base_search_parameters = request.base_search_parameters;
+    ef_request.ef_search_candidates = request.ef_search_candidates;
+    ef_request.max_trials = request.max_trials;
+    return ef_request;
+}
+
+class WorkloadValidationStage final : public TuningStageExecutor {
+public:
+    [[nodiscard]] TuningStage
+    Stage() const override {
+        return TuningStage::WORKLOAD_VALIDATION;
+    }
+
+    void
+    Run(TuningState& state, const TuningStageRuntime&) const override {
+        auto validation = ValidateWorkload(state.request);
+        if (not validation.Succeeded()) {
+            state.report.stages.push_back(
+                MakeStage(Stage(), TuningStageStatus::FAILED, validation.error_message));
+            state.should_stop = true;
+            return;
+        }
+        state.report.request.effective_query_count = validation.query_count;
+        state.report.stages.push_back(MakeStage(Stage(),
+                                                TuningStageStatus::COMPLETED,
+                                                "workload is valid",
+                                                validation.query_count,
+                                                validation.query_count));
+    }
+};
+
+class SearchSpaceConstructionStage final : public TuningStageExecutor {
+public:
+    [[nodiscard]] TuningStage
+    Stage() const override {
+        return TuningStage::SEARCH_SPACE_CONSTRUCTION;
+    }
+
+    void
+    Run(TuningState& state, const TuningStageRuntime&) const override {
+        TuningCandidate candidate;
+        candidate.id = 0;
+        candidate.index_name = state.request.index_name;
+        candidate.source_type = state.request.source_type;
+        candidate.build_parameters = state.request.build_parameters;
+        candidate.search_parameters = state.request.base_search_parameters;
+        state.candidates = {candidate};
+
+        state.report.stages.push_back(
+            MakeStage(Stage(),
+                      TuningStageStatus::COMPLETED,
+                      "using fixed build representation and ef_search space",
+                      1,
+                      1));
+    }
+};
+
+class BuildParameterTuningStage final : public TuningStageExecutor {
+public:
+    [[nodiscard]] TuningStage
+    Stage() const override {
+        return TuningStage::BUILD_PARAMETER_TUNING;
+    }
+
+    void
+    Run(TuningState& state, const TuningStageRuntime&) const override {
+        const auto enabled = state.request.enable_build_parameter_tuning;
+        state.report.stages.push_back(
+            MakeStage(Stage(),
+                      enabled ? TuningStageStatus::FAILED : TuningStageStatus::SKIPPED,
+                      enabled ? "build parameter tuning is not implemented yet"
+                              : "build parameter tuning is disabled in this stage"));
+        if (enabled) {
+            state.should_stop = true;
+        }
+    }
+};
+
+class QuantizerTuningStage final : public TuningStageExecutor {
+public:
+    [[nodiscard]] TuningStage
+    Stage() const override {
+        return TuningStage::QUANTIZER_TUNING;
+    }
+
+    void
+    Run(TuningState& state, const TuningStageRuntime&) const override {
+        const auto enabled = state.request.enable_quantizer_tuning;
+        state.report.stages.push_back(
+            MakeStage(Stage(),
+                      enabled ? TuningStageStatus::FAILED : TuningStageStatus::SKIPPED,
+                      enabled ? "quantizer tuning is not implemented yet"
+                              : "quantizer tuning is disabled in this stage"));
+        if (enabled) {
+            state.should_stop = true;
+        }
+    }
+};
+
+class CandidateGenerationStage final : public TuningStageExecutor {
+public:
+    [[nodiscard]] TuningStage
+    Stage() const override {
+        return TuningStage::CANDIDATE_GENERATION;
+    }
+
+    void
+    Run(TuningState& state, const TuningStageRuntime&) const override {
+        state.candidates.clear();
+        uint64_t candidate_id = 0;
+        for (const auto ef_search : state.request.ef_search_candidates) {
+            TuningCandidate candidate;
+            candidate.id = candidate_id++;
+            candidate.index_name = state.request.index_name;
+            candidate.source_type = state.request.source_type;
+            candidate.build_parameters = state.request.build_parameters;
+            candidate.search_parameters = state.request.base_search_parameters;
+            candidate.patches.push_back({"hgraph.ef_search", std::to_string(ef_search)});
+            state.candidates.push_back(std::move(candidate));
+        }
+
+        state.report.stages.push_back(
+            MakeStage(Stage(),
+                      TuningStageStatus::COMPLETED,
+                      "generated ef_search candidates",
+                      0,
+                      static_cast<uint64_t>(state.request.ef_search_candidates.size())));
+    }
+};
+
+class CandidatePruningStage final : public TuningStageExecutor {
+public:
+    [[nodiscard]] TuningStage
+    Stage() const override {
+        return TuningStage::CANDIDATE_PRUNING;
+    }
+
+    void
+    Run(TuningState& state, const TuningStageRuntime& runtime) const override {
+        if (state.request.enable_successive_halving) {
+            return;
+        }
+        if (runtime.ef_search_tuner == nullptr) {
+            state.report.stages.push_back(
+                MakeStage(Stage(), TuningStageStatus::FAILED, "ef_search tuner is required"));
+            state.should_stop = true;
+            return;
+        }
+
+        state.ef_search = runtime.ef_search_tuner->Tune(MakeEfSearchTuningRequest(state.request));
+        state.report.ef_search = state.ef_search;
+
+        const auto skipped_trials = CountTrials(state.ef_search, TuningTrialStatus::SKIPPED);
+        const auto runnable_trials =
+            static_cast<uint64_t>(state.ef_search.trials.size()) - skipped_trials;
+        state.report.stages.push_back(
+            MakeStage(Stage(),
+                      TuningStageStatus::COMPLETED,
+                      "skipped invalid or budgeted ef_search candidates",
+                      static_cast<uint64_t>(state.ef_search.trials.size()),
+                      runnable_trials));
+    }
+};
+
+class TrialPlanningStage final : public TuningStageExecutor {
+public:
+    [[nodiscard]] TuningStage
+    Stage() const override {
+        return TuningStage::TRIAL_PLANNING;
+    }
+
+    void
+    Run(TuningState& state, const TuningStageRuntime&) const override {
+        if (state.request.enable_successive_halving) {
+            state.report.stages.push_back(MakeStage(
+                Stage(), TuningStageStatus::FAILED, "successive halving is not implemented yet"));
+            state.should_stop = true;
+            return;
+        }
+
+        const auto skipped_trials = CountTrials(state.ef_search, TuningTrialStatus::SKIPPED);
+        const auto runnable_trials =
+            static_cast<uint64_t>(state.ef_search.trials.size()) - skipped_trials;
+        state.report.stages.push_back(MakeStage(Stage(),
+                                                TuningStageStatus::COMPLETED,
+                                                "using single-round full evaluation",
+                                                runnable_trials,
+                                                runnable_trials));
+    }
+};
+
+class TrialExecutionStage final : public TuningStageExecutor {
+public:
+    [[nodiscard]] TuningStage
+    Stage() const override {
+        return TuningStage::TRIAL_EXECUTION;
+    }
+
+    void
+    Run(TuningState& state, const TuningStageRuntime&) const override {
+        const auto skipped_trials = CountTrials(state.ef_search, TuningTrialStatus::SKIPPED);
+        const auto runnable_trials =
+            static_cast<uint64_t>(state.ef_search.trials.size()) - skipped_trials;
+        const auto completed_trials = CountTrials(state.ef_search, TuningTrialStatus::COMPLETED);
+        const auto failed_trials = CountTrials(state.ef_search, TuningTrialStatus::FAILED);
+        state.report.stages.push_back(
+            MakeStage(Stage(),
+                      failed_trials > 0 ? TuningStageStatus::FAILED : TuningStageStatus::COMPLETED,
+                      failed_trials > 0 ? "one or more trials failed" : "trials completed",
+                      runnable_trials,
+                      completed_trials));
+        if (failed_trials > 0) {
+            state.should_stop = true;
+        }
+    }
+};
+
+class SelectionStage final : public TuningStageExecutor {
+public:
+    [[nodiscard]] TuningStage
+    Stage() const override {
+        return TuningStage::SELECTION;
+    }
+
+    void
+    Run(TuningState& state, const TuningStageRuntime&) const override {
+        state.report.recommendation = state.ef_search.recommendation;
+        state.report.best_effort = state.ef_search.best_effort;
+        state.report.stages.push_back(MakeStage(
+            Stage(),
+            state.report.recommendation.has_value() ? TuningStageStatus::COMPLETED
+                                                    : TuningStageStatus::SKIPPED,
+            state.report.recommendation.has_value() ? "selected recommended candidate"
+                                                    : "no candidate met the target recall"));
+    }
+};
+
 }  // namespace
 
 bool
@@ -169,119 +417,42 @@ AutoTuningPipeline::AutoTuningPipeline(EfSearchTuner ef_search_tuner)
     : ef_search_tuner_(std::move(ef_search_tuner)) {
 }
 
+TuningPlan
+AutoTuningPlanner::Plan(const AutoTuningRequest&) const {
+    TuningPlan plan;
+    plan.stages.push_back(std::make_unique<WorkloadValidationStage>());
+    plan.stages.push_back(std::make_unique<SearchSpaceConstructionStage>());
+    plan.stages.push_back(std::make_unique<BuildParameterTuningStage>());
+    plan.stages.push_back(std::make_unique<QuantizerTuningStage>());
+    plan.stages.push_back(std::make_unique<CandidateGenerationStage>());
+    plan.stages.push_back(std::make_unique<CandidatePruningStage>());
+    plan.stages.push_back(std::make_unique<TrialPlanningStage>());
+    plan.stages.push_back(std::make_unique<TrialExecutionStage>());
+    plan.stages.push_back(std::make_unique<SelectionStage>());
+    return plan;
+}
+
 AutoTuningReport
 AutoTuningPipeline::Tune(const AutoTuningRequest& request) const {
     const auto started_at = std::chrono::steady_clock::now();
-    AutoTuningReport report;
-    report.request = MakeRequestSummary(request);
-    auto finish = [started_at](AutoTuningReport& tuning_report) {
-        tuning_report.elapsed_ms = ElapsedMs(started_at);
-        return tuning_report;
-    };
+    TuningState state;
+    state.request = request;
+    state.report.request = MakeRequestSummary(request);
 
-    auto validation = ValidateWorkload(request);
-    if (not validation.Succeeded()) {
-        report.stages.push_back(MakeStage(
-            TuningStage::WORKLOAD_VALIDATION, TuningStageStatus::FAILED, validation.error_message));
-        return finish(report);
-    }
-    report.request.effective_query_count = validation.query_count;
-    report.stages.push_back(MakeStage(TuningStage::WORKLOAD_VALIDATION,
-                                      TuningStageStatus::COMPLETED,
-                                      "workload is valid",
-                                      validation.query_count,
-                                      validation.query_count));
+    AutoTuningPlanner planner;
+    auto plan = planner.Plan(request);
+    TuningStageRuntime runtime;
+    runtime.ef_search_tuner = &ef_search_tuner_;
 
-    report.stages.push_back(MakeStage(TuningStage::SEARCH_SPACE_CONSTRUCTION,
-                                      TuningStageStatus::COMPLETED,
-                                      "using fixed build representation and ef_search space",
-                                      1,
-                                      1));
-
-    report.stages.push_back(MakeStage(TuningStage::BUILD_PARAMETER_TUNING,
-                                      request.enable_build_parameter_tuning
-                                          ? TuningStageStatus::FAILED
-                                          : TuningStageStatus::SKIPPED,
-                                      request.enable_build_parameter_tuning
-                                          ? "build parameter tuning is not implemented yet"
-                                          : "build parameter tuning is disabled in this stage"));
-    if (request.enable_build_parameter_tuning) {
-        return finish(report);
+    for (const auto& stage : plan.stages) {
+        if (state.should_stop) {
+            break;
+        }
+        stage->Run(state, runtime);
     }
 
-    report.stages.push_back(MakeStage(
-        TuningStage::QUANTIZER_TUNING,
-        request.enable_quantizer_tuning ? TuningStageStatus::FAILED : TuningStageStatus::SKIPPED,
-        request.enable_quantizer_tuning ? "quantizer tuning is not implemented yet"
-                                        : "quantizer tuning is disabled in this stage"));
-    if (request.enable_quantizer_tuning) {
-        return finish(report);
-    }
-
-    report.stages.push_back(MakeStage(TuningStage::CANDIDATE_GENERATION,
-                                      TuningStageStatus::COMPLETED,
-                                      "generated ef_search candidates",
-                                      0,
-                                      static_cast<uint64_t>(request.ef_search_candidates.size())));
-
-    if (request.enable_successive_halving) {
-        report.stages.push_back(MakeStage(TuningStage::TRIAL_PLANNING,
-                                          TuningStageStatus::FAILED,
-                                          "successive halving is not implemented yet"));
-        return finish(report);
-    }
-
-    EfSearchTuningRequest ef_request;
-    ef_request.index = request.index;
-    ef_request.queries = request.queries;
-    ef_request.ground_truth = request.ground_truth;
-    ef_request.topk = request.topk;
-    ef_request.query_count = request.query_count;
-    ef_request.target_recall = request.target_recall;
-    ef_request.index_name = request.index_name;
-    ef_request.base_search_parameters = request.base_search_parameters;
-    ef_request.ef_search_candidates = request.ef_search_candidates;
-    ef_request.max_trials = request.max_trials;
-
-    report.ef_search = ef_search_tuner_.Tune(ef_request);
-
-    const auto skipped_trials = CountTrials(report.ef_search, TuningTrialStatus::SKIPPED);
-    const auto runnable_trials =
-        static_cast<uint64_t>(report.ef_search.trials.size()) - skipped_trials;
-    report.stages.push_back(MakeStage(TuningStage::CANDIDATE_PRUNING,
-                                      TuningStageStatus::COMPLETED,
-                                      "skipped invalid or budgeted ef_search candidates",
-                                      static_cast<uint64_t>(report.ef_search.trials.size()),
-                                      runnable_trials));
-
-    report.stages.push_back(MakeStage(TuningStage::TRIAL_PLANNING,
-                                      TuningStageStatus::COMPLETED,
-                                      "using single-round full evaluation",
-                                      runnable_trials,
-                                      runnable_trials));
-
-    const auto completed_trials = CountTrials(report.ef_search, TuningTrialStatus::COMPLETED);
-    const auto failed_trials = CountTrials(report.ef_search, TuningTrialStatus::FAILED);
-    report.stages.push_back(
-        MakeStage(TuningStage::TRIAL_EXECUTION,
-                  failed_trials > 0 ? TuningStageStatus::FAILED : TuningStageStatus::COMPLETED,
-                  failed_trials > 0 ? "one or more trials failed" : "trials completed",
-                  runnable_trials,
-                  completed_trials));
-    if (failed_trials > 0) {
-        return finish(report);
-    }
-
-    report.recommendation = report.ef_search.recommendation;
-    report.best_effort = report.ef_search.best_effort;
-    report.stages.push_back(
-        MakeStage(TuningStage::SELECTION,
-                  report.recommendation.has_value() ? TuningStageStatus::COMPLETED
-                                                    : TuningStageStatus::SKIPPED,
-                  report.recommendation.has_value() ? "selected recommended candidate"
-                                                    : "no candidate met the target recall"));
-
-    return finish(report);
+    state.report.elapsed_ms = ElapsedMs(started_at);
+    return state.report;
 }
 
 }  // namespace vsag
