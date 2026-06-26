@@ -108,6 +108,21 @@ TEST_CASE("auto tuning request examples parse and prepare", "[ut][tuning]") {
         REQUIRE(parse_result.Succeeded());
         REQUIRE(parse_result.request.max_trials == 2);
     }
+
+    SECTION("rebuild tuning") {
+        auto request_json = ReadExample("hgraph_auto_tuning_rebuild_request.json");
+
+        auto parse_result = vsag::ParseAutoTuningRequestJson(request_json);
+        REQUIRE(parse_result.Succeeded());
+        REQUIRE(parse_result.request.source_type == "raw_dataset");
+        REQUIRE(parse_result.request.enable_build_parameter_tuning);
+        REQUIRE(parse_result.request.enable_quantizer_tuning);
+
+        auto prepare_result =
+            vsag::PrepareAutoTuningRequest(parse_result.request, MakeContext(dataset));
+        REQUIRE(prepare_result.Succeeded());
+        REQUIRE(prepare_result.request.base == dataset->base_);
+    }
 }
 
 TEST_CASE("auto tuning request query_count zero evaluates all context queries", "[ut][tuning]") {

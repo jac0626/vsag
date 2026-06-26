@@ -104,6 +104,7 @@ EfSearchTuner::Tune(const EfSearchTuningRequest& request) const {
         EfSearchTrialResult trial;
         trial.trial_id = trial_id++;
         trial.candidate.ef_search = ef_search;
+        trial.candidate.patches.push_back({"hgraph.ef_search", std::to_string(ef_search)});
 
         if (ef_search == 0) {
             trial.status = TuningTrialStatus::SKIPPED;

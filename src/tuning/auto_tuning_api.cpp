@@ -226,11 +226,6 @@ EvaluationStatusName(EvaluationStatus status) {
 }
 
 JsonType
-EfSearchPatch(uint64_t ef_search) {
-    return JsonType{{"hgraph", JsonType{{"ef_search", ef_search}}}};
-}
-
-JsonType
 ParseJsonForReport(const std::string& value) {
     if (value.empty()) {
         return JsonType::object();
@@ -244,7 +239,28 @@ ParseJsonForReport(const std::string& value) {
 
 JsonType
 CandidateToJson(const EfSearchCandidate& candidate) {
-    return JsonType{{"hgraph.ef_search", candidate.ef_search}};
+    JsonType result = JsonType::object();
+    for (const auto& patch : candidate.patches) {
+        result[patch.path] = ParseJsonForReport(patch.value);
+    }
+    if (not result.contains("hgraph.ef_search") && candidate.ef_search > 0) {
+        result["hgraph.ef_search"] = candidate.ef_search;
+    }
+    return result;
+}
+
+JsonType
+SearchPatchToJson(const EfSearchCandidate& candidate) {
+    JsonType result = JsonType::object();
+    for (const auto& patch : candidate.patches) {
+        if (patch.path == "hgraph.ef_search") {
+            result["hgraph"]["ef_search"] = ParseJsonForReport(patch.value);
+        }
+    }
+    if (not result.contains("hgraph") && candidate.ef_search > 0) {
+        result["hgraph"]["ef_search"] = candidate.ef_search;
+    }
+    return result;
 }
 
 JsonType
@@ -324,7 +340,8 @@ JsonType
 TrialToJson(const EfSearchTrialResult& trial) {
     return JsonType{{"trial_id", trial.trial_id},
                     {"candidate", CandidateToJson(trial.candidate)},
-                    {"search_parameters_patch", EfSearchPatch(trial.candidate.ef_search)},
+                    {"parameters_patch", CandidateToJson(trial.candidate)},
+                    {"search_parameters_patch", SearchPatchToJson(trial.candidate)},
                     {"status", TrialStatusName(trial.status)},
                     {"message", trial.message},
                     {"evaluation", EvaluationToJson(trial.evaluation)}};
@@ -517,6 +534,17 @@ ValidateTuningSearchSpaceGroup(const JsonType& search_space,
                 "invalid_field",
                 "$.search_space." + group_name + "." + item.key() + " must be an object");
         }
+        if (group_name == "build" && item.key() != index_name + ".max_degree" &&
+            item.key() != index_name + ".ef_construction") {
+            return Unsupported("unsupported_parameter",
+                               "P0 build tuning only supports " + index_name + ".max_degree and " +
+                                   index_name + ".ef_construction");
+        }
+        if (group_name == "quantizer" && item.key() != index_name + ".base_quantization_type") {
+            return Unsupported(
+                "unsupported_parameter",
+                "P0 quantizer tuning only supports " + index_name + ".base_quantization_type");
+        }
         if (not item.value().contains("values") || not item.value().at("values").is_array()) {
             return InvalidArgument(
                 "invalid_field",
@@ -531,6 +559,19 @@ ValidateTuningSearchSpaceGroup(const JsonType& search_space,
         TuningParameterSpace parameter_space;
         parameter_space.path = item.key();
         for (const auto& value : item.value().at("values")) {
+            if (group_name == "build") {
+                uint64_t parsed = 0;
+                if (not ReadUint64Value(value, parsed)) {
+                    return InvalidArgument("invalid_field",
+                                           "$.search_space." + group_name + "." + item.key() +
+                                               ".values must contain uint64 values");
+                }
+            }
+            if (group_name == "quantizer" && not value.is_string()) {
+                return InvalidArgument("invalid_field",
+                                       "$.search_space." + group_name + "." + item.key() +
+                                           ".values must contain string values");
+            }
             parameter_space.values.push_back(value.dump());
         }
         parameter_spaces.push_back(std::move(parameter_space));
@@ -699,6 +740,7 @@ PrepareSource(const AutoTuningApiContext& context, AutoTuningRequest& request) {
 
     request.queries = context.queries;
     request.ground_truth = context.ground_truth;
+    request.base = context.base;
 
     if (request.source_type == "existing_index") {
         if (context.index == nullptr) {

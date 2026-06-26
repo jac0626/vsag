@@ -31,8 +31,14 @@ enum class TuningTrialStatus {
     FAILED,
 };
 
+struct TuningParameterPatch {
+    std::string path;
+    std::string value;
+};
+
 struct EfSearchCandidate {
     uint64_t ef_search = 0;
+    std::vector<TuningParameterPatch> patches;
 };
 
 struct EfSearchTrialResult {

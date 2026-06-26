@@ -82,6 +82,9 @@ PrintUsage(const char* binary) {
               << "  " << binary
               << " --request-json src/tuning/examples/hgraph_auto_tuning_max_trials_request.json"
                  " --json-output /tmp/hgraph_auto_tuning_request_report.json\n";
+    std::cout << "  " << binary
+              << " --request-json src/tuning/examples/hgraph_auto_tuning_rebuild_request.json"
+                 " --json-output /tmp/hgraph_auto_tuning_rebuild_report.json\n";
 }
 
 uint64_t
@@ -611,11 +614,28 @@ PrintStages(const vsag::AutoTuningReport& report) {
     }
 }
 
+std::string
+CandidateDescription(const vsag::EfSearchCandidate& candidate) {
+    nlohmann::json result = nlohmann::json::object();
+    for (const auto& patch : candidate.patches) {
+        try {
+            result[patch.path] = nlohmann::json::parse(patch.value);
+        } catch (const std::exception&) {
+            result[patch.path] = patch.value;
+        }
+    }
+    if (not result.contains("hgraph.ef_search") && candidate.ef_search > 0) {
+        result["hgraph.ef_search"] = candidate.ef_search;
+    }
+    return result.dump();
+}
+
 void
 PrintTrials(const vsag::AutoTuningReport& report) {
     std::cout << "\nTrial report:" << std::endl;
     for (const auto& trial : report.ef_search.trials) {
-        std::cout << "  trial=" << trial.trial_id << " ef_search=" << trial.candidate.ef_search
+        std::cout << "  trial=" << trial.trial_id
+                  << " candidate=" << CandidateDescription(trial.candidate)
                   << " status=" << TrialStatusName(trial.status);
         if (trial.status == vsag::TuningTrialStatus::COMPLETED) {
             std::cout << " recall=" << trial.evaluation.recall.average
@@ -633,7 +653,7 @@ void
 PrintRecommendation(const vsag::AutoTuningReport& report) {
     if (report.recommendation.has_value()) {
         const auto& trial = report.recommendation.value();
-        std::cout << "\nRecommendation: ef_search=" << trial.candidate.ef_search
+        std::cout << "\nRecommendation: candidate=" << CandidateDescription(trial.candidate)
                   << " recall=" << trial.evaluation.recall.average
                   << " latency_ms=" << trial.evaluation.latency.average_ms << std::endl;
         return;
@@ -642,7 +662,7 @@ PrintRecommendation(const vsag::AutoTuningReport& report) {
     std::cout << "\nRecommendation: no candidate reached the target recall" << std::endl;
     if (report.best_effort.has_value()) {
         const auto& trial = report.best_effort.value();
-        std::cout << "Best effort: ef_search=" << trial.candidate.ef_search
+        std::cout << "Best effort: candidate=" << CandidateDescription(trial.candidate)
                   << " recall=" << trial.evaluation.recall.average
                   << " latency_ms=" << trial.evaluation.latency.average_ms << std::endl;
     }

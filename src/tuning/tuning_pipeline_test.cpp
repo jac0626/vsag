@@ -229,6 +229,58 @@ TEST_CASE("auto tuning pipeline enumerates build quantizer and search candidates
     REQUIRE(report.stages[7].input_count == 12);
 }
 
+TEST_CASE("auto tuning pipeline executes HGraph rebuild candidates", "[ut][tuning]") {
+    fixtures::TestDatasetPool pool;
+    auto dataset = pool.GetDatasetAndCreate(16, 200, "l2");
+    auto index = BuildHGraphIndex(dataset);
+
+    uint64_t evaluation_count = 0;
+    vsag::EfSearchTuner ef_tuner([&evaluation_count](const vsag::EvaluationRequest& request) {
+        ++evaluation_count;
+        REQUIRE(request.index != nullptr);
+        REQUIRE(request.index->GetIndexType() == vsag::IndexType::HGRAPH);
+        auto parameters = nlohmann::json::parse(request.search_parameters);
+        const auto ef_search = parameters["hgraph"]["ef_search"].get<uint64_t>();
+
+        vsag::EvaluationResult result;
+        result.query_count = request.query_count;
+        result.recall.average = ef_search >= 20 ? 0.96 : 0.80;
+        result.latency.average_ms = static_cast<double>(ef_search);
+        return result;
+    });
+
+    vsag::AutoTuningRequest request;
+    request.index = index;
+    request.base = dataset->base_;
+    request.queries = dataset->query_;
+    request.ground_truth = dataset->ground_truth_;
+    request.topk = static_cast<uint64_t>(dataset->top_k);
+    request.query_count = 8;
+    request.target_recall = 0.95;
+    request.build_parameters = MakeHGraphBuildParameters(dataset->dim_);
+    request.enable_build_parameter_tuning = true;
+    request.enable_quantizer_tuning = true;
+    request.build_parameter_spaces = {{"hgraph.max_degree", {"16"}}};
+    request.quantizer_parameter_spaces = {{"hgraph.base_quantization_type", {"\"fp32\""}}};
+    request.ef_search_candidates = {10, 20};
+
+    vsag::AutoTuningPipeline pipeline(ef_tuner);
+    const auto report = pipeline.Tune(request);
+
+    REQUIRE(report.Succeeded());
+    REQUIRE(evaluation_count == 2);
+    REQUIRE(report.stages.size() == 9);
+    REQUIRE(report.stages[5].stage == vsag::TuningStage::CANDIDATE_PRUNING);
+    REQUIRE(report.stages[5].input_count == 2);
+    REQUIRE(report.stages[5].output_count == 2);
+    REQUIRE(report.stages[7].stage == vsag::TuningStage::TRIAL_EXECUTION);
+    REQUIRE(report.stages[7].status == vsag::TuningStageStatus::COMPLETED);
+    REQUIRE(report.ef_search.trials.size() == 2);
+    REQUIRE(report.ef_search.trials[0].candidate.patches.size() == 3);
+    REQUIRE(report.recommendation.has_value());
+    REQUIRE(report.recommendation->candidate.ef_search == 20);
+}
+
 TEST_CASE("auto tuning pipeline enumerates quantizer candidates before execution", "[ut][tuning]") {
     fixtures::TestDatasetPool pool;
     auto dataset = pool.GetDatasetAndCreate(16, 200, "l2");
@@ -260,6 +312,33 @@ TEST_CASE("auto tuning pipeline enumerates quantizer candidates before execution
     REQUIRE(report.stages[7].stage == vsag::TuningStage::TRIAL_EXECUTION);
     REQUIRE(report.stages[7].status == vsag::TuningStageStatus::FAILED);
     REQUIRE(report.stages[7].input_count == 2);
+}
+
+TEST_CASE("auto tuning pipeline requires base dataset for rebuild candidates", "[ut][tuning]") {
+    fixtures::TestDatasetPool pool;
+    auto dataset = pool.GetDatasetAndCreate(16, 200, "l2");
+    auto index = BuildHGraphIndex(dataset);
+
+    vsag::AutoTuningRequest request;
+    request.index = index;
+    request.queries = dataset->query_;
+    request.ground_truth = dataset->ground_truth_;
+    request.topk = static_cast<uint64_t>(dataset->top_k);
+    request.query_count = 8;
+    request.build_parameters = MakeHGraphBuildParameters(dataset->dim_);
+    request.enable_build_parameter_tuning = true;
+    request.build_parameter_spaces = {{"hgraph.max_degree", {"16"}}};
+    request.ef_search_candidates = {10};
+
+    vsag::AutoTuningPipeline pipeline;
+    const auto report = pipeline.Tune(request);
+
+    REQUIRE_FALSE(report.Succeeded());
+    REQUIRE(report.stages.size() == 8);
+    REQUIRE(report.stages[7].stage == vsag::TuningStage::TRIAL_EXECUTION);
+    REQUIRE(report.stages[7].status == vsag::TuningStageStatus::FAILED);
+    REQUIRE(report.stages[7].message ==
+            "base dataset is required for build or quantizer candidate execution");
 }
 
 TEST_CASE("auto tuning pipeline reports successive halving as not implemented", "[ut][tuning]") {

@@ -106,6 +106,7 @@ TEST_CASE("auto tuning api parses P0 json and serializes report", "[ut][tuning]"
         vsag::PrepareAutoTuningRequest(parse_result.request, MakeContext(index, dataset));
     REQUIRE(prepare_result.Succeeded());
     REQUIRE(prepare_result.request.index == index);
+    REQUIRE(prepare_result.request.base == dataset->base_);
     REQUIRE(prepare_result.request.queries == dataset->query_);
     REQUIRE(prepare_result.request.ground_truth == dataset->ground_truth_);
 
@@ -153,6 +154,8 @@ TEST_CASE("auto tuning api parses P0 json and serializes report", "[ut][tuning]"
     REQUIRE(report_json["stages"].size() == 9);
     REQUIRE(report_json["trials"].size() == 4);
     REQUIRE(report_json["recommendation"]["candidate"]["hgraph.ef_search"].get<uint64_t>() == 20);
+    REQUIRE(report_json["recommendation"]["parameters_patch"]["hgraph.ef_search"].get<uint64_t>() ==
+            20);
     REQUIRE(report_json["recommendation"]["search_parameters_patch"]["hgraph"]["ef_search"]
                 .get<uint64_t>() == 20);
 }
@@ -181,6 +184,7 @@ TEST_CASE("auto tuning api builds baseline hgraph for raw dataset P0 request", "
     auto prepare_result = vsag::PrepareAutoTuningRequest(parse_result.request, context);
     REQUIRE(prepare_result.Succeeded());
     REQUIRE(prepare_result.request.index != nullptr);
+    REQUIRE(prepare_result.request.base == dataset->base_);
     REQUIRE(prepare_result.request.index->GetIndexType() == vsag::IndexType::HGRAPH);
     REQUIRE(prepare_result.request.queries == dataset->query_);
     REQUIRE(prepare_result.request.ground_truth == dataset->ground_truth_);
@@ -207,6 +211,53 @@ TEST_CASE("auto tuning api builds baseline hgraph for raw dataset P0 request", "
     REQUIRE(report_json["request"]["config"]["build_parameters"]["index_param"]["max_degree"]
                 .get<uint64_t>() == 16);
     REQUIRE(report_json["request"]["evaluation"]["effective_query_count"].get<uint64_t>() == 8);
+}
+
+TEST_CASE("auto tuning api serializes rebuild candidate patches", "[ut][tuning]") {
+    fixtures::TestDatasetPool pool;
+    auto dataset = pool.GetDatasetAndCreate(16, 200, "l2");
+
+    auto request =
+        MakeRawDatasetRequestJson(static_cast<uint64_t>(dataset->top_k), 8, 0.95, dataset->dim_);
+    request["search_space"]["build"] = {{"hgraph.max_degree", {{"values", {16}}}}};
+    request["search_space"]["quantizer"] = {
+        {"hgraph.base_quantization_type", {{"values", {"fp32"}}}}};
+    request["search_space"]["search"]["hgraph.ef_search"]["values"] = {10, 20};
+
+    vsag::AutoTuningApiContext context;
+    context.base = dataset->base_;
+    context.queries = dataset->query_;
+    context.ground_truth = dataset->ground_truth_;
+
+    auto parse_result = vsag::PrepareAutoTuningRequestJson(request.dump(), context);
+    REQUIRE(parse_result.Succeeded());
+
+    vsag::EfSearchTuner tuner([](const vsag::EvaluationRequest& request) {
+        auto parameters = nlohmann::json::parse(request.search_parameters);
+        const auto ef_search = parameters["hgraph"]["ef_search"].get<uint64_t>();
+
+        vsag::EvaluationResult result;
+        result.query_count = request.query_count;
+        result.recall.average = ef_search >= 20 ? 0.96 : 0.80;
+        result.latency.average_ms = static_cast<double>(ef_search);
+        return result;
+    });
+
+    vsag::AutoTuningPipeline pipeline(tuner);
+    const auto report = pipeline.Tune(parse_result.request);
+    REQUIRE(report.Succeeded());
+
+    const auto report_json = nlohmann::json::parse(vsag::SerializeAutoTuningReportJson(report));
+    REQUIRE(report_json["trials"].size() == 2);
+    REQUIRE(report_json["trials"][0]["candidate"]["hgraph.max_degree"].get<uint64_t>() == 16);
+    REQUIRE(
+        report_json["trials"][0]["candidate"]["hgraph.base_quantization_type"].get<std::string>() ==
+        "fp32");
+    REQUIRE(report_json["trials"][0]["candidate"]["hgraph.ef_search"].get<uint64_t>() == 10);
+    REQUIRE(report_json["recommendation"]["candidate"]["hgraph.max_degree"].get<uint64_t>() == 16);
+    REQUIRE(report_json["recommendation"]["candidate"]["hgraph.base_quantization_type"]
+                .get<std::string>() == "fp32");
+    REQUIRE(report_json["recommendation"]["candidate"]["hgraph.ef_search"].get<uint64_t>() == 20);
 }
 
 TEST_CASE("auto tuning api validates request fields", "[ut][tuning]") {
@@ -274,6 +325,28 @@ TEST_CASE("auto tuning api validates request fields", "[ut][tuning]") {
                 std::vector<std::string>{"16", "32"});
     }
 
+    SECTION("unsupported build parameter") {
+        auto request = MakeValidRequestJson(10, 8, 0.95);
+        request["search_space"]["build"] = {{"hgraph.alpha", {{"values", {1}}}}};
+
+        const auto result = vsag::ParseAutoTuningRequestJson(request.dump());
+
+        REQUIRE_FALSE(result.Succeeded());
+        REQUIRE(result.status == vsag::AutoTuningApiStatus::UNSUPPORTED);
+        REQUIRE(result.error_code == "unsupported_parameter");
+    }
+
+    SECTION("invalid build parameter value") {
+        auto request = MakeValidRequestJson(10, 8, 0.95);
+        request["search_space"]["build"] = {{"hgraph.max_degree", {{"values", {"16"}}}}};
+
+        const auto result = vsag::ParseAutoTuningRequestJson(request.dump());
+
+        REQUIRE_FALSE(result.Succeeded());
+        REQUIRE(result.status == vsag::AutoTuningApiStatus::INVALID_ARGUMENT);
+        REQUIRE(result.error_code == "invalid_field");
+    }
+
     SECTION("quantizer search space enters V1 skeleton stage") {
         auto request = MakeValidRequestJson(10, 8, 0.95);
         request["search_space"]["quantizer"] = {
@@ -288,6 +361,29 @@ TEST_CASE("auto tuning api validates request fields", "[ut][tuning]") {
                 "hgraph.base_quantization_type");
         REQUIRE(result.request.quantizer_parameter_spaces[0].values ==
                 std::vector<std::string>{"\"fp32\"", "\"sq8_uniform\""});
+    }
+
+    SECTION("unsupported quantizer parameter") {
+        auto request = MakeValidRequestJson(10, 8, 0.95);
+        request["search_space"]["quantizer"] = {{"hgraph.pq_dim", {{"values", {16}}}}};
+
+        const auto result = vsag::ParseAutoTuningRequestJson(request.dump());
+
+        REQUIRE_FALSE(result.Succeeded());
+        REQUIRE(result.status == vsag::AutoTuningApiStatus::UNSUPPORTED);
+        REQUIRE(result.error_code == "unsupported_parameter");
+    }
+
+    SECTION("invalid quantizer parameter value") {
+        auto request = MakeValidRequestJson(10, 8, 0.95);
+        request["search_space"]["quantizer"] = {
+            {"hgraph.base_quantization_type", {{"values", {8}}}}};
+
+        const auto result = vsag::ParseAutoTuningRequestJson(request.dump());
+
+        REQUIRE_FALSE(result.Succeeded());
+        REQUIRE(result.status == vsag::AutoTuningApiStatus::INVALID_ARGUMENT);
+        REQUIRE(result.error_code == "invalid_field");
     }
 
     SECTION("non hgraph parameter path") {

@@ -238,7 +238,7 @@ sindi.query_prune_ratio
 
 | Index type | search tuning | build tuning | quantizer tuning | existing index | raw dataset | 备注 |
 | --- | --- | --- | --- | --- | --- | --- |
-| `hgraph` | 是 | 是 | 是 | 是 | 是 | P0 先实现 existing index + `hgraph.ef_search`。 |
+| `hgraph` | 是 | 是 | 是 | 是 | 是 | V1 skeleton 先接入 HGraph search/build/quantizer 的枚举执行闭环。 |
 | `ivf` | 是 | 是 | 是 | 是 | 是 | 需要区分聚类/分桶参数和量化参数。 |
 | `pyramid` | 是 | 是 | 是 | 是 | 是 | 需要处理层级参数和子索引 search 参数。 |
 | `bruteforce` | 有限 | 否 | 是 | 是 | 是 | 主要是量化/重排相关，不调图参数。 |
@@ -1019,6 +1019,13 @@ Stage status：
 {
   "trial_id": 3,
   "candidate": {
+    "hgraph.max_degree": 16,
+    "hgraph.base_quantization_type": "fp32",
+    "hgraph.ef_search": 120
+  },
+  "parameters_patch": {
+    "hgraph.max_degree": 16,
+    "hgraph.base_quantization_type": "fp32",
     "hgraph.ef_search": 120
   },
   "search_parameters_patch": {
@@ -1069,6 +1076,13 @@ Trial status：
 {
   "recommendation": {
     "candidate": {
+      "hgraph.max_degree": 16,
+      "hgraph.base_quantization_type": "fp32",
+      "hgraph.ef_search": 120
+    },
+    "parameters_patch": {
+      "hgraph.max_degree": 16,
+      "hgraph.base_quantization_type": "fp32",
       "hgraph.ef_search": 120
     },
     "search_parameters_patch": {
@@ -1082,7 +1096,7 @@ Trial status：
       },
       "qps": 8200
     },
-    "reason": "smallest ef_search satisfying recall_at_k >= 0.95"
+    "reason": "lowest latency candidate satisfying recall_at_k >= 0.95"
   }
 }
 ```
@@ -1231,13 +1245,13 @@ V1 skeleton 不是最终 public API，但它要把完整自动调优链路的边
 | --- | --- |
 | workload validation | 校验 index/query/ground truth/topk/source capability。 |
 | search space construction | 从 request/config 建立 baseline candidate 和 search space 摘要。 |
-| build parameter tuning | V1 目标是 exhaustive enum；在未接具体参数前可以 skipped/default passthrough。 |
-| quantizer tuning | V1 目标是 exhaustive enum；在未接具体参数前可以 skipped/default passthrough。 |
+| build parameter tuning | V1 使用 exhaustive enum 展开 `hgraph.max_degree`、`hgraph.ef_construction`。 |
+| quantizer tuning | V1 使用 exhaustive enum 展开 `hgraph.base_quantization_type`。 |
 | candidate generation | 生成 candidate set；当前 HGraph `ef_search` 路径仍由 search stage 兼容生成。 |
 | candidate pruning | 做静态非法参数和 budget pruning。 |
 | trial planning | V1 默认 single-round full evaluation。 |
-| trial execution | 对 candidate 执行 build/search/evaluate。 |
-| selection | 按 objective 产出 recommendation 和 best effort。 |
+| trial execution | 对 candidate 执行 build/search/evaluate；有 build/quantizer patch 时需要 base dataset。 |
+| selection | 在满足 recall 的 completed trials 中按 latency 产出 recommendation，并保留 best effort。 |
 
 V1 skeleton 的重点不是优化搜索策略，而是让这些 stage 可以被 planner 组装、单独测试、单独替换。
 
@@ -1308,6 +1322,7 @@ P0 的成功条件：
 ```cpp
 struct AutoTuningRequest {
     IndexPtr index;
+    DatasetPtr base;
     DatasetPtr queries;
     DatasetPtr ground_truth;
     std::string source_type;
@@ -1318,6 +1333,9 @@ struct AutoTuningRequest {
     std::string build_parameters;
     std::string base_search_parameters;
     std::vector<uint64_t> ef_search_candidates;
+    std::vector<TuningParameterSpace> build_parameter_spaces;
+    std::vector<TuningParameterSpace> quantizer_parameter_spaces;
+    std::vector<TuningParameterSpace> search_parameter_spaces;
     uint64_t max_trials;
     bool enable_build_parameter_tuning;
     bool enable_quantizer_tuning;
@@ -1401,17 +1419,21 @@ struct AutoTuningApiContext {
 `AutoTuningApiContext` 结合起来；`PrepareAutoTuningRequestJson()` 是 parse + prepare 的便捷
 入口。这样 `raw_dataset` 的构建成本不会藏在 parse 阶段里。
 
-`source.type = existing_index` 时，prepare 阶段直接使用 `context.index`。`source.type = raw_dataset`
-时，prepare 阶段使用 `context.base` 和 `config.build_parameters` 构建一个 baseline HGraph
-index，再把这个 index 交给现有 `AutoTuningPipeline` 调 `hgraph.ef_search`。这个 raw dataset
-路径只解决“从原始数据集生成 baseline index 后调 search 参数”的输入形态，不表示
-build/quantizer 参数搜索已经实现。
+`source.type = existing_index` 时，prepare 阶段直接使用 `context.index`，如果
+`context.base != nullptr`，也会把 base 带入 request，供 build/quantizer rebuild tuning 使用。
+`source.type = raw_dataset` 时，prepare 阶段使用 `context.base` 和 `config.build_parameters`
+构建一个 baseline HGraph index，并保留同一个 base，供后续 candidate rebuild 使用。
 
 V1 skeleton JSON parser 当前明确拒绝以下输入：
 
 - `source.type` 不是 `existing_index` 或 `raw_dataset`，返回 `unsupported_source_type`。
 - `index_type != hgraph`，返回 `unsupported_index_type`。
 - 非 `search_space.search.hgraph.ef_search` 的 search 参数路径，返回 `unsupported_parameter`。
+- 非 `search_space.build.hgraph.max_degree` / `hgraph.ef_construction` 的 build 参数路径，返回
+  `unsupported_parameter`。
+- 非 `search_space.quantizer.hgraph.base_quantization_type` 的 quantizer 参数路径，返回
+  `unsupported_parameter`。
+- build 参数 values 不是 uint64、quantizer 参数 values 不是 string，返回 `invalid_field`。
 - `evaluation.warmup_query_count`，返回 `unsupported_evaluation_option`。
 - `source.type = raw_dataset` 且缺少 `config.build_parameters`，返回 `missing_field`。
 - `objective.primary` 非 `latency`，返回 `unsupported_objective`。
@@ -1419,13 +1441,15 @@ V1 skeleton JSON parser 当前明确拒绝以下输入：
 - `budget` 中除 `max_trials` 以外的非空字段，返回 `unsupported_budget`。
 - `output`，返回 `unsupported_output`。
 
-V1 skeleton JSON parser 当前接受但 stage 仍可能报告 not implemented 的输入：
+V1 skeleton JSON parser 当前接受但 stage 仍可能报告运行期失败的输入：
 
 - `search_space.build`，会保存离散参数空间，并设置 `enable_build_parameter_tuning = true`。
 - `search_space.quantizer`，会保存离散参数空间，并设置 `enable_quantizer_tuning = true`。
 - `evaluation.successive_halving.enabled = true`，会设置 `enable_successive_halving = true`。
 - `source.type = existing_index` 且 `config.build_parameters` 非空，作为 rebuild metadata/baseline
   保存到 request。
+- 如果 request 声明 build/quantizer tuning，但没有 `AutoTuningApiContext::base` 或没有
+  `config.build_parameters`，trial execution 会失败并给出明确原因。
 
 P0 已实现：
 
@@ -1440,10 +1464,13 @@ P0 已实现：
 - `search_space.search.hgraph.ef_search`
 - `budget.max_trials`
 - `config.build_parameters` 作为 existing index metadata 或 raw dataset baseline
-- `search_space.build` / `search_space.quantizer` / `search_space.search` 的离散参数空间保存
+- `search_space.build` / `search_space.quantizer` / `search_space.search` 的离散参数空间保存和枚举
 - V1 skeleton candidate generation：对已保存的 build、quantizer、search 参数空间做朴素笛卡尔枚举
 - search-only trial execution：通过统一 candidate/trial 流执行 HGraph `ef_search` search trial
-- selection stage：从已完成 trial 中计算 recommendation 和 best effort
+- raw dataset 或 existing index + base 场景下的 build candidate rebuild/evaluate
+- raw dataset 或 existing index + base 场景下的 quantizer candidate rebuild/evaluate
+- trial candidate 输出完整 `parameters_patch`
+- selection stage：在满足 recall 的候选中按 latency 计算 recommendation，并计算 best effort
 - stage report
 - trial report
 - report request summary
@@ -1466,17 +1493,15 @@ V1 skeleton 已经或正在落地的框架槽位：
 - `AutoTuningPlanner`
 - planner-driven linear pipeline executor
 - exhaustive candidate expansion skeleton
-- stage-based search-only pruning、trial execution 和 selection
+- stage-based pruning、trial execution 和 selection
 
-P0 兼容路径仍只真实调 HGraph `ef_search`，但 execution path 不应再写死在
-`AutoTuningPipeline::Tune()` 里。
+P0 兼容路径仍保留 HGraph `ef_search` search-only 行为；V1 skeleton 已把 build/quantizer rebuild
+候选接入同一套 stage/trial/report 流。
 
 未实现或未完成真实执行能力：
 
 - 多索引 backend registry
 - IVF、Pyramid、BruteForce、SINDI 等其他索引类型
-- raw dataset 或 existing index + rebuild source 场景下的 build candidate rebuild/evaluate
-- raw dataset 或 existing index + rebuild source 场景下的 quantizer candidate rebuild/evaluate
 - successive halving
 - timeout、memory、working directory 等预算控制
 - Pareto frontier

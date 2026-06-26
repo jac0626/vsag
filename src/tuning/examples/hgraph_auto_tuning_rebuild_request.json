@@ -1,0 +1,63 @@
+{
+  "version": 1,
+  "index_type": "hgraph",
+  "source": {
+    "type": "raw_dataset"
+  },
+  "workload": {
+    "topk": 10
+  },
+  "config": {
+    "build_parameters": {
+      "dtype": "float32",
+      "metric_type": "l2",
+      "dim": 16,
+      "index_param": {
+        "base_quantization_type": "fp32",
+        "max_degree": 16,
+        "ef_construction": 100,
+        "build_thread_count": 1
+      }
+    },
+    "search_parameters": {
+      "hgraph": {
+        "factor": 2
+      }
+    }
+  },
+  "objective": {
+    "primary": "latency",
+    "recall_at_k": {
+      "min": 0.8
+    }
+  },
+  "search_space": {
+    "build": {
+      "hgraph.max_degree": {
+        "values": [16, 24]
+      },
+      "hgraph.ef_construction": {
+        "values": [100]
+      }
+    },
+    "quantizer": {
+      "hgraph.base_quantization_type": {
+        "values": ["fp32"]
+      }
+    },
+    "search": {
+      "hgraph.ef_search": {
+        "values": [10, 20, 40, 80]
+      }
+    }
+  },
+  "evaluation": {
+    "query_count": 8,
+    "successive_halving": {
+      "enabled": false
+    }
+  },
+  "budget": {
+    "max_trials": 0
+  }
+}

@@ -59,6 +59,7 @@ struct TuningParameterSpace {
 // The caller owns index construction and ground-truth preparation.
 struct AutoTuningRequest {
     IndexPtr index = nullptr;
+    DatasetPtr base = nullptr;
     DatasetPtr queries = nullptr;
     DatasetPtr ground_truth = nullptr;
     std::string source_type = "existing_index";
@@ -108,11 +109,6 @@ struct AutoTuningReport {
 
     [[nodiscard]] bool
     Succeeded() const;
-};
-
-struct TuningParameterPatch {
-    std::string path;
-    std::string value;
 };
 
 struct TuningCandidate {
