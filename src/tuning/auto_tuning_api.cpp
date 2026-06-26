@@ -174,6 +174,8 @@ StageName(TuningStage stage) {
             return "quantizer_tuning";
         case TuningStage::CANDIDATE_GENERATION:
             return "candidate_generation";
+        case TuningStage::CANDIDATE_VALIDATION:
+            return "candidate_validation";
         case TuningStage::CANDIDATE_PRUNING:
             return "candidate_pruning";
         case TuningStage::TRIAL_PLANNING:

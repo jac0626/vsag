@@ -117,6 +117,7 @@ SearchSpaceConstructionStage
 BuildParameterTuningStage
 QuantizerTuningStage
 CandidateGenerationStage
+CandidateValidationStage
 CandidatePruningStage
 TrialPlanningStage
 TrialExecutionStage
@@ -1248,7 +1249,8 @@ V1 skeleton 不是最终 public API，但它要把完整自动调优链路的边
 | build parameter tuning | V1 使用 exhaustive enum 展开 `hgraph.max_degree`、`hgraph.ef_construction`。 |
 | quantizer tuning | V1 使用 exhaustive enum 展开 `hgraph.base_quantization_type`。 |
 | candidate generation | 生成 candidate set；当前 HGraph `ef_search` 路径仍由 search stage 兼容生成。 |
-| candidate pruning | 做静态非法参数和 budget pruning。 |
+| candidate validation | 静态校验参数 path/value、source capability、rebuild 所需 base/build config。 |
+| candidate pruning | 做 budget pruning；后续可替换为更复杂的低成本剪枝策略。 |
 | trial planning | V1 默认 single-round full evaluation。 |
 | trial execution | 对 candidate 执行 build/search/evaluate；有 build/quantizer patch 时需要 base dataset。 |
 | selection | 在满足 recall 的 completed trials 中按 latency 产出 recommendation，并保留 best effort。 |
@@ -1481,6 +1483,8 @@ V1 skeleton JSON parser 当前接受但 stage 仍可能报告运行期失败的�
 - `config.build_parameters` 作为 existing index metadata 或 raw dataset baseline
 - `search_space.build` / `search_space.quantizer` / `search_space.search` 的离散参数空间保存和枚举
 - V1 skeleton candidate generation：对已保存的 build、quantizer、search 参数空间做朴素笛卡尔枚举
+- V1 skeleton candidate validation：集中校验参数 path/value、rebuild source、build config 和
+  search 参数模板
 - search-only trial execution：通过统一 candidate/trial 流执行 HGraph `ef_search` search trial
 - raw dataset 或 existing index + base 场景下的 build candidate rebuild/evaluate
 - raw dataset 或 existing index + base 场景下的 quantizer candidate rebuild/evaluate
@@ -1509,7 +1513,7 @@ V1 skeleton 已经或正在落地的框架槽位：
 - `AutoTuningPlanner`
 - planner-driven linear pipeline executor
 - exhaustive candidate expansion skeleton
-- stage-based pruning、trial execution 和 selection
+- stage-based candidate validation、pruning、trial execution 和 selection
 
 P0 兼容路径仍保留 HGraph `ef_search` search-only 行为；V1 skeleton 已把 build/quantizer rebuild
 候选接入同一套 stage/trial/report 流。

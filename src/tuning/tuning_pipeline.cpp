@@ -446,6 +446,104 @@ MakeCandidateSearchParameters(const std::string& base_search_parameters,
     }
 }
 
+bool
+ValidateCandidatePatch(const TuningParameterPatch& patch, std::string& error_message) {
+    if (patch.path == "hgraph.ef_search" || patch.path == "hgraph.max_degree" ||
+        patch.path == "hgraph.ef_construction") {
+        uint64_t value = 0;
+        if (ReadUint64CandidateValue(patch.value, value)) {
+            return true;
+        }
+        error_message = fmt::format("{} candidate value must be a uint64", patch.path);
+        return false;
+    }
+
+    if (patch.path == "hgraph.base_quantization_type") {
+        std::string value;
+        if (ReadStringCandidateValue(patch.value, value)) {
+            return true;
+        }
+        error_message = "hgraph.base_quantization_type candidate value must be a string";
+        return false;
+    }
+
+    error_message = fmt::format("unsupported HGraph tuning parameter path: {}", patch.path);
+    return false;
+}
+
+bool
+CandidateHasPatch(const TuningCandidate& candidate, const std::string& path) {
+    return std::any_of(candidate.patches.begin(),
+                       candidate.patches.end(),
+                       [&path](const auto& patch) { return patch.path == path; });
+}
+
+bool
+ValidateSearchOnlyCandidate(const AutoTuningRequest& request,
+                            const TuningCandidate& candidate,
+                            std::string& error_message) {
+    if (not CandidateHasPatch(candidate, "hgraph.ef_search")) {
+        error_message = "search-only tuning requires hgraph.ef_search candidates";
+        return false;
+    }
+
+    bool has_ef_search = false;
+    uint64_t ef_search = 0;
+    if (not ReadEfSearchPatch(candidate.patches, has_ef_search, ef_search, error_message)) {
+        return false;
+    }
+
+    std::string search_parameters;
+    return MakeSearchParameters(request.base_search_parameters,
+                                request.index_name,
+                                ef_search,
+                                search_parameters,
+                                error_message);
+}
+
+bool
+ValidateRebuildCandidate(const AutoTuningRequest& request,
+                         const TuningCandidate& candidate,
+                         std::string& error_message) {
+    if (request.base == nullptr) {
+        error_message = "base dataset is required for build or quantizer candidate validation";
+        return false;
+    }
+    if (request.build_parameters.empty()) {
+        error_message = "build parameters are required for build or quantizer candidate validation";
+        return false;
+    }
+
+    std::string build_parameters;
+    if (not MakeCandidateBuildParameters(
+            request.build_parameters, candidate.patches, build_parameters, error_message)) {
+        return false;
+    }
+
+    std::string search_parameters;
+    return MakeCandidateSearchParameters(request.base_search_parameters,
+                                         request.index_name,
+                                         candidate.patches,
+                                         search_parameters,
+                                         error_message);
+}
+
+bool
+ValidateCandidate(const AutoTuningRequest& request,
+                  const TuningCandidate& candidate,
+                  std::string& error_message) {
+    for (const auto& patch : candidate.patches) {
+        if (not ValidateCandidatePatch(patch, error_message)) {
+            return false;
+        }
+    }
+
+    if (request.enable_build_parameter_tuning || request.enable_quantizer_tuning) {
+        return ValidateRebuildCandidate(request, candidate, error_message);
+    }
+    return ValidateSearchOnlyCandidate(request, candidate, error_message);
+}
+
 IndexPtr
 BuildCandidateIndex(const std::string& index_name,
                     const std::string& build_parameters,
@@ -686,6 +784,41 @@ public:
                                                 TuningStageStatus::COMPLETED,
                                                 "generated tuning candidates",
                                                 input_count,
+                                                CandidateCount(state)));
+    }
+};
+
+class CandidateValidationStage final : public TuningStageExecutor {
+public:
+    [[nodiscard]] TuningStage
+    Stage() const override {
+        return TuningStage::CANDIDATE_VALIDATION;
+    }
+
+    void
+    Run(TuningState& state, const TuningStageRuntime&) const override {
+        if (state.candidates.empty()) {
+            state.report.stages.push_back(MakeStage(
+                Stage(), TuningStageStatus::FAILED, "no tuning candidates were generated"));
+            state.should_stop = true;
+            return;
+        }
+
+        for (const auto& candidate : state.candidates) {
+            std::string error_message;
+            if (ValidateCandidate(state.request, candidate, error_message)) {
+                continue;
+            }
+            state.report.stages.push_back(MakeStage(
+                Stage(), TuningStageStatus::FAILED, error_message, CandidateCount(state), 0));
+            state.should_stop = true;
+            return;
+        }
+
+        state.report.stages.push_back(MakeStage(Stage(),
+                                                TuningStageStatus::COMPLETED,
+                                                "validated tuning candidates",
+                                                CandidateCount(state),
                                                 CandidateCount(state)));
     }
 };
@@ -986,6 +1119,7 @@ AutoTuningPlanner::Plan(const AutoTuningRequest&) const {
     plan.stages.push_back(std::make_unique<BuildParameterTuningStage>());
     plan.stages.push_back(std::make_unique<QuantizerTuningStage>());
     plan.stages.push_back(std::make_unique<CandidateGenerationStage>());
+    plan.stages.push_back(std::make_unique<CandidateValidationStage>());
     plan.stages.push_back(std::make_unique<CandidatePruningStage>());
     plan.stages.push_back(std::make_unique<TrialPlanningStage>());
     plan.stages.push_back(std::make_unique<TrialExecutionStage>());

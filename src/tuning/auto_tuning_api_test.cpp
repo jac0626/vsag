@@ -151,7 +151,7 @@ TEST_CASE("auto tuning api parses P0 json and serializes report", "[ut][tuning]"
         report_json["request"]["evaluation"]["successive_halving"]["enabled"].get<bool>());
     REQUIRE(report_json["request"]["budget"]["max_trials"].get<uint64_t>() == 2);
     REQUIRE(report_json["elapsed_ms"].get<double>() >= 0.0);
-    REQUIRE(report_json["stages"].size() == 9);
+    REQUIRE(report_json["stages"].size() == 10);
     REQUIRE(report_json["trials"].size() == 4);
     REQUIRE(report_json["recommendation"]["candidate"]["hgraph.ef_search"].get<uint64_t>() == 20);
     REQUIRE(report_json["recommendation"]["parameters_patch"]["hgraph.ef_search"].get<uint64_t>() ==

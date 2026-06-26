@@ -326,6 +326,8 @@ StageName(vsag::TuningStage stage) {
             return "quantizer_tuning";
         case vsag::TuningStage::CANDIDATE_GENERATION:
             return "candidate_generation";
+        case vsag::TuningStage::CANDIDATE_VALIDATION:
+            return "candidate_validation";
         case vsag::TuningStage::CANDIDATE_PRUNING:
             return "candidate_pruning";
         case vsag::TuningStage::TRIAL_PLANNING:

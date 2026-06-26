@@ -72,6 +72,7 @@ TEST_CASE("auto tuning planner builds V1 stage skeleton", "[ut][tuning]") {
         vsag::TuningStage::BUILD_PARAMETER_TUNING,
         vsag::TuningStage::QUANTIZER_TUNING,
         vsag::TuningStage::CANDIDATE_GENERATION,
+        vsag::TuningStage::CANDIDATE_VALIDATION,
         vsag::TuningStage::CANDIDATE_PRUNING,
         vsag::TuningStage::TRIAL_PLANNING,
         vsag::TuningStage::TRIAL_EXECUTION,
@@ -111,18 +112,20 @@ TEST_CASE("auto tuning pipeline runs all P0 stages with explicit skipped stages"
     REQUIRE(report.request.base_search_parameters == R"({"hgraph":{"factor":2}})");
     REQUIRE(report.request.ef_search_candidates == std::vector<uint64_t>{0, 10, 80, 1201});
     REQUIRE(report.elapsed_ms >= 0.0);
-    REQUIRE(report.stages.size() == 9);
+    REQUIRE(report.stages.size() == 10);
     REQUIRE(report.stages[0].stage == vsag::TuningStage::WORKLOAD_VALIDATION);
     REQUIRE(report.stages[0].status == vsag::TuningStageStatus::COMPLETED);
     REQUIRE(report.stages[2].stage == vsag::TuningStage::BUILD_PARAMETER_TUNING);
     REQUIRE(report.stages[2].status == vsag::TuningStageStatus::SKIPPED);
     REQUIRE(report.stages[3].stage == vsag::TuningStage::QUANTIZER_TUNING);
     REQUIRE(report.stages[3].status == vsag::TuningStageStatus::SKIPPED);
-    REQUIRE(report.stages[5].stage == vsag::TuningStage::CANDIDATE_PRUNING);
-    REQUIRE(report.stages[5].input_count == 4);
-    REQUIRE(report.stages[5].output_count == 2);
-    REQUIRE(report.stages[7].stage == vsag::TuningStage::TRIAL_EXECUTION);
-    REQUIRE(report.stages[7].status == vsag::TuningStageStatus::COMPLETED);
+    REQUIRE(report.stages[5].stage == vsag::TuningStage::CANDIDATE_VALIDATION);
+    REQUIRE(report.stages[5].status == vsag::TuningStageStatus::COMPLETED);
+    REQUIRE(report.stages[6].stage == vsag::TuningStage::CANDIDATE_PRUNING);
+    REQUIRE(report.stages[6].input_count == 4);
+    REQUIRE(report.stages[6].output_count == 2);
+    REQUIRE(report.stages[8].stage == vsag::TuningStage::TRIAL_EXECUTION);
+    REQUIRE(report.stages[8].status == vsag::TuningStageStatus::COMPLETED);
     REQUIRE(report.recommendation.has_value());
     REQUIRE(report.best_effort.has_value());
     REQUIRE(report.ef_search.trials.size() == report.trial_report.trials.size());
@@ -210,7 +213,7 @@ TEST_CASE("auto tuning pipeline enumerates build quantizer and search candidates
     const auto report = pipeline.Tune(request);
 
     REQUIRE_FALSE(report.Succeeded());
-    REQUIRE(report.stages.size() == 8);
+    REQUIRE(report.stages.size() == 6);
     REQUIRE(report.stages[2].stage == vsag::TuningStage::BUILD_PARAMETER_TUNING);
     REQUIRE(report.stages[2].status == vsag::TuningStageStatus::COMPLETED);
     REQUIRE(report.stages[2].input_count == 1);
@@ -222,12 +225,10 @@ TEST_CASE("auto tuning pipeline enumerates build quantizer and search candidates
     REQUIRE(report.stages[4].stage == vsag::TuningStage::CANDIDATE_GENERATION);
     REQUIRE(report.stages[4].input_count == 4);
     REQUIRE(report.stages[4].output_count == 12);
-    REQUIRE(report.stages[5].stage == vsag::TuningStage::CANDIDATE_PRUNING);
+    REQUIRE(report.stages[5].stage == vsag::TuningStage::CANDIDATE_VALIDATION);
+    REQUIRE(report.stages[5].status == vsag::TuningStageStatus::FAILED);
     REQUIRE(report.stages[5].input_count == 12);
-    REQUIRE(report.stages[5].output_count == 12);
-    REQUIRE(report.stages[7].stage == vsag::TuningStage::TRIAL_EXECUTION);
-    REQUIRE(report.stages[7].status == vsag::TuningStageStatus::FAILED);
-    REQUIRE(report.stages[7].input_count == 12);
+    REQUIRE(report.stages[5].output_count == 0);
 }
 
 TEST_CASE("auto tuning pipeline executes HGraph rebuild candidates", "[ut][tuning]") {
@@ -270,12 +271,15 @@ TEST_CASE("auto tuning pipeline executes HGraph rebuild candidates", "[ut][tunin
 
     REQUIRE(report.Succeeded());
     REQUIRE(evaluation_count == 2);
-    REQUIRE(report.stages.size() == 9);
-    REQUIRE(report.stages[5].stage == vsag::TuningStage::CANDIDATE_PRUNING);
+    REQUIRE(report.stages.size() == 10);
+    REQUIRE(report.stages[5].stage == vsag::TuningStage::CANDIDATE_VALIDATION);
     REQUIRE(report.stages[5].input_count == 2);
     REQUIRE(report.stages[5].output_count == 2);
-    REQUIRE(report.stages[7].stage == vsag::TuningStage::TRIAL_EXECUTION);
-    REQUIRE(report.stages[7].status == vsag::TuningStageStatus::COMPLETED);
+    REQUIRE(report.stages[6].stage == vsag::TuningStage::CANDIDATE_PRUNING);
+    REQUIRE(report.stages[6].input_count == 2);
+    REQUIRE(report.stages[6].output_count == 2);
+    REQUIRE(report.stages[8].stage == vsag::TuningStage::TRIAL_EXECUTION);
+    REQUIRE(report.stages[8].status == vsag::TuningStageStatus::COMPLETED);
     REQUIRE(report.trial_report.trials.size() == 2);
     REQUIRE(report.trial_report.trials[0].candidate.patches.size() == 3);
     REQUIRE(report.recommendation.has_value());
@@ -302,7 +306,7 @@ TEST_CASE("auto tuning pipeline enumerates quantizer candidates before execution
     const auto report = pipeline.Tune(request);
 
     REQUIRE_FALSE(report.Succeeded());
-    REQUIRE(report.stages.size() == 8);
+    REQUIRE(report.stages.size() == 6);
     REQUIRE(report.stages[3].stage == vsag::TuningStage::QUANTIZER_TUNING);
     REQUIRE(report.stages[3].status == vsag::TuningStageStatus::COMPLETED);
     REQUIRE(report.stages[3].input_count == 1);
@@ -310,9 +314,9 @@ TEST_CASE("auto tuning pipeline enumerates quantizer candidates before execution
     REQUIRE(report.stages[4].stage == vsag::TuningStage::CANDIDATE_GENERATION);
     REQUIRE(report.stages[4].input_count == 2);
     REQUIRE(report.stages[4].output_count == 2);
-    REQUIRE(report.stages[7].stage == vsag::TuningStage::TRIAL_EXECUTION);
-    REQUIRE(report.stages[7].status == vsag::TuningStageStatus::FAILED);
-    REQUIRE(report.stages[7].input_count == 2);
+    REQUIRE(report.stages[5].stage == vsag::TuningStage::CANDIDATE_VALIDATION);
+    REQUIRE(report.stages[5].status == vsag::TuningStageStatus::FAILED);
+    REQUIRE(report.stages[5].input_count == 2);
 }
 
 TEST_CASE("auto tuning pipeline requires base dataset for rebuild candidates", "[ut][tuning]") {
@@ -335,11 +339,38 @@ TEST_CASE("auto tuning pipeline requires base dataset for rebuild candidates", "
     const auto report = pipeline.Tune(request);
 
     REQUIRE_FALSE(report.Succeeded());
-    REQUIRE(report.stages.size() == 8);
-    REQUIRE(report.stages[7].stage == vsag::TuningStage::TRIAL_EXECUTION);
-    REQUIRE(report.stages[7].status == vsag::TuningStageStatus::FAILED);
-    REQUIRE(report.stages[7].message ==
-            "base dataset is required for build or quantizer candidate execution");
+    REQUIRE(report.stages.size() == 6);
+    REQUIRE(report.stages[5].stage == vsag::TuningStage::CANDIDATE_VALIDATION);
+    REQUIRE(report.stages[5].status == vsag::TuningStageStatus::FAILED);
+    REQUIRE(report.stages[5].message ==
+            "base dataset is required for build or quantizer candidate validation");
+}
+
+TEST_CASE("auto tuning pipeline requires build parameters for rebuild candidates", "[ut][tuning]") {
+    fixtures::TestDatasetPool pool;
+    auto dataset = pool.GetDatasetAndCreate(16, 200, "l2");
+    auto index = BuildHGraphIndex(dataset);
+
+    vsag::AutoTuningRequest request;
+    request.index = index;
+    request.base = dataset->base_;
+    request.queries = dataset->query_;
+    request.ground_truth = dataset->ground_truth_;
+    request.topk = static_cast<uint64_t>(dataset->top_k);
+    request.query_count = 8;
+    request.enable_build_parameter_tuning = true;
+    request.build_parameter_spaces = {{"hgraph.max_degree", {"16"}}};
+    request.ef_search_candidates = {10};
+
+    vsag::AutoTuningPipeline pipeline;
+    const auto report = pipeline.Tune(request);
+
+    REQUIRE_FALSE(report.Succeeded());
+    REQUIRE(report.stages.size() == 6);
+    REQUIRE(report.stages[5].stage == vsag::TuningStage::CANDIDATE_VALIDATION);
+    REQUIRE(report.stages[5].status == vsag::TuningStageStatus::FAILED);
+    REQUIRE(report.stages[5].message ==
+            "build parameters are required for build or quantizer candidate validation");
 }
 
 TEST_CASE("auto tuning pipeline reports successive halving as not implemented", "[ut][tuning]") {
@@ -360,12 +391,14 @@ TEST_CASE("auto tuning pipeline reports successive halving as not implemented", 
     const auto report = pipeline.Tune(request);
 
     REQUIRE_FALSE(report.Succeeded());
-    REQUIRE(report.stages.size() == 6);
-    REQUIRE(report.stages[5].stage == vsag::TuningStage::TRIAL_PLANNING);
-    REQUIRE(report.stages[5].status == vsag::TuningStageStatus::FAILED);
+    REQUIRE(report.stages.size() == 7);
+    REQUIRE(report.stages[5].stage == vsag::TuningStage::CANDIDATE_VALIDATION);
+    REQUIRE(report.stages[5].status == vsag::TuningStageStatus::COMPLETED);
+    REQUIRE(report.stages[6].stage == vsag::TuningStage::TRIAL_PLANNING);
+    REQUIRE(report.stages[6].status == vsag::TuningStageStatus::FAILED);
 }
 
-TEST_CASE("auto tuning pipeline marks trial execution failure", "[ut][tuning]") {
+TEST_CASE("auto tuning pipeline marks candidate validation failure", "[ut][tuning]") {
     fixtures::TestDatasetPool pool;
     auto dataset = pool.GetDatasetAndCreate(16, 200, "l2");
     auto index = BuildHGraphIndex(dataset);
@@ -383,11 +416,10 @@ TEST_CASE("auto tuning pipeline marks trial execution failure", "[ut][tuning]") 
     const auto report = pipeline.Tune(request);
 
     REQUIRE_FALSE(report.Succeeded());
-    REQUIRE(report.stages.size() == 8);
-    REQUIRE(report.stages[7].stage == vsag::TuningStage::TRIAL_EXECUTION);
-    REQUIRE(report.stages[7].status == vsag::TuningStageStatus::FAILED);
-    REQUIRE(report.trial_report.trials.size() == 1);
-    REQUIRE(report.trial_report.trials[0].status == vsag::TuningTrialStatus::FAILED);
+    REQUIRE(report.stages.size() == 6);
+    REQUIRE(report.stages[5].stage == vsag::TuningStage::CANDIDATE_VALIDATION);
+    REQUIRE(report.stages[5].status == vsag::TuningStageStatus::FAILED);
+    REQUIRE(report.trial_report.trials.empty());
 }
 
 TEST_CASE("auto tuning pipeline propagates max trial budget", "[ut][tuning]") {
@@ -422,10 +454,10 @@ TEST_CASE("auto tuning pipeline propagates max trial budget", "[ut][tuning]") {
     REQUIRE(report.trial_report.trials[0].status == vsag::TuningTrialStatus::COMPLETED);
     REQUIRE(report.trial_report.trials[1].status == vsag::TuningTrialStatus::SKIPPED);
     REQUIRE(report.trial_report.trials[1].message == "budget exceeded: max_trials = 1");
-    REQUIRE(report.stages[5].stage == vsag::TuningStage::CANDIDATE_PRUNING);
-    REQUIRE(report.stages[5].output_count == 1);
-    REQUIRE(report.stages[6].stage == vsag::TuningStage::TRIAL_PLANNING);
-    REQUIRE(report.stages[6].input_count == 1);
+    REQUIRE(report.stages[6].stage == vsag::TuningStage::CANDIDATE_PRUNING);
+    REQUIRE(report.stages[6].output_count == 1);
+    REQUIRE(report.stages[7].stage == vsag::TuningStage::TRIAL_PLANNING);
+    REQUIRE(report.stages[7].input_count == 1);
 }
 
 TEST_CASE("auto tuning pipeline keeps best effort when no candidate meets recall target",
@@ -460,7 +492,7 @@ TEST_CASE("auto tuning pipeline keeps best effort when no candidate meets recall
     REQUIRE_FALSE(report.recommendation.has_value());
     REQUIRE(report.best_effort.has_value());
     REQUIRE(report.best_effort->candidate.ef_search == 80);
-    REQUIRE(report.stages.size() == 9);
-    REQUIRE(report.stages[8].stage == vsag::TuningStage::SELECTION);
-    REQUIRE(report.stages[8].status == vsag::TuningStageStatus::SKIPPED);
+    REQUIRE(report.stages.size() == 10);
+    REQUIRE(report.stages[9].stage == vsag::TuningStage::SELECTION);
+    REQUIRE(report.stages[9].status == vsag::TuningStageStatus::SKIPPED);
 }
