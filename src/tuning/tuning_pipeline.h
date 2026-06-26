@@ -50,6 +50,11 @@ struct TuningStageResult {
     uint64_t output_count = 0;
 };
 
+struct TuningParameterSpace {
+    std::string path;
+    std::vector<std::string> values;
+};
+
 // P0 internal request for HGraph existing-index ef_search tuning.
 // The caller owns index construction and ground-truth preparation.
 struct AutoTuningRequest {
@@ -64,6 +69,9 @@ struct AutoTuningRequest {
     std::string build_parameters;
     std::string base_search_parameters;
     std::vector<uint64_t> ef_search_candidates;
+    std::vector<TuningParameterSpace> build_parameter_spaces;
+    std::vector<TuningParameterSpace> quantizer_parameter_spaces;
+    std::vector<TuningParameterSpace> search_parameter_spaces;
     uint64_t max_trials = 0;
     bool enable_build_parameter_tuning = false;
     bool enable_quantizer_tuning = false;
@@ -80,6 +88,9 @@ struct AutoTuningRequestSummary {
     std::string build_parameters;
     std::string base_search_parameters;
     std::vector<uint64_t> ef_search_candidates;
+    std::vector<TuningParameterSpace> build_parameter_spaces;
+    std::vector<TuningParameterSpace> quantizer_parameter_spaces;
+    std::vector<TuningParameterSpace> search_parameter_spaces;
     uint64_t max_trials = 0;
     bool enable_build_parameter_tuning = false;
     bool enable_quantizer_tuning = false;

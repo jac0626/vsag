@@ -186,7 +186,8 @@ TEST_CASE("auto tuning pipeline rejects non-HGraph P0 parameter paths", "[ut][tu
     REQUIRE(report.stages[0].status == vsag::TuningStageStatus::FAILED);
 }
 
-TEST_CASE("auto tuning pipeline reports not implemented stages explicitly", "[ut][tuning]") {
+TEST_CASE("auto tuning pipeline enumerates build quantizer and search candidates before execution",
+          "[ut][tuning]") {
     fixtures::TestDatasetPool pool;
     auto dataset = pool.GetDatasetAndCreate(16, 200, "l2");
     auto index = BuildHGraphIndex(dataset);
@@ -198,18 +199,37 @@ TEST_CASE("auto tuning pipeline reports not implemented stages explicitly", "[ut
     request.topk = static_cast<uint64_t>(dataset->top_k);
     request.query_count = 8;
     request.enable_build_parameter_tuning = true;
-    request.ef_search_candidates = {10};
+    request.enable_quantizer_tuning = true;
+    request.build_parameter_spaces = {{"hgraph.max_degree", {"16", "32"}}};
+    request.quantizer_parameter_spaces = {
+        {"hgraph.base_quantization_type", {"\"fp32\"", "\"sq8_uniform\""}}};
+    request.ef_search_candidates = {10, 20, 40};
 
     vsag::AutoTuningPipeline pipeline;
     const auto report = pipeline.Tune(request);
 
     REQUIRE_FALSE(report.Succeeded());
-    REQUIRE(report.stages.size() == 3);
+    REQUIRE(report.stages.size() == 8);
     REQUIRE(report.stages[2].stage == vsag::TuningStage::BUILD_PARAMETER_TUNING);
-    REQUIRE(report.stages[2].status == vsag::TuningStageStatus::FAILED);
+    REQUIRE(report.stages[2].status == vsag::TuningStageStatus::COMPLETED);
+    REQUIRE(report.stages[2].input_count == 1);
+    REQUIRE(report.stages[2].output_count == 2);
+    REQUIRE(report.stages[3].stage == vsag::TuningStage::QUANTIZER_TUNING);
+    REQUIRE(report.stages[3].status == vsag::TuningStageStatus::COMPLETED);
+    REQUIRE(report.stages[3].input_count == 2);
+    REQUIRE(report.stages[3].output_count == 4);
+    REQUIRE(report.stages[4].stage == vsag::TuningStage::CANDIDATE_GENERATION);
+    REQUIRE(report.stages[4].input_count == 4);
+    REQUIRE(report.stages[4].output_count == 12);
+    REQUIRE(report.stages[5].stage == vsag::TuningStage::CANDIDATE_PRUNING);
+    REQUIRE(report.stages[5].input_count == 12);
+    REQUIRE(report.stages[5].output_count == 12);
+    REQUIRE(report.stages[7].stage == vsag::TuningStage::TRIAL_EXECUTION);
+    REQUIRE(report.stages[7].status == vsag::TuningStageStatus::FAILED);
+    REQUIRE(report.stages[7].input_count == 12);
 }
 
-TEST_CASE("auto tuning pipeline reports quantizer tuning as not implemented", "[ut][tuning]") {
+TEST_CASE("auto tuning pipeline enumerates quantizer candidates before execution", "[ut][tuning]") {
     fixtures::TestDatasetPool pool;
     auto dataset = pool.GetDatasetAndCreate(16, 200, "l2");
     auto index = BuildHGraphIndex(dataset);
@@ -221,15 +241,25 @@ TEST_CASE("auto tuning pipeline reports quantizer tuning as not implemented", "[
     request.topk = static_cast<uint64_t>(dataset->top_k);
     request.query_count = 8;
     request.enable_quantizer_tuning = true;
+    request.quantizer_parameter_spaces = {
+        {"hgraph.base_quantization_type", {"\"fp32\"", "\"sq8_uniform\""}}};
     request.ef_search_candidates = {10};
 
     vsag::AutoTuningPipeline pipeline;
     const auto report = pipeline.Tune(request);
 
     REQUIRE_FALSE(report.Succeeded());
-    REQUIRE(report.stages.size() == 4);
+    REQUIRE(report.stages.size() == 8);
     REQUIRE(report.stages[3].stage == vsag::TuningStage::QUANTIZER_TUNING);
-    REQUIRE(report.stages[3].status == vsag::TuningStageStatus::FAILED);
+    REQUIRE(report.stages[3].status == vsag::TuningStageStatus::COMPLETED);
+    REQUIRE(report.stages[3].input_count == 1);
+    REQUIRE(report.stages[3].output_count == 2);
+    REQUIRE(report.stages[4].stage == vsag::TuningStage::CANDIDATE_GENERATION);
+    REQUIRE(report.stages[4].input_count == 2);
+    REQUIRE(report.stages[4].output_count == 2);
+    REQUIRE(report.stages[7].stage == vsag::TuningStage::TRIAL_EXECUTION);
+    REQUIRE(report.stages[7].status == vsag::TuningStageStatus::FAILED);
+    REQUIRE(report.stages[7].input_count == 2);
 }
 
 TEST_CASE("auto tuning pipeline reports successive halving as not implemented", "[ut][tuning]") {

@@ -17,6 +17,7 @@
 #include <exception>
 #include <limits>
 #include <nlohmann/json.hpp>
+#include <utility>
 
 #include "vsag/factory.h"
 
@@ -122,19 +123,6 @@ ReadRequiredDouble(const JsonType& parent,
         return InvalidArgument("invalid_field", path + "." + key + " must be a number");
     }
     value = parent.at(key).get<double>();
-    return {};
-}
-
-AutoTuningApiParseResult
-ValidateUnsupportedObject(const JsonType& parent,
-                          const std::string& key,
-                          const std::string& code,
-                          const std::string& message) {
-    if (parent.contains(key) && not parent.at(key).is_null()) {
-        if (not parent.at(key).is_object() || not parent.at(key).empty()) {
-            return Unsupported(code, message);
-        }
-    }
     return {};
 }
 
@@ -260,7 +248,34 @@ CandidateToJson(const EfSearchCandidate& candidate) {
 }
 
 JsonType
+ParameterSpacesToJson(const std::vector<TuningParameterSpace>& parameter_spaces) {
+    JsonType result = JsonType::object();
+    for (const auto& parameter_space : parameter_spaces) {
+        JsonType values = JsonType::array();
+        for (const auto& value : parameter_space.values) {
+            values.push_back(ParseJsonForReport(value));
+        }
+        result[parameter_space.path] = JsonType{{"values", values}};
+    }
+    return result;
+}
+
+JsonType
 RequestSummaryToJson(const AutoTuningRequestSummary& request) {
+    JsonType search_space = JsonType::object();
+    if (not request.build_parameter_spaces.empty()) {
+        search_space["build"] = ParameterSpacesToJson(request.build_parameter_spaces);
+    }
+    if (not request.quantizer_parameter_spaces.empty()) {
+        search_space["quantizer"] = ParameterSpacesToJson(request.quantizer_parameter_spaces);
+    }
+    if (not request.search_parameter_spaces.empty()) {
+        search_space["search"] = ParameterSpacesToJson(request.search_parameter_spaces);
+    } else {
+        search_space["search"] =
+            JsonType{{"hgraph.ef_search", JsonType{{"values", request.ef_search_candidates}}}};
+    }
+
     return JsonType{
         {"index_type", request.index_name},
         {"source", JsonType{{"type", request.source_type}}},
@@ -273,10 +288,7 @@ RequestSummaryToJson(const AutoTuningRequestSummary& request) {
         {"objective",
          JsonType{{"primary", "latency"},
                   {"recall_at_k", JsonType{{"min", request.target_recall}}}}},
-        {"search_space",
-         JsonType{
-             {"search",
-              JsonType{{"hgraph.ef_search", JsonType{{"values", request.ef_search_candidates}}}}}}},
+        {"search_space", search_space},
         {"evaluation",
          JsonType{
              {"query_count", request.requested_query_count},
@@ -480,6 +492,7 @@ AutoTuningApiParseResult
 ValidateTuningSearchSpaceGroup(const JsonType& search_space,
                                const std::string& group_name,
                                const std::string& index_name,
+                               std::vector<TuningParameterSpace>& parameter_spaces,
                                bool& enabled) {
     enabled = false;
     if (not search_space.contains(group_name) || search_space.at(group_name).is_null()) {
@@ -514,6 +527,13 @@ ValidateTuningSearchSpaceGroup(const JsonType& search_space,
                 "invalid_search_space",
                 "$.search_space." + group_name + "." + item.key() + ".values must not be empty");
         }
+
+        TuningParameterSpace parameter_space;
+        parameter_space.path = item.key();
+        for (const auto& value : item.value().at("values")) {
+            parameter_space.values.push_back(value.dump());
+        }
+        parameter_spaces.push_back(std::move(parameter_space));
         enabled = true;
     }
     return {};
@@ -528,16 +548,22 @@ ParseSearchSpace(const JsonType& root, AutoTuningRequest& request) {
     }
 
     bool has_build_space = false;
-    result =
-        ValidateTuningSearchSpaceGroup(*search_space, "build", request.index_name, has_build_space);
+    result = ValidateTuningSearchSpaceGroup(*search_space,
+                                            "build",
+                                            request.index_name,
+                                            request.build_parameter_spaces,
+                                            has_build_space);
     if (not result.Succeeded()) {
         return result;
     }
     request.enable_build_parameter_tuning = has_build_space;
 
     bool has_quantizer_space = false;
-    result = ValidateTuningSearchSpaceGroup(
-        *search_space, "quantizer", request.index_name, has_quantizer_space);
+    result = ValidateTuningSearchSpaceGroup(*search_space,
+                                            "quantizer",
+                                            request.index_name,
+                                            request.quantizer_parameter_spaces,
+                                            has_quantizer_space);
     if (not result.Succeeded()) {
         return result;
     }
@@ -577,6 +603,8 @@ ParseSearchSpace(const JsonType& root, AutoTuningRequest& request) {
                                "$.search_space.search.hgraph.ef_search.values must not be empty");
     }
 
+    TuningParameterSpace search_parameter_space;
+    search_parameter_space.path = "hgraph.ef_search";
     for (const auto& value : ef_search.at("values")) {
         uint64_t candidate = 0;
         if (not ReadUint64Value(value, candidate)) {
@@ -585,7 +613,9 @@ ParseSearchSpace(const JsonType& root, AutoTuningRequest& request) {
                 "$.search_space.search.hgraph.ef_search.values must contain uint64 values");
         }
         request.ef_search_candidates.push_back(candidate);
+        search_parameter_space.values.push_back(value.dump());
     }
+    request.search_parameter_spaces.push_back(std::move(search_parameter_space));
     return {};
 }
 

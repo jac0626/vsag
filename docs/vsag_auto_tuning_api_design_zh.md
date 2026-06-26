@@ -1421,8 +1421,8 @@ V1 skeleton JSON parser 当前明确拒绝以下输入：
 
 V1 skeleton JSON parser 当前接受但 stage 仍可能报告 not implemented 的输入：
 
-- `search_space.build`，会设置 `enable_build_parameter_tuning = true`。
-- `search_space.quantizer`，会设置 `enable_quantizer_tuning = true`。
+- `search_space.build`，会保存离散参数空间，并设置 `enable_build_parameter_tuning = true`。
+- `search_space.quantizer`，会保存离散参数空间，并设置 `enable_quantizer_tuning = true`。
 - `evaluation.successive_halving.enabled = true`，会设置 `enable_successive_halving = true`。
 - `source.type = existing_index` 且 `config.build_parameters` 非空，作为 rebuild metadata/baseline
   保存到 request。
@@ -1440,7 +1440,8 @@ P0 已实现：
 - `search_space.search.hgraph.ef_search`
 - `budget.max_trials`
 - `config.build_parameters` 作为 existing index metadata 或 raw dataset baseline
-- `search_space.build` / `search_space.quantizer` 的 V1 skeleton flag 解析
+- `search_space.build` / `search_space.quantizer` / `search_space.search` 的离散参数空间保存
+- V1 skeleton candidate generation：对已保存的 build、quantizer、search 参数空间做朴素笛卡尔枚举
 - stage report
 - trial report
 - report request summary
@@ -1462,16 +1463,17 @@ V1 skeleton 已经或正在落地的框架槽位：
 - `TuningPlan`
 - `AutoTuningPlanner`
 - planner-driven linear pipeline executor
+- exhaustive candidate expansion skeleton
 
 P0 兼容路径仍只真实调 HGraph `ef_search`，但 execution path 不应再写死在
 `AutoTuningPipeline::Tune()` 里。
 
-未实现或未完成真实枚举能力：
+未实现或未完成真实执行能力：
 
 - 多索引 backend registry
 - IVF、Pyramid、BruteForce、SINDI 等其他索引类型
-- raw dataset 场景下的 build 参数调优
-- raw dataset 场景下的 quantizer 调优
+- raw dataset 或 existing index + rebuild source 场景下的 build candidate rebuild/evaluate
+- raw dataset 或 existing index + rebuild source 场景下的 quantizer candidate rebuild/evaluate
 - successive halving
 - timeout、memory、working directory 等预算控制
 - Pareto frontier

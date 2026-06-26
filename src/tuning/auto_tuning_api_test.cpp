@@ -96,6 +96,10 @@ TEST_CASE("auto tuning api parses P0 json and serializes report", "[ut][tuning]"
     REQUIRE(parse_result.request.target_recall == 0.95);
     REQUIRE(parse_result.request.index_name == "hgraph");
     REQUIRE(parse_result.request.ef_search_candidates == std::vector<uint64_t>{0, 10, 20, 1201});
+    REQUIRE(parse_result.request.search_parameter_spaces.size() == 1);
+    REQUIRE(parse_result.request.search_parameter_spaces[0].path == "hgraph.ef_search");
+    REQUIRE(parse_result.request.search_parameter_spaces[0].values ==
+            std::vector<std::string>{"0", "10", "20", "1201"});
     REQUIRE(parse_result.request.max_trials == 2);
 
     auto prepare_result =
@@ -264,6 +268,10 @@ TEST_CASE("auto tuning api validates request fields", "[ut][tuning]") {
 
         REQUIRE(result.Succeeded());
         REQUIRE(result.request.enable_build_parameter_tuning);
+        REQUIRE(result.request.build_parameter_spaces.size() == 1);
+        REQUIRE(result.request.build_parameter_spaces[0].path == "hgraph.max_degree");
+        REQUIRE(result.request.build_parameter_spaces[0].values ==
+                std::vector<std::string>{"16", "32"});
     }
 
     SECTION("quantizer search space enters V1 skeleton stage") {
@@ -275,6 +283,11 @@ TEST_CASE("auto tuning api validates request fields", "[ut][tuning]") {
 
         REQUIRE(result.Succeeded());
         REQUIRE(result.request.enable_quantizer_tuning);
+        REQUIRE(result.request.quantizer_parameter_spaces.size() == 1);
+        REQUIRE(result.request.quantizer_parameter_spaces[0].path ==
+                "hgraph.base_quantization_type");
+        REQUIRE(result.request.quantizer_parameter_spaces[0].values ==
+                std::vector<std::string>{"\"fp32\"", "\"sq8_uniform\""});
     }
 
     SECTION("non hgraph parameter path") {

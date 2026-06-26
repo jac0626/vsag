@@ -149,6 +149,9 @@ MakeRequestSummary(const AutoTuningRequest& request) {
     summary.build_parameters = request.build_parameters;
     summary.base_search_parameters = request.base_search_parameters;
     summary.ef_search_candidates = request.ef_search_candidates;
+    summary.build_parameter_spaces = request.build_parameter_spaces;
+    summary.quantizer_parameter_spaces = request.quantizer_parameter_spaces;
+    summary.search_parameter_spaces = request.search_parameter_spaces;
     summary.max_trials = request.max_trials;
     summary.enable_build_parameter_tuning = request.enable_build_parameter_tuning;
     summary.enable_quantizer_tuning = request.enable_quantizer_tuning;
@@ -170,6 +173,53 @@ MakeEfSearchTuningRequest(const AutoTuningRequest& request) {
     ef_request.ef_search_candidates = request.ef_search_candidates;
     ef_request.max_trials = request.max_trials;
     return ef_request;
+}
+
+std::vector<TuningParameterSpace>
+MakeEfSearchParameterSpaces(const AutoTuningRequest& request) {
+    if (not request.search_parameter_spaces.empty()) {
+        return request.search_parameter_spaces;
+    }
+
+    TuningParameterSpace parameter_space;
+    parameter_space.path = "hgraph.ef_search";
+    for (const auto ef_search : request.ef_search_candidates) {
+        parameter_space.values.push_back(std::to_string(ef_search));
+    }
+    if (parameter_space.values.empty()) {
+        return {};
+    }
+    return {parameter_space};
+}
+
+void
+AssignCandidateIds(std::vector<TuningCandidate>& candidates) {
+    uint64_t candidate_id = 0;
+    for (auto& candidate : candidates) {
+        candidate.id = candidate_id++;
+    }
+}
+
+void
+ExpandCandidates(std::vector<TuningCandidate>& candidates,
+                 const std::vector<TuningParameterSpace>& parameter_spaces) {
+    for (const auto& parameter_space : parameter_spaces) {
+        std::vector<TuningCandidate> expanded_candidates;
+        for (const auto& candidate : candidates) {
+            for (const auto& value : parameter_space.values) {
+                auto expanded = candidate;
+                expanded.patches.push_back({parameter_space.path, value});
+                expanded_candidates.push_back(std::move(expanded));
+            }
+        }
+        candidates = std::move(expanded_candidates);
+    }
+    AssignCandidateIds(candidates);
+}
+
+uint64_t
+CandidateCount(const TuningState& state) {
+    return static_cast<uint64_t>(state.candidates.size());
 }
 
 class WorkloadValidationStage final : public TuningStageExecutor {
@@ -233,14 +283,21 @@ public:
     void
     Run(TuningState& state, const TuningStageRuntime&) const override {
         const auto enabled = state.request.enable_build_parameter_tuning;
-        state.report.stages.push_back(
-            MakeStage(Stage(),
-                      enabled ? TuningStageStatus::FAILED : TuningStageStatus::SKIPPED,
-                      enabled ? "build parameter tuning is not implemented yet"
-                              : "build parameter tuning is disabled in this stage"));
-        if (enabled) {
-            state.should_stop = true;
+        if (not enabled) {
+            state.report.stages.push_back(
+                MakeStage(Stage(),
+                          TuningStageStatus::SKIPPED,
+                          "build parameter tuning is disabled in this stage"));
+            return;
         }
+
+        const auto input_count = CandidateCount(state);
+        ExpandCandidates(state.candidates, state.request.build_parameter_spaces);
+        state.report.stages.push_back(MakeStage(Stage(),
+                                                TuningStageStatus::COMPLETED,
+                                                "enumerated build parameter candidates",
+                                                input_count,
+                                                CandidateCount(state)));
     }
 };
 
@@ -254,14 +311,19 @@ public:
     void
     Run(TuningState& state, const TuningStageRuntime&) const override {
         const auto enabled = state.request.enable_quantizer_tuning;
-        state.report.stages.push_back(
-            MakeStage(Stage(),
-                      enabled ? TuningStageStatus::FAILED : TuningStageStatus::SKIPPED,
-                      enabled ? "quantizer tuning is not implemented yet"
-                              : "quantizer tuning is disabled in this stage"));
-        if (enabled) {
-            state.should_stop = true;
+        if (not enabled) {
+            state.report.stages.push_back(MakeStage(
+                Stage(), TuningStageStatus::SKIPPED, "quantizer tuning is disabled in this stage"));
+            return;
         }
+
+        const auto input_count = CandidateCount(state);
+        ExpandCandidates(state.candidates, state.request.quantizer_parameter_spaces);
+        state.report.stages.push_back(MakeStage(Stage(),
+                                                TuningStageStatus::COMPLETED,
+                                                "enumerated quantizer candidates",
+                                                input_count,
+                                                CandidateCount(state)));
     }
 };
 
@@ -274,25 +336,14 @@ public:
 
     void
     Run(TuningState& state, const TuningStageRuntime&) const override {
-        state.candidates.clear();
-        uint64_t candidate_id = 0;
-        for (const auto ef_search : state.request.ef_search_candidates) {
-            TuningCandidate candidate;
-            candidate.id = candidate_id++;
-            candidate.index_name = state.request.index_name;
-            candidate.source_type = state.request.source_type;
-            candidate.build_parameters = state.request.build_parameters;
-            candidate.search_parameters = state.request.base_search_parameters;
-            candidate.patches.push_back({"hgraph.ef_search", std::to_string(ef_search)});
-            state.candidates.push_back(std::move(candidate));
-        }
+        const auto input_count = CandidateCount(state);
+        ExpandCandidates(state.candidates, MakeEfSearchParameterSpaces(state.request));
 
-        state.report.stages.push_back(
-            MakeStage(Stage(),
-                      TuningStageStatus::COMPLETED,
-                      "generated ef_search candidates",
-                      0,
-                      static_cast<uint64_t>(state.request.ef_search_candidates.size())));
+        state.report.stages.push_back(MakeStage(Stage(),
+                                                TuningStageStatus::COMPLETED,
+                                                "generated tuning candidates",
+                                                input_count,
+                                                CandidateCount(state)));
     }
 };
 
@@ -306,6 +357,15 @@ public:
     void
     Run(TuningState& state, const TuningStageRuntime& runtime) const override {
         if (state.request.enable_successive_halving) {
+            return;
+        }
+        if (state.request.enable_build_parameter_tuning || state.request.enable_quantizer_tuning) {
+            state.report.stages.push_back(
+                MakeStage(Stage(),
+                          TuningStageStatus::COMPLETED,
+                          "using exhaustive candidates without optimized pruning",
+                          CandidateCount(state),
+                          CandidateCount(state)));
             return;
         }
         if (runtime.ef_search_tuner == nullptr) {
@@ -346,6 +406,15 @@ public:
             return;
         }
 
+        if (state.request.enable_build_parameter_tuning || state.request.enable_quantizer_tuning) {
+            state.report.stages.push_back(MakeStage(Stage(),
+                                                    TuningStageStatus::COMPLETED,
+                                                    "using single-round exhaustive evaluation",
+                                                    CandidateCount(state),
+                                                    CandidateCount(state)));
+            return;
+        }
+
         const auto skipped_trials = CountTrials(state.ef_search, TuningTrialStatus::SKIPPED);
         const auto runnable_trials =
             static_cast<uint64_t>(state.ef_search.trials.size()) - skipped_trials;
@@ -366,6 +435,17 @@ public:
 
     void
     Run(TuningState& state, const TuningStageRuntime&) const override {
+        if (state.request.enable_build_parameter_tuning || state.request.enable_quantizer_tuning) {
+            state.report.stages.push_back(
+                MakeStage(Stage(),
+                          TuningStageStatus::FAILED,
+                          "build or quantizer candidate execution is not implemented yet",
+                          CandidateCount(state),
+                          0));
+            state.should_stop = true;
+            return;
+        }
+
         const auto skipped_trials = CountTrials(state.ef_search, TuningTrialStatus::SKIPPED);
         const auto runnable_trials =
             static_cast<uint64_t>(state.ef_search.trials.size()) - skipped_trials;
