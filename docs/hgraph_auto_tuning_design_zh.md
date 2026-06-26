@@ -12,8 +12,8 @@ HGraph 的参数大致可以分为几层：
 
 | 参数层 | 代表参数 | 修改代价 | 主要影响 |
 | --- | --- | --- | --- |
-| 构建配置 | `max_degree`、`ef_construction`、`alpha`、graph type | 高。通常需要重新构建图。 | recall 上限、图内存、构建时间、路径质量。 |
-| 表示配置 | `base_quantization_type`、`precise_quantization_type`、`use_reorder`、存储参数 | 中。可能需要重建向量编码、保留原始向量或重新加载存储。 | 内存、距离计算成本、recall、重排成本。 |
+| 构建配置 | `max_degree`、`ef_construction`、`alpha`、graph type | 高。需要重建图。 | recall 上限、图内存、构建时间、路径质量。 |
+| 表示配置 | `base_quantization_type`、`precise_quantization_type` | 中。可能需要重建编码。 | 内存、距离计算成本、recall。 |
 | 搜索配置 | `ef_search`、`factor`、`enable_reorder` | 低。query-time 参数。 | recall、latency、QPS。 |
 | 运行时环境配置 | prefetch / runtime 参数 | 低。不改变图结构。 | latency、QPS、cache 行为。 |
 
@@ -373,6 +373,11 @@ cmake --build build --target hgraph_auto_tuning_poc --parallel 96
 # 同时写出机器可读 JSON report
 ./build/examples/cpp/hgraph_auto_tuning_poc \
   --json-output /tmp/hgraph_auto_tuning_report.json
+
+# 通过 raw_dataset API 语义构建 baseline HGraph 后调 ef_search
+./build/examples/cpp/hgraph_auto_tuning_poc \
+  --source-type raw_dataset \
+  --json-output /tmp/hgraph_auto_tuning_raw_report.json
 ```
 
 该 POC 位于 `src/tuning/hgraph_auto_tuning_poc.cpp`。默认使用小型内存数据集；传入
@@ -381,6 +386,9 @@ cmake --build build --target hgraph_auto_tuning_poc --parallel 96
 准备阶段耗时、tuning 总耗时、stage report、trial report 和 `ef_search` recommendation。
 传入 `--json-output` 时，POC 会把 `AutoTuningReport` 的稳定 JSON 表达写到指定文件；这样可以
 避开启动日志对 stdout 的影响，方便脚本解析。
+`--source-type existing_index` 是默认值，表示 POC 在调用 tuning 前先构建存量索引；
+`--source-type raw_dataset` 表示通过内部 JSON API 层用 `config.build_parameters` 构建 baseline
+HGraph，然后复用同一条 `ef_search` tuning pipeline。
 等 tuning API 迁到 public header 后，再移动到正式 `examples/cpp/` 示例。
 
 当前 SIFT128 POC 验证结果：
@@ -429,9 +437,9 @@ recommendation = ef_search 20
 | 类别 | 示例 | 初始支持建议 |
 | --- | --- | --- |
 | Query-time search | `ef_search`、`factor`、`enable_reorder` | P0/P1 支持。 |
-| Quantizer type switch | `base_quantization_type`、`precise_quantization_type`、`use_reorder` | 仅当 HGraph `Tune()` 能应用且 raw vector 可用时支持。 |
-| 同 quantizer 子参数 | `base_pq_dim`、RaBitQ bits、PCA/FHT 参数 | 在 HGraph `Tune()` 明确支持前，标记为 future 或 rebuild-required。 |
-| IO / storage 参数 | `base_io_type`、`precise_io_type`、file paths | future 或 rebuild/reload-required。 |
+| Quantizer type switch | `base_quantization_type`、`precise_quantization_type` | 需要 raw vector。 |
+| 同 quantizer 子参数 | `base_pq_dim`、RaBitQ bits、PCA/FHT 参数 | 当前标记为 future 或 rebuild-required。 |
+| IO / storage 参数 | `base_io_type`、`precise_io_type`、file paths | future。 |
 
 关键规则：
 

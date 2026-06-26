@@ -28,6 +28,7 @@ enum class AutoTuningApiStatus {
 
 struct AutoTuningApiContext {
     IndexPtr index = nullptr;
+    DatasetPtr base = nullptr;
     DatasetPtr queries = nullptr;
     DatasetPtr ground_truth = nullptr;
 };

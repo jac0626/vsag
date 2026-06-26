@@ -31,8 +31,8 @@ TuningRequest
 
 | Source | 主要用途 | 可调参数 | 注意事项 |
 | --- | --- | --- | --- |
-| `existing_index` | 存量索引 search 参数调优、线上索引回归验证 | search/runtime 参数 | 默认不 rebuild；build/quantizer 参数只能作为元信息或依赖 `Tune()` 能力。 |
-| `raw_dataset` | 完整调优、离线探索、构建新索引 | build、quantizer、search/runtime 参数 | 需要 base dataset；成本更高；可以构建多个候选索引。 |
+| `existing_index` | 存量索引 search 调优、线上回归 | search/runtime | 默认不 rebuild；build/quantizer 仅作元信息。 |
+| `raw_dataset` | 完整调优、离线探索、构建新索引 | build、quantizer、search/runtime 参数 | 需要 base dataset；成本更高。 |
 
 同时，VSAG 不只有 HGraph。完整 API 必须把 **索引类型** 作为一等概念，并明确列出支持范围：
 
@@ -313,7 +313,7 @@ request.index_type == source.index->GetIndexType()
 
 | 字段 | existing_index | raw_dataset |
 | --- | --- | --- |
-| `build_parameters` | 可选。作为 current config metadata。 | 推荐提供。作为 build candidate 的 baseline/template。 |
+| `build_parameters` | 可选。作为 current config metadata。 | 推荐提供。作为 build candidate baseline。 |
 | `search_parameters` | 推荐提供。作为 search 参数 baseline。 | 推荐提供。作为 search candidate 的 baseline。 |
 
 注意：
@@ -1197,23 +1197,31 @@ SerializeAutoTuningReportJson(const AutoTuningReport& report);
 ```cpp
 struct AutoTuningApiContext {
     IndexPtr index;
+    DatasetPtr base;
     DatasetPtr queries;
     DatasetPtr ground_truth;
 };
 ```
 
-因此 P0 JSON request 只表达语义配置；`source.index`、`workload.queries` 和
+因此 P0 JSON request 只表达语义配置；`source.index`、`source.base`、`workload.queries` 和
 `workload.ground_truth` 对应的实际对象仍由调用方通过 `AutoTuningApiContext` 传入。
+
+`source.type = existing_index` 时，parser 直接使用 `context.index`。`source.type = raw_dataset`
+时，parser 使用 `context.base` 和 `config.build_parameters` 构建一个 baseline HGraph index，再把
+这个 index 交给现有 `AutoTuningPipeline` 调 `hgraph.ef_search`。这个 raw dataset 路径只解决
+“从原始数据集生成 baseline index 后调 search 参数”的输入形态，不表示 build/quantizer 参数
+搜索已经实现。
 
 P0 JSON parser 当前明确拒绝以下输入：
 
-- `source.type != existing_index`，返回 `unsupported_source_type`。
+- `source.type` 不是 `existing_index` 或 `raw_dataset`，返回 `unsupported_source_type`。
 - `index_type != hgraph`，返回 `unsupported_index_type`。
 - 非 `search_space.search.hgraph.ef_search` 的 search 参数路径，返回 `unsupported_parameter`。
 - 非空 `search_space.build` 或 `search_space.quantizer`，返回 `unsupported_search_space`。
 - `evaluation.successive_halving.enabled = true`，返回 `unsupported_evaluation_strategy`。
 - `evaluation.warmup_query_count`，返回 `unsupported_evaluation_option`。
-- 非空 `config.build_parameters`，返回 `unsupported_config`。
+- `source.type = existing_index` 且 `config.build_parameters` 非空，返回 `unsupported_config`。
+- `source.type = raw_dataset` 且缺少 `config.build_parameters`，返回 `missing_field`。
 - `objective.primary` 非 `latency`，返回 `unsupported_objective`。
 - `objective.constraints`，返回 `unsupported_objective`。
 - `budget`，返回 `unsupported_budget`。
@@ -1223,6 +1231,7 @@ P0 已实现：
 
 - `index_type = hgraph` 的特化路径
 - `existing_index` + `IndexPtr`
+- `raw_dataset` + `DatasetPtr base` + baseline HGraph build
 - `queries` + `ground_truth`
 - `topk`
 - `query_count`
@@ -1242,9 +1251,8 @@ P0 未实现但已有 pipeline 槽位：
 
 - 多索引 backend registry
 - IVF、Pyramid、BruteForce、SINDI 等其他索引类型
-- `raw_dataset`
-- build 参数调优
-- quantizer 调优
+- raw dataset 场景下的 build 参数调优
+- raw dataset 场景下的 quantizer 调优
 - successive halving
 - budget enforcement
 - Pareto frontier

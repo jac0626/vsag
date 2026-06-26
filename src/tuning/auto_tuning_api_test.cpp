@@ -58,10 +58,19 @@ MakeValidRequestJson(uint64_t topk, uint64_t query_count, double target_recall) 
          {{"query_count", query_count}, {"successive_halving", {{"enabled", false}}}}}};
 }
 
+nlohmann::json
+MakeRawDatasetRequestJson(uint64_t topk, uint64_t query_count, double target_recall, uint64_t dim) {
+    auto request = MakeValidRequestJson(topk, query_count, target_recall);
+    request["source"]["type"] = "raw_dataset";
+    request["config"]["build_parameters"] = nlohmann::json::parse(MakeHGraphBuildParameters(dim));
+    return request;
+}
+
 vsag::AutoTuningApiContext
 MakeContext(const vsag::IndexPtr& index, const fixtures::TestDatasetPtr& dataset) {
     vsag::AutoTuningApiContext context;
     context.index = index;
+    context.base = dataset->base_;
     context.queries = dataset->query_;
     context.ground_truth = dataset->ground_truth_;
     return context;
@@ -119,18 +128,81 @@ TEST_CASE("auto tuning api parses P0 json and serializes report", "[ut][tuning]"
                 .get<uint64_t>() == 20);
 }
 
+TEST_CASE("auto tuning api builds baseline hgraph for raw dataset P0 request", "[ut][tuning]") {
+    fixtures::TestDatasetPool pool;
+    auto dataset = pool.GetDatasetAndCreate(16, 200, "l2");
+
+    const auto request_json =
+        MakeRawDatasetRequestJson(static_cast<uint64_t>(dataset->top_k), 8, 0.95, dataset->dim_)
+            .dump();
+    vsag::AutoTuningApiContext context;
+    context.base = dataset->base_;
+    context.queries = dataset->query_;
+    context.ground_truth = dataset->ground_truth_;
+
+    auto parse_result = vsag::ParseAutoTuningRequestJson(request_json, context);
+
+    REQUIRE(parse_result.Succeeded());
+    REQUIRE(parse_result.request.index != nullptr);
+    REQUIRE(parse_result.request.index->GetIndexType() == vsag::IndexType::HGRAPH);
+    REQUIRE(parse_result.request.queries == dataset->query_);
+    REQUIRE(parse_result.request.ground_truth == dataset->ground_truth_);
+    REQUIRE(parse_result.request.ef_search_candidates == std::vector<uint64_t>{0, 10, 20, 1201});
+
+    vsag::EfSearchTuner tuner([](const vsag::EvaluationRequest& request) {
+        auto parameters = nlohmann::json::parse(request.search_parameters);
+        const auto ef_search = parameters["hgraph"]["ef_search"].get<uint64_t>();
+
+        vsag::EvaluationResult result;
+        result.query_count = request.query_count;
+        result.recall.average = ef_search >= 20 ? 0.96 : 0.80;
+        result.latency.average_ms = static_cast<double>(ef_search) / 100.0;
+        return result;
+    });
+
+    vsag::AutoTuningPipeline pipeline(tuner);
+    const auto report = pipeline.Tune(parse_result.request);
+    REQUIRE(report.Succeeded());
+    REQUIRE(report.recommendation.has_value());
+    REQUIRE(report.recommendation->candidate.ef_search == 20);
+}
+
 TEST_CASE("auto tuning api rejects unsupported P0 request fields", "[ut][tuning]") {
     vsag::AutoTuningApiContext context;
 
-    SECTION("raw dataset source") {
+    SECTION("raw dataset source without build parameters") {
         auto request = MakeValidRequestJson(10, 8, 0.95);
         request["source"]["type"] = "raw_dataset";
 
         const auto result = vsag::ParseAutoTuningRequestJson(request.dump(), context);
 
         REQUIRE_FALSE(result.Succeeded());
+        REQUIRE(result.status == vsag::AutoTuningApiStatus::INVALID_ARGUMENT);
+        REQUIRE(result.error_code == "missing_field");
+    }
+
+    SECTION("raw dataset source without base context") {
+        auto request = MakeRawDatasetRequestJson(10, 8, 0.95, 16);
+        context.queries = vsag::Dataset::Make();
+        context.ground_truth = vsag::Dataset::Make();
+
+        const auto result = vsag::ParseAutoTuningRequestJson(request.dump(), context);
+
+        REQUIRE_FALSE(result.Succeeded());
+        REQUIRE(result.status == vsag::AutoTuningApiStatus::INVALID_ARGUMENT);
+        REQUIRE(result.error_code == "invalid_context");
+    }
+
+    SECTION("existing index source with build parameters") {
+        auto request = MakeValidRequestJson(10, 8, 0.95);
+        request["config"]["build_parameters"] =
+            nlohmann::json::parse(MakeHGraphBuildParameters(16));
+
+        const auto result = vsag::ParseAutoTuningRequestJson(request.dump(), context);
+
+        REQUIRE_FALSE(result.Succeeded());
         REQUIRE(result.status == vsag::AutoTuningApiStatus::UNSUPPORTED);
-        REQUIRE(result.error_code == "unsupported_source_type");
+        REQUIRE(result.error_code == "unsupported_config");
     }
 
     SECTION("non hgraph index type") {

@@ -21,6 +21,7 @@
 #include <exception>
 #include <fstream>
 #include <iostream>
+#include <nlohmann/json.hpp>
 #include <random>
 #include <stdexcept>
 #include <string>
@@ -34,6 +35,7 @@ namespace {
 struct PocOptions {
     std::string dataset_path;
     std::string json_output_path;
+    std::string source_type = "existing_index";
     uint64_t base_count = 0;
     uint64_t query_count = 0;
     uint64_t topk = 10;
@@ -63,7 +65,10 @@ PrintUsage(const char* binary) {
               << "  " << binary
               << " --dataset /root/data/sift-128-euclidean.hdf5"
                  " --base-count 10000 --query-count 100 --target-recall 0.90"
-                 " --json-output /tmp/hgraph_auto_tuning_report.json\n";
+                 " --json-output /tmp/hgraph_auto_tuning_report.json\n"
+              << "  " << binary
+              << " --source-type raw_dataset"
+                 " --json-output /tmp/hgraph_auto_tuning_raw_report.json\n";
 }
 
 uint64_t
@@ -95,6 +100,8 @@ ParseOptions(int argc, char** argv) {
             options.dataset_path = require_value(arg);
         } else if (arg == "--json-output") {
             options.json_output_path = require_value(arg);
+        } else if (arg == "--source-type") {
+            options.source_type = require_value(arg);
         } else if (arg == "--base-count") {
             options.base_count = ParseUint64(require_value(arg), arg);
         } else if (arg == "--query-count") {
@@ -122,6 +129,9 @@ ParseOptions(int argc, char** argv) {
         if (options.query_count == 0) {
             options.query_count = 100;
         }
+    }
+    if (options.source_type != "existing_index" && options.source_type != "raw_dataset") {
+        throw std::invalid_argument("--source-type must be existing_index or raw_dataset");
     }
     return options;
 }
@@ -305,6 +315,26 @@ MakeHGraphBuildParameters(uint64_t dim) {
     })";
 }
 
+std::string
+MakeAutoTuningRequestJson(const PocOptions& options, uint64_t dim) {
+    nlohmann::json request{
+        {"version", 1},
+        {"index_type", "hgraph"},
+        {"source", {{"type", options.source_type}}},
+        {"workload", {{"topk", options.topk}}},
+        {"config", {{"search_parameters", {{"hgraph", {{"factor", 2}}}}}}},
+        {"objective", {{"recall_at_k", {{"min", options.target_recall}}}}},
+        {"search_space",
+         {{"search", {{"hgraph.ef_search", {{"values", {0, 10, 20, 40, 80, 160, 320, 1201}}}}}}}},
+        {"evaluation",
+         {{"query_count", options.query_count}, {"successive_halving", {{"enabled", false}}}}}};
+    if (options.source_type == "raw_dataset") {
+        request["config"]["build_parameters"] =
+            nlohmann::json::parse(MakeHGraphBuildParameters(dim));
+    }
+    return request.dump();
+}
+
 vsag::IndexPtr
 BuildIndex(const std::string& index_type,
            const std::string& build_parameters,
@@ -380,6 +410,7 @@ void
 PrintInput(const PocOptions& options, const DatasetBundle& bundle) {
     std::cout << "Input:" << std::endl;
     std::cout << "  source=" << bundle.source << std::endl;
+    std::cout << "  source_type=" << options.source_type << std::endl;
     std::cout << "  base_count=" << options.base_count << std::endl;
     std::cout << "  query_count=" << options.query_count << std::endl;
     std::cout << "  dim=" << bundle.dim << std::endl;
@@ -448,6 +479,32 @@ WriteJsonReport(const vsag::AutoTuningReport& report, const std::string& path) {
     output << vsag::SerializeAutoTuningReportJson(report) << std::endl;
 }
 
+vsag::AutoTuningRequest
+MakeAutoTuningRequest(const PocOptions& options,
+                      const DatasetBundle& bundle,
+                      const vsag::DatasetPtr& ground_truth,
+                      double& build_elapsed_ms) {
+    const auto build_started_at = std::chrono::steady_clock::now();
+
+    vsag::AutoTuningApiContext context;
+    context.base = bundle.base;
+    context.queries = bundle.queries;
+    context.ground_truth = ground_truth;
+
+    if (options.source_type == "existing_index") {
+        context.index = BuildIndex("hgraph", MakeHGraphBuildParameters(bundle.dim), bundle.base);
+    }
+
+    const auto request_json = MakeAutoTuningRequestJson(options, bundle.dim);
+    auto parse_result = vsag::ParseAutoTuningRequestJson(request_json, context);
+    build_elapsed_ms = ElapsedMs(build_started_at);
+    if (not parse_result.Succeeded()) {
+        throw std::runtime_error("failed to prepare auto tuning request: " +
+                                 vsag::SerializeAutoTuningErrorJson(parse_result));
+    }
+    return parse_result.request;
+}
+
 }  // namespace
 
 int
@@ -465,11 +522,6 @@ main(int argc, char** argv) {
             throw std::invalid_argument("topk must be no greater than base-count");
         }
 
-        const auto build_started_at = std::chrono::steady_clock::now();
-        auto hgraph_index =
-            BuildIndex("hgraph", MakeHGraphBuildParameters(bundle.dim), bundle.base);
-        const auto build_elapsed_ms = ElapsedMs(build_started_at);
-
         const auto ground_truth_started_at = std::chrono::steady_clock::now();
         std::vector<int64_t> ground_truth_ids;
         std::vector<float> ground_truth_distances;
@@ -477,15 +529,8 @@ main(int argc, char** argv) {
             bundle.base, bundle.queries, options.topk, ground_truth_ids, ground_truth_distances);
         const auto ground_truth_elapsed_ms = ElapsedMs(ground_truth_started_at);
 
-        vsag::AutoTuningRequest request;
-        request.index = hgraph_index;
-        request.queries = bundle.queries;
-        request.ground_truth = ground_truth;
-        request.topk = options.topk;
-        request.query_count = options.query_count;
-        request.target_recall = options.target_recall;
-        request.base_search_parameters = R"({"hgraph":{"factor":2}})";
-        request.ef_search_candidates = {0, 10, 20, 40, 80, 160, 320, 1201};
+        double build_elapsed_ms = 0.0;
+        auto request = MakeAutoTuningRequest(options, bundle, ground_truth, build_elapsed_ms);
 
         vsag::AutoTuningPipeline pipeline;
         const auto report = pipeline.Tune(request);
