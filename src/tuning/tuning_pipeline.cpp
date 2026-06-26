@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <exception>
 #include <limits>
 #include <utility>
 
@@ -64,6 +65,22 @@ ValidateWorkload(const AutoTuningRequest& request) {
     if (request.index == nullptr) {
         result.status = EvaluationStatus::INVALID_ARGUMENT;
         result.error_message = "index is required";
+        return result;
+    }
+    if (request.index_name != "hgraph") {
+        result.status = EvaluationStatus::INVALID_ARGUMENT;
+        result.error_message = "P0 auto tuning only supports hgraph index_name";
+        return result;
+    }
+    try {
+        if (request.index->GetIndexType() != IndexType::HGRAPH) {
+            result.status = EvaluationStatus::INVALID_ARGUMENT;
+            result.error_message = "P0 auto tuning only supports HGraph index";
+            return result;
+        }
+    } catch (const std::exception& e) {
+        result.status = EvaluationStatus::INVALID_ARGUMENT;
+        result.error_message = std::string("failed to read index type: ") + e.what();
         return result;
     }
     if (request.queries == nullptr) {

@@ -21,6 +21,7 @@
 #include <exception>
 #include <iostream>
 #include <random>
+#include <stdexcept>
 #include <string>
 #include <utility>
 #include <vector>
@@ -305,16 +306,14 @@ BuildIndex(const std::string& index_type,
            const vsag::DatasetPtr& base) {
     auto index = vsag::Factory::CreateIndex(index_type, build_parameters);
     if (not index.has_value()) {
-        std::cerr << "Failed to create " << index_type << " index: " << index.error().message
-                  << std::endl;
-        std::exit(EXIT_FAILURE);
+        throw std::runtime_error("failed to create " + index_type +
+                                 " index: " + index.error().message);
     }
 
     auto build_result = index.value()->Build(base);
     if (not build_result.has_value()) {
-        std::cerr << "Failed to build " << index_type << " index: " << build_result.error().message
-                  << std::endl;
-        std::exit(EXIT_FAILURE);
+        throw std::runtime_error("failed to build " + index_type +
+                                 " index: " + build_result.error().message);
     }
     return index.value();
 }
@@ -484,7 +483,7 @@ main(int argc, char** argv) {
         PrintTrials(report);
         PrintRecommendation(report);
 
-        return report.best_effort.has_value() ? EXIT_SUCCESS : EXIT_FAILURE;
+        return report.Succeeded() ? EXIT_SUCCESS : EXIT_FAILURE;
     } catch (const std::exception& e) {
         std::cerr << "hgraph_auto_tuning_poc failed: " << e.what() << std::endl;
         return EXIT_FAILURE;

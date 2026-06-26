@@ -33,9 +33,25 @@ MakeHGraphBuildParameters(uint64_t dim) {
     return parameters.dump();
 }
 
+std::string
+MakeBruteForceBuildParameters(uint64_t dim) {
+    nlohmann::json parameters{{"dtype", "float32"}, {"metric_type", "l2"}, {"dim", dim}};
+    return parameters.dump();
+}
+
 vsag::IndexPtr
 BuildHGraphIndex(const fixtures::TestDatasetPtr& dataset) {
     auto index = vsag::Factory::CreateIndex("hgraph", MakeHGraphBuildParameters(dataset->dim_));
+    REQUIRE(index.has_value());
+    auto build_result = index.value()->Build(dataset->base_);
+    REQUIRE(build_result.has_value());
+    return index.value();
+}
+
+vsag::IndexPtr
+BuildBruteForceIndex(const fixtures::TestDatasetPtr& dataset) {
+    auto index =
+        vsag::Factory::CreateIndex("brute_force", MakeBruteForceBuildParameters(dataset->dim_));
     REQUIRE(index.has_value());
     auto build_result = index.value()->Build(dataset->base_);
     REQUIRE(build_result.has_value());
@@ -89,6 +105,51 @@ TEST_CASE("auto tuning pipeline fails early for invalid workloads", "[ut][tuning
 
     REQUIRE_FALSE(report.Succeeded());
     REQUIRE(report.elapsed_ms >= 0.0);
+    REQUIRE(report.stages.size() == 1);
+    REQUIRE(report.stages[0].stage == vsag::TuningStage::WORKLOAD_VALIDATION);
+    REQUIRE(report.stages[0].status == vsag::TuningStageStatus::FAILED);
+}
+
+TEST_CASE("auto tuning pipeline rejects non-HGraph P0 inputs", "[ut][tuning]") {
+    fixtures::TestDatasetPool pool;
+    auto dataset = pool.GetDatasetAndCreate(16, 200, "l2");
+    auto index = BuildBruteForceIndex(dataset);
+
+    vsag::AutoTuningRequest request;
+    request.index = index;
+    request.queries = dataset->query_;
+    request.ground_truth = dataset->ground_truth_;
+    request.topk = static_cast<uint64_t>(dataset->top_k);
+    request.query_count = 8;
+    request.ef_search_candidates = {10};
+
+    vsag::AutoTuningPipeline pipeline;
+    const auto report = pipeline.Tune(request);
+
+    REQUIRE_FALSE(report.Succeeded());
+    REQUIRE(report.stages.size() == 1);
+    REQUIRE(report.stages[0].stage == vsag::TuningStage::WORKLOAD_VALIDATION);
+    REQUIRE(report.stages[0].status == vsag::TuningStageStatus::FAILED);
+}
+
+TEST_CASE("auto tuning pipeline rejects non-HGraph P0 parameter paths", "[ut][tuning]") {
+    fixtures::TestDatasetPool pool;
+    auto dataset = pool.GetDatasetAndCreate(16, 200, "l2");
+    auto index = BuildHGraphIndex(dataset);
+
+    vsag::AutoTuningRequest request;
+    request.index = index;
+    request.index_name = "ivf";
+    request.queries = dataset->query_;
+    request.ground_truth = dataset->ground_truth_;
+    request.topk = static_cast<uint64_t>(dataset->top_k);
+    request.query_count = 8;
+    request.ef_search_candidates = {10};
+
+    vsag::AutoTuningPipeline pipeline;
+    const auto report = pipeline.Tune(request);
+
+    REQUIRE_FALSE(report.Succeeded());
     REQUIRE(report.stages.size() == 1);
     REQUIRE(report.stages[0].stage == vsag::TuningStage::WORKLOAD_VALIDATION);
     REQUIRE(report.stages[0].status == vsag::TuningStageStatus::FAILED);
