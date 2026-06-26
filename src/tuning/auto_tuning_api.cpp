@@ -167,6 +167,17 @@ ApiStatusName(AutoTuningApiStatus status) {
 }
 
 const char*
+SourceTypeName(SourceType source_type) {
+    switch (source_type) {
+        case SourceType::EXISTING_INDEX:
+            return "existing_index";
+        case SourceType::RAW_DATASET:
+            return "raw_dataset";
+    }
+    return "unknown";
+}
+
+const char*
 StageName(TuningStage stage) {
     switch (stage) {
         case TuningStage::WORKLOAD_VALIDATION:
@@ -236,8 +247,46 @@ EfSearchPatch(uint64_t ef_search) {
 }
 
 JsonType
+ParseJsonForReport(const std::string& value) {
+    if (value.empty()) {
+        return JsonType::object();
+    }
+    try {
+        return JsonType::parse(value);
+    } catch (const std::exception&) {
+        return value;
+    }
+}
+
+JsonType
 CandidateToJson(const EfSearchCandidate& candidate) {
     return JsonType{{"hgraph.ef_search", candidate.ef_search}};
+}
+
+JsonType
+RequestSummaryToJson(const AutoTuningRequestSummary& request) {
+    return JsonType{
+        {"index_type", request.index_name},
+        {"source", JsonType{{"type", request.source_type}}},
+        {"workload", JsonType{{"topk", request.topk}}},
+        {"config",
+         JsonType{{"build_parameters",
+                   request.build_parameters.empty() ? JsonType()
+                                                    : ParseJsonForReport(request.build_parameters)},
+                  {"search_parameters", ParseJsonForReport(request.base_search_parameters)}}},
+        {"objective",
+         JsonType{{"primary", "latency"},
+                  {"recall_at_k", JsonType{{"min", request.target_recall}}}}},
+        {"search_space",
+         JsonType{
+             {"search",
+              JsonType{{"hgraph.ef_search", JsonType{{"values", request.ef_search_candidates}}}}}}},
+        {"evaluation",
+         JsonType{
+             {"query_count", request.requested_query_count},
+             {"effective_query_count", request.effective_query_count},
+             {"successive_halving", JsonType{{"enabled", request.enable_successive_halving}}}}},
+        {"budget", JsonType{{"max_trials", request.max_trials}}}};
 }
 
 JsonType
@@ -388,6 +437,7 @@ ParseConfig(const JsonType& root,
                                    "$.config.build_parameters must not be empty for raw_dataset");
         }
         parsed_config.build_parameters = build_parameters->dump();
+        request.build_parameters = parsed_config.build_parameters;
     }
 
     const JsonType* search_parameters = nullptr;
@@ -644,6 +694,7 @@ ParseAutoTuningRequestJson(const std::string& request_json, const AutoTuningApiC
     if (not parse_result.Succeeded()) {
         return parse_result;
     }
+    result.request.source_type = SourceTypeName(source_type);
     parse_result = ParseWorkload(root, result.request);
     if (not parse_result.Succeeded()) {
         return parse_result;
@@ -696,6 +747,7 @@ SerializeAutoTuningReportJson(const AutoTuningReport& report) {
     JsonType root{{"version", 1},
                   {"succeeded", report.Succeeded()},
                   {"status", report.Succeeded() ? "succeeded" : "failed"},
+                  {"request", RequestSummaryToJson(report.request)},
                   {"elapsed_ms", report.elapsed_ms},
                   {"stages", stages},
                   {"trials", trials}};

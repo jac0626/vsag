@@ -843,7 +843,9 @@ max(100 * topk, 1000) = 1000
 ```json
 {
   "version": 1,
-  "status": "success",
+  "succeeded": true,
+  "status": "succeeded",
+  "request": {},
   "elapsed_ms": 123.4,
   "stages": [],
   "recommendation": {},
@@ -854,13 +856,64 @@ max(100 * topk, 1000) = 1000
 }
 ```
 
+`request` 是本次 tuning 输入的机器可读摘要，用来支持结果回放、审计和文档化。它不是
+`AutoTuningApiContext` 的完整序列化，因此不会包含真实的 `IndexPtr`、`DatasetPtr` 或向量
+内容。P0 当前输出的 `request` 形态如下：
+
+```json
+{
+  "index_type": "hgraph",
+  "source": {
+    "type": "existing_index"
+  },
+  "workload": {
+    "topk": 10
+  },
+  "config": {
+    "build_parameters": null,
+    "search_parameters": {
+      "hgraph": {
+        "factor": 2
+      }
+    }
+  },
+  "objective": {
+    "primary": "latency",
+    "recall_at_k": {
+      "min": 0.95
+    }
+  },
+  "search_space": {
+    "search": {
+      "hgraph.ef_search": {
+        "values": [0, 10, 20, 40, 80]
+      }
+    }
+  },
+  "evaluation": {
+    "query_count": 100,
+    "effective_query_count": 100,
+    "successive_halving": {
+      "enabled": false
+    }
+  },
+  "budget": {
+    "max_trials": 0
+  }
+}
+```
+
+`evaluation.query_count` 是输入中请求的 query 数；`evaluation.effective_query_count` 是 pipeline
+实际用于评估的 query 数。`query_count = 0` 表示使用全部 query，因此这两个值可能不同。
+`budget.max_trials = 0` 表示不限制 trial 数。
+
 ### 15.1 Stage Result
 
 ```json
 {
-  "stage": "CANDIDATE_PRUNING",
-  "status": "COMPLETED",
-  "message": "pruned invalid ef_search candidates",
+  "stage": "candidate_pruning",
+  "status": "completed",
+  "message": "skipped invalid or budgeted ef_search candidates",
   "input_count": 8,
   "output_count": 7
 }
@@ -870,9 +923,9 @@ Stage status：
 
 | 状态 | 语义 |
 | --- | --- |
-| `COMPLETED` | 阶段正常完成。 |
-| `SKIPPED` | 阶段按配置跳过，属于预期行为。 |
-| `FAILED` | 阶段失败，报告应包含原因。 |
+| `completed` | 阶段正常完成。 |
+| `skipped` | 阶段按配置跳过，属于预期行为。 |
+| `failed` | 阶段失败，报告应包含原因。 |
 
 ### 15.2 Trial Result
 
@@ -880,23 +933,32 @@ Stage status：
 {
   "trial_id": 3,
   "candidate": {
-    "search_parameters": {
-      "hgraph": {
-        "factor": 2,
-        "ef_search": 120
-      }
+    "hgraph.ef_search": 120
+  },
+  "search_parameters_patch": {
+    "hgraph": {
+      "ef_search": 120
     }
   },
-  "status": "COMPLETED",
+  "status": "completed",
   "message": "",
-  "metrics": {
+  "evaluation": {
+    "status": "success",
+    "error_message": "",
+    "query_count": 100,
     "recall": {
       "average": 0.951,
+      "p0": 0.8,
+      "p10": 0.9,
+      "p30": 0.95,
       "p50": 0.95,
+      "p70": 1.0,
       "p90": 1.0
     },
     "latency": {
       "average_ms": 1.2,
+      "p50_ms": 1.0,
+      "p90_ms": 2.0,
       "p95_ms": 2.4,
       "p99_ms": 3.1
     },
@@ -910,10 +972,10 @@ Trial status：
 
 | 状态 | 语义 |
 | --- | --- |
-| `COMPLETED` | candidate 已评估完成。 |
-| `SKIPPED` | candidate 被剪枝或预算跳过。 |
-| `FAILED` | candidate 执行失败，例如参数非法、构建失败、搜索失败。 |
-| `TIMEOUT` | 后续可扩展，表示 trial 超时。 |
+| `completed` | candidate 已评估完成。 |
+| `skipped` | candidate 被剪枝或预算跳过。 |
+| `failed` | candidate 执行失败，例如参数非法、构建失败、搜索失败。 |
+| `timeout` | 后续可扩展，表示 trial 超时。 |
 
 ### 15.3 Recommendation
 
@@ -921,14 +983,14 @@ Trial status：
 {
   "recommendation": {
     "candidate": {
-      "search_parameters": {
-        "hgraph": {
-          "factor": 2,
-          "ef_search": 120
-        }
+      "hgraph.ef_search": 120
+    },
+    "search_parameters_patch": {
+      "hgraph": {
+        "ef_search": 120
       }
     },
-    "metrics": {
+    "evaluation": {
       "recall": {
         "average": 0.951
       },
@@ -943,8 +1005,8 @@ Trial status：
 
 - `recommendation` 为空。
 - `best_effort` 填充已评估候选中最好的一个。
-- `status` 应为 `no_feasible_candidate` 或等价状态。
-- `stages.SELECTION` 应为 `SKIPPED` 或 `FAILED`，并说明没有可行候选。
+- P0 当前 `status` 为 `failed`，长期 typed API 可以再细分为 `no_feasible_candidate`。
+- `selection` stage 应为 `skipped` 或 `failed`，并说明没有可行候选。
 
 ## 16. C++ Typed API 草案
 
@@ -1133,12 +1195,15 @@ struct AutoTuningRequest {
     IndexPtr index;
     DatasetPtr queries;
     DatasetPtr ground_truth;
+    std::string source_type;
     uint64_t topk;
     uint64_t query_count;
     double target_recall;
     std::string index_name;
+    std::string build_parameters;
     std::string base_search_parameters;
     std::vector<uint64_t> ef_search_candidates;
+    uint64_t max_trials;
     bool enable_build_parameter_tuning;
     bool enable_quantizer_tuning;
     bool enable_successive_halving;
@@ -1177,6 +1242,9 @@ struct AutoTuningRequest {
   },
   "evaluation": {
     "query_count": 0
+  },
+  "budget": {
+    "max_trials": 0
   }
 }
 ```
@@ -1241,6 +1309,7 @@ P0 已实现：
 - `budget.max_trials`
 - stage report
 - trial report
+- report request summary
 - tuning elapsed time
 - recommendation
 - best effort

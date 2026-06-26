@@ -55,10 +55,28 @@ struct AutoTuningRequest {
     IndexPtr index = nullptr;
     DatasetPtr queries = nullptr;
     DatasetPtr ground_truth = nullptr;
+    std::string source_type = "existing_index";
     uint64_t topk = 0;
     uint64_t query_count = 0;
     double target_recall = 0.0;
     std::string index_name = "hgraph";
+    std::string build_parameters;
+    std::string base_search_parameters;
+    std::vector<uint64_t> ef_search_candidates;
+    uint64_t max_trials = 0;
+    bool enable_build_parameter_tuning = false;
+    bool enable_quantizer_tuning = false;
+    bool enable_successive_halving = false;
+};
+
+struct AutoTuningRequestSummary {
+    std::string index_name = "hgraph";
+    std::string source_type = "existing_index";
+    uint64_t topk = 0;
+    uint64_t requested_query_count = 0;
+    uint64_t effective_query_count = 0;
+    double target_recall = 0.0;
+    std::string build_parameters;
     std::string base_search_parameters;
     std::vector<uint64_t> ef_search_candidates;
     uint64_t max_trials = 0;
@@ -69,6 +87,7 @@ struct AutoTuningRequest {
 
 // P0 internal report. elapsed_ms covers AutoTuningPipeline::Tune() only.
 struct AutoTuningReport {
+    AutoTuningRequestSummary request;
     std::vector<TuningStageResult> stages;
     EfSearchTuningReport ef_search;
     std::optional<EfSearchTrialResult> recommendation;

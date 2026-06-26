@@ -137,6 +137,24 @@ ValidateWorkload(const AutoTuningRequest& request) {
     return result;
 }
 
+AutoTuningRequestSummary
+MakeRequestSummary(const AutoTuningRequest& request) {
+    AutoTuningRequestSummary summary;
+    summary.index_name = request.index_name;
+    summary.source_type = request.source_type;
+    summary.topk = request.topk;
+    summary.requested_query_count = request.query_count;
+    summary.target_recall = request.target_recall;
+    summary.build_parameters = request.build_parameters;
+    summary.base_search_parameters = request.base_search_parameters;
+    summary.ef_search_candidates = request.ef_search_candidates;
+    summary.max_trials = request.max_trials;
+    summary.enable_build_parameter_tuning = request.enable_build_parameter_tuning;
+    summary.enable_quantizer_tuning = request.enable_quantizer_tuning;
+    summary.enable_successive_halving = request.enable_successive_halving;
+    return summary;
+}
+
 }  // namespace
 
 bool
@@ -155,6 +173,7 @@ AutoTuningReport
 AutoTuningPipeline::Tune(const AutoTuningRequest& request) const {
     const auto started_at = std::chrono::steady_clock::now();
     AutoTuningReport report;
+    report.request = MakeRequestSummary(request);
     auto finish = [started_at](AutoTuningReport& tuning_report) {
         tuning_report.elapsed_ms = ElapsedMs(started_at);
         return tuning_report;
@@ -166,6 +185,7 @@ AutoTuningPipeline::Tune(const AutoTuningRequest& request) const {
             TuningStage::WORKLOAD_VALIDATION, TuningStageStatus::FAILED, validation.error_message));
         return finish(report);
     }
+    report.request.effective_query_count = validation.query_count;
     report.stages.push_back(MakeStage(TuningStage::WORKLOAD_VALIDATION,
                                       TuningStageStatus::COMPLETED,
                                       "workload is valid",

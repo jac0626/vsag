@@ -122,6 +122,23 @@ TEST_CASE("auto tuning api parses P0 json and serializes report", "[ut][tuning]"
     REQUIRE(report_json["version"].get<uint64_t>() == 1);
     REQUIRE(report_json["succeeded"].get<bool>());
     REQUIRE(report_json["status"].get<std::string>() == "succeeded");
+    REQUIRE(report_json["request"]["index_type"].get<std::string>() == "hgraph");
+    REQUIRE(report_json["request"]["source"]["type"].get<std::string>() == "existing_index");
+    REQUIRE(report_json["request"]["workload"]["topk"].get<uint64_t>() ==
+            static_cast<uint64_t>(dataset->top_k));
+    REQUIRE(report_json["request"]["config"]["build_parameters"].is_null());
+    REQUIRE(
+        report_json["request"]["config"]["search_parameters"]["hgraph"]["factor"].get<uint64_t>() ==
+        2);
+    REQUIRE(report_json["request"]["objective"]["primary"].get<std::string>() == "latency");
+    REQUIRE(report_json["request"]["objective"]["recall_at_k"]["min"].get<double>() == 0.95);
+    REQUIRE(report_json["request"]["search_space"]["search"]["hgraph.ef_search"]["values"] ==
+            nlohmann::json::array({0, 10, 20, 1201}));
+    REQUIRE(report_json["request"]["evaluation"]["query_count"].get<uint64_t>() == 8);
+    REQUIRE(report_json["request"]["evaluation"]["effective_query_count"].get<uint64_t>() == 8);
+    REQUIRE_FALSE(
+        report_json["request"]["evaluation"]["successive_halving"]["enabled"].get<bool>());
+    REQUIRE(report_json["request"]["budget"]["max_trials"].get<uint64_t>() == 2);
     REQUIRE(report_json["elapsed_ms"].get<double>() >= 0.0);
     REQUIRE(report_json["stages"].size() == 9);
     REQUIRE(report_json["trials"].size() == 4);
@@ -146,9 +163,12 @@ TEST_CASE("auto tuning api builds baseline hgraph for raw dataset P0 request", "
 
     REQUIRE(parse_result.Succeeded());
     REQUIRE(parse_result.request.index != nullptr);
+    REQUIRE(parse_result.request.source_type == "raw_dataset");
     REQUIRE(parse_result.request.index->GetIndexType() == vsag::IndexType::HGRAPH);
     REQUIRE(parse_result.request.queries == dataset->query_);
     REQUIRE(parse_result.request.ground_truth == dataset->ground_truth_);
+    REQUIRE(nlohmann::json::parse(parse_result.request.build_parameters)["dim"].get<uint64_t>() ==
+            dataset->dim_);
     REQUIRE(parse_result.request.ef_search_candidates == std::vector<uint64_t>{0, 10, 20, 1201});
 
     vsag::EfSearchTuner tuner([](const vsag::EvaluationRequest& request) {
@@ -167,6 +187,12 @@ TEST_CASE("auto tuning api builds baseline hgraph for raw dataset P0 request", "
     REQUIRE(report.Succeeded());
     REQUIRE(report.recommendation.has_value());
     REQUIRE(report.recommendation->candidate.ef_search == 20);
+
+    const auto report_json = nlohmann::json::parse(vsag::SerializeAutoTuningReportJson(report));
+    REQUIRE(report_json["request"]["source"]["type"].get<std::string>() == "raw_dataset");
+    REQUIRE(report_json["request"]["config"]["build_parameters"]["index_param"]["max_degree"]
+                .get<uint64_t>() == 16);
+    REQUIRE(report_json["request"]["evaluation"]["effective_query_count"].get<uint64_t>() == 8);
 }
 
 TEST_CASE("auto tuning api rejects unsupported P0 request fields", "[ut][tuning]") {

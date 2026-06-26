@@ -79,6 +79,13 @@ TEST_CASE("auto tuning pipeline runs all P0 stages with explicit skipped stages"
     const auto report = pipeline.Tune(request);
 
     REQUIRE(report.Succeeded());
+    REQUIRE(report.request.index_name == "hgraph");
+    REQUIRE(report.request.source_type == "existing_index");
+    REQUIRE(report.request.topk == static_cast<uint64_t>(dataset->top_k));
+    REQUIRE(report.request.requested_query_count == 8);
+    REQUIRE(report.request.effective_query_count == 8);
+    REQUIRE(report.request.base_search_parameters == R"({"hgraph":{"factor":2}})");
+    REQUIRE(report.request.ef_search_candidates == std::vector<uint64_t>{0, 10, 80, 1201});
     REQUIRE(report.elapsed_ms >= 0.0);
     REQUIRE(report.stages.size() == 9);
     REQUIRE(report.stages[0].stage == vsag::TuningStage::WORKLOAD_VALIDATION);

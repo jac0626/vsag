@@ -390,7 +390,9 @@ cmake --build build --target hgraph_auto_tuning_poc --parallel 96
 在当前 base 子集内直接计算精确 L2 ground truth，然后调用 `AutoTuningPipeline` 输出输入摘要、
 准备阶段耗时、tuning 总耗时、stage report、trial report 和 `ef_search` recommendation。
 传入 `--json-output` 时，POC 会把 `AutoTuningReport` 的稳定 JSON 表达写到指定文件；这样可以
-避开启动日志对 stdout 的影响，方便脚本解析。
+避开启动日志对 stdout 的影响，方便脚本解析。JSON report 里包含 `request` 摘要块，会回显
+`index_type`、`source.type`、`topk`、目标 recall、`ef_search` 搜索空间、实际 query 数和预算，
+但不会序列化真实的 `IndexPtr`、`DatasetPtr` 或向量内容。
 `--source-type existing_index` 是默认值，表示 POC 在调用 tuning 前先构建存量索引；
 `--source-type raw_dataset` 表示通过内部 JSON API 层用 `config.build_parameters` 构建 baseline
 HGraph，然后复用同一条 `ef_search` tuning pipeline。
