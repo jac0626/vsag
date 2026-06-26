@@ -23,6 +23,7 @@
 #include <iostream>
 #include <nlohmann/json.hpp>
 #include <random>
+#include <sstream>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -35,12 +36,18 @@ namespace {
 struct PocOptions {
     std::string dataset_path;
     std::string json_output_path;
+    std::string request_json_path;
     std::string source_type = "existing_index";
     uint64_t base_count = 0;
     uint64_t query_count = 0;
     uint64_t max_trials = 0;
     uint64_t topk = 10;
     double target_recall = 0.80;
+    bool source_type_explicit = false;
+    bool query_count_explicit = false;
+    bool max_trials_explicit = false;
+    bool topk_explicit = false;
+    bool target_recall_explicit = false;
 };
 
 struct DatasetBundle {
@@ -70,7 +77,10 @@ PrintUsage(const char* binary) {
               << "  " << binary
               << " --source-type raw_dataset"
                  " --json-output /tmp/hgraph_auto_tuning_raw_report.json\n"
-              << "  " << binary << " --max-trials 2\n";
+              << "  " << binary << " --max-trials 2\n"
+              << "  " << binary
+              << " --request-json src/tuning/examples/hgraph_auto_tuning_max_trials_request.json"
+                 " --json-output /tmp/hgraph_auto_tuning_request_report.json\n";
 }
 
 uint64_t
@@ -102,23 +112,35 @@ ParseOptions(int argc, char** argv) {
             options.dataset_path = require_value(arg);
         } else if (arg == "--json-output") {
             options.json_output_path = require_value(arg);
+        } else if (arg == "--request-json") {
+            options.request_json_path = require_value(arg);
         } else if (arg == "--source-type") {
             options.source_type = require_value(arg);
+            options.source_type_explicit = true;
         } else if (arg == "--base-count") {
             options.base_count = ParseUint64(require_value(arg), arg);
         } else if (arg == "--query-count") {
             options.query_count = ParseUint64(require_value(arg), arg);
+            options.query_count_explicit = true;
         } else if (arg == "--max-trials") {
             options.max_trials = ParseUint64(require_value(arg), arg);
+            options.max_trials_explicit = true;
         } else if (arg == "--topk") {
             options.topk = ParseUint64(require_value(arg), arg);
+            options.topk_explicit = true;
         } else if (arg == "--target-recall") {
             options.target_recall = std::stod(require_value(arg));
+            options.target_recall_explicit = true;
         } else {
             throw std::invalid_argument("unknown argument: " + arg);
         }
     }
 
+    return options;
+}
+
+void
+FinalizeOptions(PocOptions& options) {
     if (options.dataset_path.empty()) {
         if (options.base_count == 0) {
             options.base_count = 200;
@@ -135,9 +157,152 @@ ParseOptions(int argc, char** argv) {
         }
     }
     if (options.source_type != "existing_index" && options.source_type != "raw_dataset") {
-        throw std::invalid_argument("--source-type must be existing_index or raw_dataset");
+        if (options.request_json_path.empty()) {
+            throw std::invalid_argument("--source-type must be existing_index or raw_dataset");
+        }
+        throw std::invalid_argument("$.source.type must be existing_index or raw_dataset");
     }
-    return options;
+}
+
+void
+ValidateRequestJsonOptions(const PocOptions& options) {
+    if (options.source_type_explicit || options.query_count_explicit ||
+        options.max_trials_explicit || options.topk_explicit || options.target_recall_explicit) {
+        throw std::invalid_argument(
+            "--request-json cannot be combined with --source-type, "
+            "--query-count, --max-trials, --topk, or --target-recall");
+    }
+}
+
+std::string
+ReadTextFile(const std::string& path) {
+    std::ifstream input(path);
+    if (not input.is_open()) {
+        throw std::runtime_error("failed to open request json path: " + path);
+    }
+
+    std::ostringstream buffer;
+    buffer << input.rdbuf();
+    return buffer.str();
+}
+
+bool
+ReadUint64Value(const nlohmann::json& value, uint64_t& output) {
+    if (value.is_number_unsigned()) {
+        output = value.get<uint64_t>();
+        return true;
+    }
+    if (value.is_number_integer()) {
+        const auto signed_value = value.get<int64_t>();
+        if (signed_value < 0) {
+            return false;
+        }
+        output = static_cast<uint64_t>(signed_value);
+        return true;
+    }
+    return false;
+}
+
+uint64_t
+ReadRequestUint64(const nlohmann::json& parent, const std::string& key, const std::string& path) {
+    uint64_t value = 0;
+    if (not parent.contains(key) || not ReadUint64Value(parent.at(key), value)) {
+        throw std::invalid_argument(path + "." + key + " must be a uint64 in --request-json");
+    }
+    return value;
+}
+
+void
+SetStringFromRequest(std::string& target,
+                     bool was_explicit,
+                     const std::string& value,
+                     const std::string& field) {
+    if (was_explicit && target != value) {
+        throw std::invalid_argument("--" + field + " conflicts with --request-json " + field);
+    }
+    target = value;
+}
+
+void
+SetUint64FromRequest(uint64_t& target,
+                     bool was_explicit,
+                     uint64_t value,
+                     const std::string& field) {
+    if (was_explicit && target != value) {
+        throw std::invalid_argument("--" + field + " conflicts with --request-json " + field);
+    }
+    target = value;
+}
+
+void
+SetDoubleFromRequest(double& target, bool was_explicit, double value, const std::string& field) {
+    if (was_explicit && target != value) {
+        throw std::invalid_argument("--" + field + " conflicts with --request-json " + field);
+    }
+    target = value;
+}
+
+void
+ApplyRequestJsonToOptions(const std::string& request_json, PocOptions& options) {
+    nlohmann::json request;
+    try {
+        request = nlohmann::json::parse(request_json);
+    } catch (const std::exception& e) {
+        throw std::invalid_argument(std::string("failed to parse --request-json: ") + e.what());
+    }
+    if (not request.is_object()) {
+        throw std::invalid_argument("--request-json must contain a json object");
+    }
+
+    if (not request.contains("source") || not request.at("source").is_object() ||
+        not request.at("source").contains("type") ||
+        not request.at("source").at("type").is_string()) {
+        throw std::invalid_argument("--request-json must contain source.type");
+    }
+    SetStringFromRequest(options.source_type,
+                         options.source_type_explicit,
+                         request.at("source").at("type").get<std::string>(),
+                         "source-type");
+
+    if (not request.contains("workload") || not request.at("workload").is_object()) {
+        throw std::invalid_argument("--request-json must contain workload.topk");
+    }
+    const auto topk = ReadRequestUint64(request.at("workload"), "topk", "$.workload");
+    if (topk == 0) {
+        throw std::invalid_argument("$.workload.topk must be greater than 0 in --request-json");
+    }
+    SetUint64FromRequest(options.topk, options.topk_explicit, topk, "topk");
+
+    if (request.contains("evaluation") && request.at("evaluation").is_object() &&
+        request.at("evaluation").contains("query_count")) {
+        const auto query_count =
+            ReadRequestUint64(request.at("evaluation"), "query_count", "$.evaluation");
+        if (query_count > 0) {
+            SetUint64FromRequest(
+                options.query_count, options.query_count_explicit, query_count, "query-count");
+        }
+    }
+
+    if (request.contains("objective") && request.at("objective").is_object() &&
+        request.at("objective").contains("recall_at_k") &&
+        request.at("objective").at("recall_at_k").is_object() &&
+        request.at("objective").at("recall_at_k").contains("min")) {
+        const auto& target = request.at("objective").at("recall_at_k").at("min");
+        if (not target.is_number()) {
+            throw std::invalid_argument("$.objective.recall_at_k.min must be a number");
+        }
+        SetDoubleFromRequest(options.target_recall,
+                             options.target_recall_explicit,
+                             target.get<double>(),
+                             "target-recall");
+    }
+
+    if (request.contains("budget") && request.at("budget").is_object() &&
+        request.at("budget").contains("max_trials")) {
+        const auto max_trials = ReadRequestUint64(request.at("budget"), "max_trials", "$.budget");
+        SetUint64FromRequest(
+            options.max_trials, options.max_trials_explicit, max_trials, "max-trials");
+    }
 }
 
 const char*
@@ -417,6 +582,9 @@ void
 PrintInput(const PocOptions& options, const DatasetBundle& bundle) {
     std::cout << "Input:" << std::endl;
     std::cout << "  source=" << bundle.source << std::endl;
+    if (not options.request_json_path.empty()) {
+        std::cout << "  request_json=" << options.request_json_path << std::endl;
+    }
     std::cout << "  source_type=" << options.source_type << std::endl;
     std::cout << "  base_count=" << options.base_count << std::endl;
     std::cout << "  query_count=" << options.query_count << std::endl;
@@ -491,6 +659,7 @@ vsag::AutoTuningRequest
 MakeAutoTuningRequest(const PocOptions& options,
                       const DatasetBundle& bundle,
                       const vsag::DatasetPtr& ground_truth,
+                      const std::string& request_json,
                       double& build_elapsed_ms) {
     const auto build_started_at = std::chrono::steady_clock::now();
 
@@ -503,8 +672,9 @@ MakeAutoTuningRequest(const PocOptions& options,
         context.index = BuildIndex("hgraph", MakeHGraphBuildParameters(bundle.dim), bundle.base);
     }
 
-    const auto request_json = MakeAutoTuningRequestJson(options, bundle.dim);
-    auto parse_result = vsag::ParseAutoTuningRequestJson(request_json, context);
+    const auto effective_request_json =
+        request_json.empty() ? MakeAutoTuningRequestJson(options, bundle.dim) : request_json;
+    auto parse_result = vsag::ParseAutoTuningRequestJson(effective_request_json, context);
     build_elapsed_ms = ElapsedMs(build_started_at);
     if (not parse_result.Succeeded()) {
         throw std::runtime_error("failed to prepare auto tuning request: " +
@@ -519,7 +689,14 @@ int
 main(int argc, char** argv) {
     try {
         vsag::init();
-        const auto options = ParseOptions(argc, argv);
+        auto options = ParseOptions(argc, argv);
+        std::string request_json;
+        if (not options.request_json_path.empty()) {
+            ValidateRequestJsonOptions(options);
+            request_json = ReadTextFile(options.request_json_path);
+            ApplyRequestJsonToOptions(request_json, options);
+        }
+        FinalizeOptions(options);
 
         const auto load_started_at = std::chrono::steady_clock::now();
         auto bundle =
@@ -538,7 +715,8 @@ main(int argc, char** argv) {
         const auto ground_truth_elapsed_ms = ElapsedMs(ground_truth_started_at);
 
         double build_elapsed_ms = 0.0;
-        auto request = MakeAutoTuningRequest(options, bundle, ground_truth, build_elapsed_ms);
+        auto request =
+            MakeAutoTuningRequest(options, bundle, ground_truth, request_json, build_elapsed_ms);
 
         vsag::AutoTuningPipeline pipeline;
         const auto report = pipeline.Tune(request);

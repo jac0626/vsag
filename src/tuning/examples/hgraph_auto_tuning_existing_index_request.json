@@ -1,0 +1,39 @@
+{
+  "version": 1,
+  "index_type": "hgraph",
+  "source": {
+    "type": "existing_index"
+  },
+  "workload": {
+    "topk": 10
+  },
+  "config": {
+    "search_parameters": {
+      "hgraph": {
+        "factor": 2
+      }
+    }
+  },
+  "objective": {
+    "primary": "latency",
+    "recall_at_k": {
+      "min": 0.8
+    }
+  },
+  "search_space": {
+    "search": {
+      "hgraph.ef_search": {
+        "values": [0, 10, 20, 40, 80, 160, 320, 1201]
+      }
+    }
+  },
+  "evaluation": {
+    "query_count": 8,
+    "successive_halving": {
+      "enabled": false
+    }
+  },
+  "budget": {
+    "max_trials": 0
+  }
+}

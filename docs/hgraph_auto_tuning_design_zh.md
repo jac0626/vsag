@@ -383,6 +383,11 @@ cmake --build build --target hgraph_auto_tuning_poc --parallel 96
 ./build/examples/cpp/hgraph_auto_tuning_poc \
   --max-trials 2 \
   --json-output /tmp/hgraph_auto_tuning_budget_report.json
+
+# 从稳定 request JSON 文件读取调优语义
+./build/examples/cpp/hgraph_auto_tuning_poc \
+  --request-json src/tuning/examples/hgraph_auto_tuning_max_trials_request.json \
+  --json-output /tmp/hgraph_auto_tuning_request_report.json
 ```
 
 该 POC 位于 `src/tuning/hgraph_auto_tuning_poc.cpp`。默认使用小型内存数据集；传入
@@ -398,6 +403,16 @@ cmake --build build --target hgraph_auto_tuning_poc --parallel 96
 HGraph，然后复用同一条 `ef_search` tuning pipeline。
 `--max-trials` 对应 `budget.max_trials`，只限制合法 candidate 的实际评估次数；静态非法 candidate
 仍会被跳过并保留原始原因。
+`--request-json` 从文件读取完整调优 request。使用该模式时，`source.type`、`topk`、
+`query_count`、目标 recall、搜索空间和预算都来自 JSON 文件；CLI 只负责数据来源、`base-count`
+和 report 输出路径。当前示例文件位于 `src/tuning/examples/`：
+
+- `hgraph_auto_tuning_existing_index_request.json`
+- `hgraph_auto_tuning_raw_dataset_request.json`
+- `hgraph_auto_tuning_max_trials_request.json`
+
+`raw_dataset` 示例中的 `config.build_parameters.dim = 16`，对应默认 synthetic 数据集；如果换成
+SIFT128 等真实数据，需要把该字段改成真实维度。
 等 tuning API 迁到 public header 后，再移动到正式 `examples/cpp/` 示例。
 
 当前 SIFT128 POC 验证结果：

@@ -1316,6 +1316,7 @@ P0 已实现：
 - P0 JSON request parser
 - P0 JSON report serializer
 - 内部 POC target：`hgraph_auto_tuning_poc`
+- 内部 POC `--request-json` 文件入口和示例 request
 
 P0 未实现但已有 pipeline 槽位：
 
