@@ -33,5 +33,7 @@ if (ENABLE_TESTS)
     file (GLOB_RECURSE TUNING_TESTS "*_test.cpp")
     add_library (tuning_test STATIC ${TUNING_TESTS})
     target_link_libraries (tuning_test PRIVATE Catch2::Catch2 vsag_static unittest_deps)
+    target_compile_definitions (tuning_test
+            PRIVATE VSAG_TUNING_EXAMPLES_DIR="${CMAKE_CURRENT_SOURCE_DIR}/examples")
     add_dependencies (tuning_test Catch2)
 endif ()

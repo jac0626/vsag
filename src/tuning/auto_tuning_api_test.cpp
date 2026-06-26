@@ -85,19 +85,25 @@ TEST_CASE("auto tuning api parses P0 json and serializes report", "[ut][tuning]"
 
     auto request = MakeValidRequestJson(static_cast<uint64_t>(dataset->top_k), 8, 0.95);
     request["budget"] = {{"max_trials", 2}};
-    auto parse_result =
-        vsag::ParseAutoTuningRequestJson(request.dump(), MakeContext(index, dataset));
+    auto parse_result = vsag::ParseAutoTuningRequestJson(request.dump());
 
     REQUIRE(parse_result.Succeeded());
-    REQUIRE(parse_result.request.index == index);
-    REQUIRE(parse_result.request.queries == dataset->query_);
-    REQUIRE(parse_result.request.ground_truth == dataset->ground_truth_);
+    REQUIRE(parse_result.request.index == nullptr);
+    REQUIRE(parse_result.request.queries == nullptr);
+    REQUIRE(parse_result.request.ground_truth == nullptr);
     REQUIRE(parse_result.request.topk == static_cast<uint64_t>(dataset->top_k));
     REQUIRE(parse_result.request.query_count == 8);
     REQUIRE(parse_result.request.target_recall == 0.95);
     REQUIRE(parse_result.request.index_name == "hgraph");
     REQUIRE(parse_result.request.ef_search_candidates == std::vector<uint64_t>{0, 10, 20, 1201});
     REQUIRE(parse_result.request.max_trials == 2);
+
+    auto prepare_result =
+        vsag::PrepareAutoTuningRequest(parse_result.request, MakeContext(index, dataset));
+    REQUIRE(prepare_result.Succeeded());
+    REQUIRE(prepare_result.request.index == index);
+    REQUIRE(prepare_result.request.queries == dataset->query_);
+    REQUIRE(prepare_result.request.ground_truth == dataset->ground_truth_);
 
     vsag::EfSearchTuner tuner([](const vsag::EvaluationRequest& request) {
         auto parameters = nlohmann::json::parse(request.search_parameters);
@@ -113,7 +119,7 @@ TEST_CASE("auto tuning api parses P0 json and serializes report", "[ut][tuning]"
     });
 
     vsag::AutoTuningPipeline pipeline(tuner);
-    const auto report = pipeline.Tune(parse_result.request);
+    const auto report = pipeline.Tune(prepare_result.request);
     REQUIRE(report.Succeeded());
     REQUIRE(report.recommendation.has_value());
     REQUIRE(report.recommendation->candidate.ef_search == 20);
@@ -159,17 +165,21 @@ TEST_CASE("auto tuning api builds baseline hgraph for raw dataset P0 request", "
     context.queries = dataset->query_;
     context.ground_truth = dataset->ground_truth_;
 
-    auto parse_result = vsag::ParseAutoTuningRequestJson(request_json, context);
+    auto parse_result = vsag::ParseAutoTuningRequestJson(request_json);
 
     REQUIRE(parse_result.Succeeded());
-    REQUIRE(parse_result.request.index != nullptr);
+    REQUIRE(parse_result.request.index == nullptr);
     REQUIRE(parse_result.request.source_type == "raw_dataset");
-    REQUIRE(parse_result.request.index->GetIndexType() == vsag::IndexType::HGRAPH);
-    REQUIRE(parse_result.request.queries == dataset->query_);
-    REQUIRE(parse_result.request.ground_truth == dataset->ground_truth_);
     REQUIRE(nlohmann::json::parse(parse_result.request.build_parameters)["dim"].get<uint64_t>() ==
             dataset->dim_);
     REQUIRE(parse_result.request.ef_search_candidates == std::vector<uint64_t>{0, 10, 20, 1201});
+
+    auto prepare_result = vsag::PrepareAutoTuningRequest(parse_result.request, context);
+    REQUIRE(prepare_result.Succeeded());
+    REQUIRE(prepare_result.request.index != nullptr);
+    REQUIRE(prepare_result.request.index->GetIndexType() == vsag::IndexType::HGRAPH);
+    REQUIRE(prepare_result.request.queries == dataset->query_);
+    REQUIRE(prepare_result.request.ground_truth == dataset->ground_truth_);
 
     vsag::EfSearchTuner tuner([](const vsag::EvaluationRequest& request) {
         auto parameters = nlohmann::json::parse(request.search_parameters);
@@ -183,7 +193,7 @@ TEST_CASE("auto tuning api builds baseline hgraph for raw dataset P0 request", "
     });
 
     vsag::AutoTuningPipeline pipeline(tuner);
-    const auto report = pipeline.Tune(parse_result.request);
+    const auto report = pipeline.Tune(prepare_result.request);
     REQUIRE(report.Succeeded());
     REQUIRE(report.recommendation.has_value());
     REQUIRE(report.recommendation->candidate.ef_search == 20);
@@ -196,13 +206,11 @@ TEST_CASE("auto tuning api builds baseline hgraph for raw dataset P0 request", "
 }
 
 TEST_CASE("auto tuning api rejects unsupported P0 request fields", "[ut][tuning]") {
-    vsag::AutoTuningApiContext context;
-
     SECTION("raw dataset source without build parameters") {
         auto request = MakeValidRequestJson(10, 8, 0.95);
         request["source"]["type"] = "raw_dataset";
 
-        const auto result = vsag::ParseAutoTuningRequestJson(request.dump(), context);
+        const auto result = vsag::ParseAutoTuningRequestJson(request.dump());
 
         REQUIRE_FALSE(result.Succeeded());
         REQUIRE(result.status == vsag::AutoTuningApiStatus::INVALID_ARGUMENT);
@@ -211,10 +219,14 @@ TEST_CASE("auto tuning api rejects unsupported P0 request fields", "[ut][tuning]
 
     SECTION("raw dataset source without base context") {
         auto request = MakeRawDatasetRequestJson(10, 8, 0.95, 16);
+        auto parse_result = vsag::ParseAutoTuningRequestJson(request.dump());
+        REQUIRE(parse_result.Succeeded());
+
+        vsag::AutoTuningApiContext context;
         context.queries = vsag::Dataset::Make();
         context.ground_truth = vsag::Dataset::Make();
 
-        const auto result = vsag::ParseAutoTuningRequestJson(request.dump(), context);
+        const auto result = vsag::PrepareAutoTuningRequest(parse_result.request, context);
 
         REQUIRE_FALSE(result.Succeeded());
         REQUIRE(result.status == vsag::AutoTuningApiStatus::INVALID_ARGUMENT);
@@ -226,7 +238,7 @@ TEST_CASE("auto tuning api rejects unsupported P0 request fields", "[ut][tuning]
         request["config"]["build_parameters"] =
             nlohmann::json::parse(MakeHGraphBuildParameters(16));
 
-        const auto result = vsag::ParseAutoTuningRequestJson(request.dump(), context);
+        const auto result = vsag::ParseAutoTuningRequestJson(request.dump());
 
         REQUIRE_FALSE(result.Succeeded());
         REQUIRE(result.status == vsag::AutoTuningApiStatus::UNSUPPORTED);
@@ -237,7 +249,7 @@ TEST_CASE("auto tuning api rejects unsupported P0 request fields", "[ut][tuning]
         auto request = MakeValidRequestJson(10, 8, 0.95);
         request["index_type"] = "brute_force";
 
-        const auto result = vsag::ParseAutoTuningRequestJson(request.dump(), context);
+        const auto result = vsag::ParseAutoTuningRequestJson(request.dump());
 
         REQUIRE_FALSE(result.Succeeded());
         REQUIRE(result.status == vsag::AutoTuningApiStatus::UNSUPPORTED);
@@ -248,7 +260,7 @@ TEST_CASE("auto tuning api rejects unsupported P0 request fields", "[ut][tuning]
         auto request = MakeValidRequestJson(10, 8, 0.95);
         request["search_space"]["build"] = {{"hgraph.max_degree", {{"values", {16, 32}}}}};
 
-        const auto result = vsag::ParseAutoTuningRequestJson(request.dump(), context);
+        const auto result = vsag::ParseAutoTuningRequestJson(request.dump());
 
         REQUIRE_FALSE(result.Succeeded());
         REQUIRE(result.status == vsag::AutoTuningApiStatus::UNSUPPORTED);
@@ -259,7 +271,7 @@ TEST_CASE("auto tuning api rejects unsupported P0 request fields", "[ut][tuning]
         auto request = MakeValidRequestJson(10, 8, 0.95);
         request["search_space"]["search"] = {{"ivf.nprobe", {{"values", {10, 20}}}}};
 
-        const auto result = vsag::ParseAutoTuningRequestJson(request.dump(), context);
+        const auto result = vsag::ParseAutoTuningRequestJson(request.dump());
 
         REQUIRE_FALSE(result.Succeeded());
         REQUIRE(result.status == vsag::AutoTuningApiStatus::UNSUPPORTED);
@@ -270,7 +282,7 @@ TEST_CASE("auto tuning api rejects unsupported P0 request fields", "[ut][tuning]
         auto request = MakeValidRequestJson(10, 8, 0.95);
         request["evaluation"]["successive_halving"]["enabled"] = true;
 
-        const auto result = vsag::ParseAutoTuningRequestJson(request.dump(), context);
+        const auto result = vsag::ParseAutoTuningRequestJson(request.dump());
 
         REQUIRE_FALSE(result.Succeeded());
         REQUIRE(result.status == vsag::AutoTuningApiStatus::UNSUPPORTED);
@@ -281,7 +293,7 @@ TEST_CASE("auto tuning api rejects unsupported P0 request fields", "[ut][tuning]
         auto request = MakeValidRequestJson(10, 8, 0.95);
         request["evaluation"]["warmup_query_count"] = 10;
 
-        const auto result = vsag::ParseAutoTuningRequestJson(request.dump(), context);
+        const auto result = vsag::ParseAutoTuningRequestJson(request.dump());
 
         REQUIRE_FALSE(result.Succeeded());
         REQUIRE(result.status == vsag::AutoTuningApiStatus::UNSUPPORTED);
@@ -292,7 +304,7 @@ TEST_CASE("auto tuning api rejects unsupported P0 request fields", "[ut][tuning]
         auto request = MakeValidRequestJson(10, 8, 0.95);
         request["budget"] = {{"timeout_seconds", 10}};
 
-        const auto result = vsag::ParseAutoTuningRequestJson(request.dump(), context);
+        const auto result = vsag::ParseAutoTuningRequestJson(request.dump());
 
         REQUIRE_FALSE(result.Succeeded());
         REQUIRE(result.status == vsag::AutoTuningApiStatus::UNSUPPORTED);
@@ -303,7 +315,7 @@ TEST_CASE("auto tuning api rejects unsupported P0 request fields", "[ut][tuning]
         auto request = MakeValidRequestJson(10, 8, 0.95);
         request["output"] = {{"include_all_trials", false}};
 
-        const auto result = vsag::ParseAutoTuningRequestJson(request.dump(), context);
+        const auto result = vsag::ParseAutoTuningRequestJson(request.dump());
 
         REQUIRE_FALSE(result.Succeeded());
         REQUIRE(result.status == vsag::AutoTuningApiStatus::UNSUPPORTED);
@@ -314,7 +326,7 @@ TEST_CASE("auto tuning api rejects unsupported P0 request fields", "[ut][tuning]
         auto request = MakeValidRequestJson(10, 8, 0.95);
         request["objective"]["primary"] = "memory";
 
-        const auto result = vsag::ParseAutoTuningRequestJson(request.dump(), context);
+        const auto result = vsag::ParseAutoTuningRequestJson(request.dump());
 
         REQUIRE_FALSE(result.Succeeded());
         REQUIRE(result.status == vsag::AutoTuningApiStatus::UNSUPPORTED);
@@ -325,7 +337,7 @@ TEST_CASE("auto tuning api rejects unsupported P0 request fields", "[ut][tuning]
         auto request = MakeValidRequestJson(10, 8, 0.95);
         request["workload"].erase("topk");
 
-        const auto result = vsag::ParseAutoTuningRequestJson(request.dump(), context);
+        const auto result = vsag::ParseAutoTuningRequestJson(request.dump());
 
         REQUIRE_FALSE(result.Succeeded());
         REQUIRE(result.status == vsag::AutoTuningApiStatus::INVALID_ARGUMENT);
@@ -341,7 +353,7 @@ TEST_CASE("auto tuning api serializes best effort without recommendation", "[ut]
     auto request = MakeValidRequestJson(static_cast<uint64_t>(dataset->top_k), 8, 0.95);
     request["search_space"]["search"]["hgraph.ef_search"]["values"] = {10, 80};
     auto parse_result =
-        vsag::ParseAutoTuningRequestJson(request.dump(), MakeContext(index, dataset));
+        vsag::PrepareAutoTuningRequestJson(request.dump(), MakeContext(index, dataset));
     REQUIRE(parse_result.Succeeded());
 
     vsag::EfSearchTuner tuner([](const vsag::EvaluationRequest& request) {

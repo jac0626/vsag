@@ -1253,8 +1253,15 @@ struct AutoTuningRequest {
 
 ```cpp
 AutoTuningApiParseResult
-ParseAutoTuningRequestJson(const std::string& request_json,
-                           const AutoTuningApiContext& context);
+ParseAutoTuningRequestJson(const std::string& request_json);
+
+AutoTuningApiParseResult
+PrepareAutoTuningRequest(const AutoTuningRequest& parsed_request,
+                         const AutoTuningApiContext& context);
+
+AutoTuningApiParseResult
+PrepareAutoTuningRequestJson(const std::string& request_json,
+                             const AutoTuningApiContext& context);
 
 std::string
 SerializeAutoTuningReportJson(const AutoTuningReport& report);
@@ -1274,11 +1281,16 @@ struct AutoTuningApiContext {
 因此 P0 JSON request 只表达语义配置；`source.index`、`source.base`、`workload.queries` 和
 `workload.ground_truth` 对应的实际对象仍由调用方通过 `AutoTuningApiContext` 传入。
 
-`source.type = existing_index` 时，parser 直接使用 `context.index`。`source.type = raw_dataset`
-时，parser 使用 `context.base` 和 `config.build_parameters` 构建一个 baseline HGraph index，再把
-这个 index 交给现有 `AutoTuningPipeline` 调 `hgraph.ef_search`。这个 raw dataset 路径只解决
-“从原始数据集生成 baseline index 后调 search 参数”的输入形态，不表示 build/quantizer 参数
-搜索已经实现。
+`ParseAutoTuningRequestJson()` 只解析 JSON 和静态 schema，不绑定 `IndexPtr`、`DatasetPtr`，也
+不构建 baseline index。`PrepareAutoTuningRequest()` 负责把解析后的 request 和
+`AutoTuningApiContext` 结合起来；`PrepareAutoTuningRequestJson()` 是 parse + prepare 的便捷
+入口。这样 `raw_dataset` 的构建成本不会藏在 parse 阶段里。
+
+`source.type = existing_index` 时，prepare 阶段直接使用 `context.index`。`source.type = raw_dataset`
+时，prepare 阶段使用 `context.base` 和 `config.build_parameters` 构建一个 baseline HGraph
+index，再把这个 index 交给现有 `AutoTuningPipeline` 调 `hgraph.ef_search`。这个 raw dataset
+路径只解决“从原始数据集生成 baseline index 后调 search 参数”的输入形态，不表示
+build/quantizer 参数搜索已经实现。
 
 P0 JSON parser 当前明确拒绝以下输入：
 
@@ -1314,6 +1326,7 @@ P0 已实现：
 - recommendation
 - best effort
 - P0 JSON request parser
+- P0 request prepare 层
 - P0 JSON report serializer
 - 内部 POC target：`hgraph_auto_tuning_poc`
 - 内部 POC `--request-json` 文件入口和示例 request

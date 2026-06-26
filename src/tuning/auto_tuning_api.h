@@ -46,7 +46,14 @@ struct AutoTuningApiParseResult {
 };
 
 [[nodiscard]] AutoTuningApiParseResult
-ParseAutoTuningRequestJson(const std::string& request_json, const AutoTuningApiContext& context);
+ParseAutoTuningRequestJson(const std::string& request_json);
+
+[[nodiscard]] AutoTuningApiParseResult
+PrepareAutoTuningRequest(const AutoTuningRequest& parsed_request,
+                         const AutoTuningApiContext& context);
+
+[[nodiscard]] AutoTuningApiParseResult
+PrepareAutoTuningRequestJson(const std::string& request_json, const AutoTuningApiContext& context);
 
 [[nodiscard]] std::string
 SerializeAutoTuningReportJson(const AutoTuningReport& report);

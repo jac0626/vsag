@@ -413,7 +413,10 @@ HGraph，然后复用同一条 `ef_search` tuning pipeline。
 
 `raw_dataset` 示例中的 `config.build_parameters.dim = 16`，对应默认 synthetic 数据集；如果换成
 SIFT128 等真实数据，需要把该字段改成真实维度。
-等 tuning API 迁到 public header 后，再移动到正式 `examples/cpp/` 示例。
+当 request 文件里 `evaluation.query_count = 0` 或缺省时，含义是评估 context 中已加载的全部
+query。POC 在 synthetic 模式下会生成默认 8 条 query 作为完整小数据集；在 HDF5 模式下会读取
+`/test` 的全部 rows。
+这些内部示例等 tuning API 迁到 public header 后，再移动到正式 `examples/cpp/` 示例。
 
 当前 SIFT128 POC 验证结果：
 

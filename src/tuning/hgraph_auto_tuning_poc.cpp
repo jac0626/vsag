@@ -48,6 +48,7 @@ struct PocOptions {
     bool max_trials_explicit = false;
     bool topk_explicit = false;
     bool target_recall_explicit = false;
+    bool request_evaluates_all_queries = false;
 };
 
 struct DatasetBundle {
@@ -152,7 +153,7 @@ FinalizeOptions(PocOptions& options) {
         if (options.base_count == 0) {
             options.base_count = 10000;
         }
-        if (options.query_count == 0) {
+        if (options.query_count == 0 && not options.request_evaluates_all_queries) {
             options.query_count = 100;
         }
     }
@@ -277,10 +278,14 @@ ApplyRequestJsonToOptions(const std::string& request_json, PocOptions& options) 
         request.at("evaluation").contains("query_count")) {
         const auto query_count =
             ReadRequestUint64(request.at("evaluation"), "query_count", "$.evaluation");
-        if (query_count > 0) {
+        if (query_count == 0) {
+            options.request_evaluates_all_queries = true;
+        } else {
             SetUint64FromRequest(
                 options.query_count, options.query_count_explicit, query_count, "query-count");
         }
+    } else {
+        options.request_evaluates_all_queries = true;
     }
 
     if (request.contains("objective") && request.at("objective").is_object() &&
@@ -406,6 +411,7 @@ MakeSyntheticDataset(const PocOptions& options) {
     DatasetBundle bundle;
     bundle.dim = 16;
     bundle.source = "synthetic";
+    const auto query_count = options.query_count == 0 ? 8 : options.query_count;
 
     std::mt19937 rng(47);
     std::uniform_real_distribution<float> distrib_real;
@@ -420,15 +426,14 @@ MakeSyntheticDataset(const PocOptions& options) {
     }
 
     std::vector<int64_t> query_ids;
-    bundle.query_vectors.resize(options.query_count * bundle.dim);
+    bundle.query_vectors.resize(query_count * bundle.dim);
     for (auto& value : bundle.query_vectors) {
         value = distrib_real(rng);
     }
 
     bundle.base =
         MakeFloat32Dataset(options.base_count, bundle.dim, bundle.ids, bundle.base_vectors);
-    bundle.queries =
-        MakeFloat32Dataset(options.query_count, bundle.dim, query_ids, bundle.query_vectors);
+    bundle.queries = MakeFloat32Dataset(query_count, bundle.dim, query_ids, bundle.query_vectors);
     return bundle;
 }
 
@@ -445,7 +450,8 @@ LoadHdf5Dataset(const PocOptions& options) {
     if (options.base_count > train_shape.first) {
         throw std::runtime_error("base-count exceeds train row count");
     }
-    if (options.query_count > test_shape.first) {
+    const auto query_count = options.query_count == 0 ? test_shape.first : options.query_count;
+    if (query_count > test_shape.first) {
         throw std::runtime_error("query-count exceeds test row count");
     }
 
@@ -457,13 +463,12 @@ LoadHdf5Dataset(const PocOptions& options) {
         bundle.ids[i] = static_cast<int64_t>(i);
     }
     bundle.base_vectors = ReadFloat32MatrixPrefix(file, "/train", options.base_count, bundle.dim);
-    bundle.query_vectors = ReadFloat32MatrixPrefix(file, "/test", options.query_count, bundle.dim);
+    bundle.query_vectors = ReadFloat32MatrixPrefix(file, "/test", query_count, bundle.dim);
 
     std::vector<int64_t> query_ids;
     bundle.base =
         MakeFloat32Dataset(options.base_count, bundle.dim, bundle.ids, bundle.base_vectors);
-    bundle.queries =
-        MakeFloat32Dataset(options.query_count, bundle.dim, query_ids, bundle.query_vectors);
+    bundle.queries = MakeFloat32Dataset(query_count, bundle.dim, query_ids, bundle.query_vectors);
     return bundle;
 }
 
@@ -587,7 +592,7 @@ PrintInput(const PocOptions& options, const DatasetBundle& bundle) {
     }
     std::cout << "  source_type=" << options.source_type << std::endl;
     std::cout << "  base_count=" << options.base_count << std::endl;
-    std::cout << "  query_count=" << options.query_count << std::endl;
+    std::cout << "  query_count=" << bundle.queries->GetNumElements() << std::endl;
     std::cout << "  dim=" << bundle.dim << std::endl;
     std::cout << "  topk=" << options.topk << std::endl;
     std::cout << "  target_recall=" << options.target_recall << std::endl;
@@ -674,7 +679,7 @@ MakeAutoTuningRequest(const PocOptions& options,
 
     const auto effective_request_json =
         request_json.empty() ? MakeAutoTuningRequestJson(options, bundle.dim) : request_json;
-    auto parse_result = vsag::ParseAutoTuningRequestJson(effective_request_json, context);
+    auto parse_result = vsag::PrepareAutoTuningRequestJson(effective_request_json, context);
     build_elapsed_ms = ElapsedMs(build_started_at);
     if (not parse_result.Succeeded()) {
         throw std::runtime_error("failed to prepare auto tuning request: " +

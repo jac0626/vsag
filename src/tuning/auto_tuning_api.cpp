@@ -30,10 +30,6 @@ enum class SourceType {
     RAW_DATASET,
 };
 
-struct ParsedConfig {
-    std::string build_parameters;
-};
-
 AutoTuningApiParseResult
 MakeError(AutoTuningApiStatus status, const std::string& code, const std::string& message) {
     AutoTuningApiParseResult result;
@@ -407,10 +403,7 @@ ParseWorkload(const JsonType& root, AutoTuningRequest& request) {
 }
 
 AutoTuningApiParseResult
-ParseConfig(const JsonType& root,
-            SourceType source_type,
-            AutoTuningRequest& request,
-            ParsedConfig& parsed_config) {
+ParseConfig(const JsonType& root, SourceType source_type, AutoTuningRequest& request) {
     const JsonType* config = nullptr;
     auto result = ReadRequiredObject(root, "config", "$", config);
     if (not result.Succeeded()) {
@@ -436,8 +429,7 @@ ParseConfig(const JsonType& root,
             return InvalidArgument("invalid_field",
                                    "$.config.build_parameters must not be empty for raw_dataset");
         }
-        parsed_config.build_parameters = build_parameters->dump();
-        request.build_parameters = parsed_config.build_parameters;
+        request.build_parameters = build_parameters->dump();
     }
 
     const JsonType* search_parameters = nullptr;
@@ -614,10 +606,7 @@ ParseBudget(const JsonType& root, AutoTuningRequest& request) {
 }
 
 AutoTuningApiParseResult
-PrepareSource(SourceType source_type,
-              const AutoTuningApiContext& context,
-              const ParsedConfig& parsed_config,
-              AutoTuningRequest& request) {
+PrepareSource(const AutoTuningApiContext& context, AutoTuningRequest& request) {
     if (context.queries == nullptr) {
         return InvalidArgument("invalid_context", "queries are required in AutoTuningApiContext");
     }
@@ -629,7 +618,7 @@ PrepareSource(SourceType source_type,
     request.queries = context.queries;
     request.ground_truth = context.ground_truth;
 
-    if (source_type == SourceType::EXISTING_INDEX) {
+    if (request.source_type == "existing_index") {
         if (context.index == nullptr) {
             return InvalidArgument("invalid_context",
                                    "index is required for source.type = existing_index");
@@ -638,11 +627,14 @@ PrepareSource(SourceType source_type,
         return {};
     }
 
+    if (request.source_type != "raw_dataset") {
+        return InvalidArgument("invalid_source_type", "prepared request source_type is invalid");
+    }
     if (context.base == nullptr) {
         return InvalidArgument("invalid_context", "base is required for source.type = raw_dataset");
     }
 
-    auto index = Factory::CreateIndex(request.index_name, parsed_config.build_parameters);
+    auto index = Factory::CreateIndex(request.index_name, request.build_parameters);
     if (not index.has_value()) {
         return InvalidArgument("build_index_error",
                                "failed to create baseline index: " + index.error().message);
@@ -661,7 +653,7 @@ PrepareSource(SourceType source_type,
 }  // namespace
 
 AutoTuningApiParseResult
-ParseAutoTuningRequestJson(const std::string& request_json, const AutoTuningApiContext& context) {
+ParseAutoTuningRequestJson(const std::string& request_json) {
     JsonType root;
     try {
         root = JsonType::parse(request_json);
@@ -676,7 +668,6 @@ ParseAutoTuningRequestJson(const std::string& request_json, const AutoTuningApiC
 
     AutoTuningApiParseResult result;
     SourceType source_type = SourceType::EXISTING_INDEX;
-    ParsedConfig parsed_config;
 
     auto parse_result = ParseVersion(root);
     if (not parse_result.Succeeded()) {
@@ -699,7 +690,7 @@ ParseAutoTuningRequestJson(const std::string& request_json, const AutoTuningApiC
     if (not parse_result.Succeeded()) {
         return parse_result;
     }
-    parse_result = ParseConfig(root, source_type, result.request, parsed_config);
+    parse_result = ParseConfig(root, source_type, result.request);
     if (not parse_result.Succeeded()) {
         return parse_result;
     }
@@ -720,12 +711,30 @@ ParseAutoTuningRequestJson(const std::string& request_json, const AutoTuningApiC
         return parse_result;
     }
 
-    parse_result = PrepareSource(source_type, context, parsed_config, result.request);
+    return result;
+}
+
+AutoTuningApiParseResult
+PrepareAutoTuningRequest(const AutoTuningRequest& parsed_request,
+                         const AutoTuningApiContext& context) {
+    AutoTuningApiParseResult result;
+    result.request = parsed_request;
+
+    auto parse_result = PrepareSource(context, result.request);
     if (not parse_result.Succeeded()) {
         return parse_result;
     }
 
     return result;
+}
+
+AutoTuningApiParseResult
+PrepareAutoTuningRequestJson(const std::string& request_json, const AutoTuningApiContext& context) {
+    auto parse_result = ParseAutoTuningRequestJson(request_json);
+    if (not parse_result.Succeeded()) {
+        return parse_result;
+    }
+    return PrepareAutoTuningRequest(parse_result.request, context);
 }
 
 std::string
