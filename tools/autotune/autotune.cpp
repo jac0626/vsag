@@ -106,12 +106,15 @@ GenerateCandidatesForTest(const JsonType& request) {
     result["trial_count"] = trials.size();
     result["trials"] = JsonType::array();
     for (const auto& trial : trials) {
-        result["trials"].push_back(JsonType{{"trial_id", trial.trial_id},
-                                            {"index_name", trial.index_name},
-                                            {"eval_type", trial.eval_type},
-                                            {"index_path", trial.index_path},
-                                            {"create_params", trial.create_params},
-                                            {"search_params", trial.search_params}});
+        result["trials"].push_back(
+            JsonType{{"trial_id", trial.trial_id},
+                     {"build_id", trial.build_id},
+                     {"index_name", trial.index_name},
+                     {"eval_type", trial.eval_type},
+                     {"index_path", trial.index_path},
+                     {"create_params", trial.create_params},
+                     {"search_params", trial.search_params},
+                     {"cleanup_index_after_trial", trial.cleanup_index_after_trial}});
     }
     return result;
 }

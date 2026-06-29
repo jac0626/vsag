@@ -46,11 +46,13 @@ struct CandidateSpec {
 
 struct TrialSpec {
     std::string trial_id;
+    std::string build_id;
     std::string index_name;
     std::string eval_type;
     std::string index_path;
     JsonType create_params;
     JsonType search_params;
+    bool cleanup_index_after_trial{false};
 };
 
 double

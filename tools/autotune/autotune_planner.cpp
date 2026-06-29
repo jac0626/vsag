@@ -15,7 +15,7 @@
 #include <cmath>
 #include <filesystem>
 #include <iomanip>
-#include <set>
+#include <map>
 #include <sstream>
 #include <utility>
 
@@ -25,6 +25,13 @@
 namespace vsag::autotune::internal {
 
 namespace {
+
+struct BuildGroupPlan {
+    std::string build_id;
+    std::string index_path;
+    uint64_t candidate_count{0};
+    uint64_t emitted_count{0};
+};
 
 std::vector<JsonType>
 ExpandRange(const JsonType& range) {
@@ -62,10 +69,54 @@ ExpandRange(const JsonType& range) {
 }
 
 std::string
-MakeTrialId(const std::string& index_name, uint64_t ordinal) {
+MakeOrdinalId(const std::string& index_name, const std::string& suffix, uint64_t ordinal) {
     std::ostringstream oss;
-    oss << index_name << "-" << std::setw(6) << std::setfill('0') << ordinal;
+    oss << index_name << suffix << "-" << std::setw(6) << std::setfill('0') << ordinal;
     return oss.str();
+}
+
+std::string
+MakeTrialId(const std::string& index_name, uint64_t ordinal) {
+    return MakeOrdinalId(index_name, "", ordinal);
+}
+
+std::string
+MakeBuildId(const std::string& index_name, uint64_t ordinal) {
+    return MakeOrdinalId(index_name, "-build", ordinal);
+}
+
+std::string
+FormatPath(const std::vector<std::string>& path) {
+    std::string formatted;
+    for (const auto& segment : path) {
+        formatted += "/";
+        formatted += segment;
+    }
+    return formatted;
+}
+
+void
+ValidatePolicyScopes(const std::string& index_name) {
+    for (const auto& param : GetIndexTuneParams(index_name)) {
+        Require(!param.path.empty(), index_name + " tune param path must not be empty");
+        if (param.scope == TuneParamScope::Build) {
+            Require(param.path[0] == "create_params",
+                    index_name + " build-scoped tune param must be under create_params: " +
+                        FormatPath(param.path));
+        } else {
+            Require(param.path[0] == "search_params",
+                    index_name + " search-scoped tune param must be under search_params: " +
+                        FormatPath(param.path));
+        }
+    }
+}
+
+std::string
+MakeBuildKey(const CandidateSpec& candidate) {
+    ValidatePolicyScopes(candidate.index_name);
+    const JsonType build_identity =
+        JsonType{{"index_name", candidate.index_name}, {"create_params", candidate.create_params}};
+    return build_identity.dump();
 }
 
 }  // namespace
@@ -143,38 +194,57 @@ PlanTrials(const JsonType& request,
     }
 
     const std::string existing_index_path = GetString(request, "index_path", "");
-    std::set<std::string> index_names;
-    std::set<std::string> create_param_dumps;
-    for (const auto& candidate : candidates) {
-        index_names.emplace(candidate.index_name);
-        create_param_dumps.emplace(candidate.create_params.dump());
-    }
-
-    const bool search_only =
-        !existing_index_path.empty() && index_names.size() == 1 && create_param_dumps.size() == 1;
     if (!existing_index_path.empty()) {
         Require(std::filesystem::exists(existing_index_path),
                 "index_path does not exist: " + existing_index_path);
     }
 
-    std::vector<TrialSpec> trials;
-    const auto trial_dir = std::filesystem::path(options.workspace_path) / "trials";
-    uint64_t ordinal = 0;
+    std::map<std::string, BuildGroupPlan> build_groups;
+    std::vector<std::string> build_keys;
+    build_keys.reserve(candidates.size());
+    uint64_t build_ordinal = 0;
     for (const auto& candidate : candidates) {
-        ++ordinal;
-        auto trial_id = MakeTrialId(candidate.index_name, ordinal);
-        std::string index_path = existing_index_path;
-        std::string eval_type = "search";
-        if (!search_only) {
-            eval_type = "build,search";
-            index_path = (trial_dir / (trial_id + ".index")).string();
+        auto build_key = MakeBuildKey(candidate);
+        build_keys.emplace_back(build_key);
+        auto& group = build_groups[build_key];
+        if (group.build_id.empty()) {
+            ++build_ordinal;
+            group.build_id = MakeBuildId(candidate.index_name, build_ordinal);
+            group.index_path = (std::filesystem::path(options.workspace_path) / "trials" /
+                                (group.build_id + ".index"))
+                                   .string();
         }
+        ++group.candidate_count;
+    }
+
+    const bool use_existing_index = !existing_index_path.empty() && build_groups.size() == 1;
+    if (use_existing_index) {
+        for (auto& build_group : build_groups) {
+            build_group.second.index_path = existing_index_path;
+        }
+    }
+
+    std::vector<TrialSpec> trials;
+    for (uint64_t i = 0; i < candidates.size(); ++i) {
+        const auto& candidate = candidates[i];
+        auto& build_group = build_groups[build_keys[i]];
+        ++build_group.emitted_count;
+
+        const bool first_in_build_group = build_group.emitted_count == 1;
+        const bool last_in_build_group = build_group.emitted_count == build_group.candidate_count;
+        const std::string eval_type =
+            use_existing_index || !first_in_build_group ? "search" : "build,search";
+        const bool cleanup_index_after_trial = !use_existing_index && last_in_build_group;
+
+        const auto trial_id = MakeTrialId(candidate.index_name, i + 1);
         trials.emplace_back(TrialSpec{trial_id,
+                                      build_group.build_id,
                                       candidate.index_name,
                                       eval_type,
-                                      index_path,
+                                      build_group.index_path,
                                       candidate.create_params,
-                                      candidate.search_params});
+                                      candidate.search_params,
+                                      cleanup_index_after_trial});
     }
     return trials;
 }

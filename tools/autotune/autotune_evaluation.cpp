@@ -159,11 +159,14 @@ RunTrial(const TrialSpec& trial,
          const ExecutionOptions& options) {
     JsonType trial_result;
     trial_result["trial_id"] = trial.trial_id;
+    trial_result["build_id"] = trial.build_id;
     trial_result["index_name"] = trial.index_name;
     trial_result["eval_type"] = trial.eval_type;
     trial_result["create_params"] = trial.create_params;
     trial_result["search_params"] = trial.search_params;
-    trial_result["artifacts"] = JsonType{{"index_path", trial.index_path}};
+    trial_result["artifacts"] =
+        JsonType{{"index_path", trial.index_path},
+                 {"cleanup_index_after_trial", trial.cleanup_index_after_trial}};
 
     const auto start = Clock::now();
     try {
@@ -205,7 +208,7 @@ RunTrial(const TrialSpec& trial,
     }
     trial_result["elapsed_seconds"] = ElapsedSeconds(start);
 
-    if (!options.keep_intermediate && trial.eval_type != "search" &&
+    if (!options.keep_intermediate && trial.cleanup_index_after_trial &&
         std::filesystem::exists(trial.index_path)) {
         std::error_code error;
         std::filesystem::remove(trial.index_path, error);

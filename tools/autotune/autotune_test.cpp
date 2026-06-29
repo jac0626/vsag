@@ -242,6 +242,63 @@ TEST_CASE("AutoTune generates covered hgraph and ivf trials") {
     REQUIRE(candidates["candidate_count"] == 24);
     REQUIRE(candidates["trial_count"] == 24);
     REQUIRE(candidates["trials"][0]["eval_type"] == "build,search");
+    REQUIRE(candidates["trials"][1]["eval_type"] == "search");
+    REQUIRE(candidates["trials"][0]["build_id"] == candidates["trials"][1]["build_id"]);
+    REQUIRE(candidates["trials"][0]["index_path"] == candidates["trials"][1]["index_path"]);
+
+    std::remove(data_path.c_str());
+}
+
+TEST_CASE("AutoTune reuses build artifacts across search-scoped variants") {
+    auto data_path = MakeTempFile("vsag_autotune_scope_reuse_test.hdf5");
+    auto request = R"({
+        "version": 1,
+        "data_path": "",
+        "indexes": [
+            {
+                "name": "hgraph",
+                "create_params": {
+                    "dim": 128,
+                    "dtype": "float32",
+                    "metric_type": "l2",
+                    "index_param": {
+                        "base_quantization_type": "fp32",
+                        "max_degree": [16, 32],
+                        "ef_construction": 100
+                    }
+                },
+                "search_params": {
+                    "hgraph": {
+                        "ef_search": [40, 80]
+                    }
+                }
+            }
+        ],
+        "constraints": {
+            "recall_at_k": 0.5
+        }
+    })"_json;
+    request["data_path"] = data_path;
+
+    auto candidates = vsag::autotune::GenerateCandidatesForTest(request);
+    REQUIRE(candidates["candidate_count"] == 4);
+    REQUIRE(candidates["trial_count"] == 4);
+
+    REQUIRE(candidates["trials"][0]["eval_type"] == "build,search");
+    REQUIRE(candidates["trials"][1]["eval_type"] == "search");
+    REQUIRE(candidates["trials"][0]["build_id"] == candidates["trials"][1]["build_id"]);
+    REQUIRE(candidates["trials"][0]["index_path"] == candidates["trials"][1]["index_path"]);
+    REQUIRE(candidates["trials"][0]["cleanup_index_after_trial"] == false);
+    REQUIRE(candidates["trials"][1]["cleanup_index_after_trial"] == true);
+
+    REQUIRE(candidates["trials"][2]["eval_type"] == "build,search");
+    REQUIRE(candidates["trials"][3]["eval_type"] == "search");
+    REQUIRE(candidates["trials"][2]["build_id"] == candidates["trials"][3]["build_id"]);
+    REQUIRE(candidates["trials"][2]["index_path"] == candidates["trials"][3]["index_path"]);
+    REQUIRE(candidates["trials"][1]["build_id"] != candidates["trials"][2]["build_id"]);
+    REQUIRE(candidates["trials"][1]["index_path"] != candidates["trials"][2]["index_path"]);
+    REQUIRE(candidates["trials"][2]["cleanup_index_after_trial"] == false);
+    REQUIRE(candidates["trials"][3]["cleanup_index_after_trial"] == true);
 
     std::remove(data_path.c_str());
 }
@@ -349,8 +406,10 @@ TEST_CASE("AutoTune plans search-only trials for an existing index") {
     REQUIRE(candidates["trial_count"] == 2);
     REQUIRE(candidates["trials"][0]["eval_type"] == "search");
     REQUIRE(candidates["trials"][0]["index_path"] == index_path);
+    REQUIRE(candidates["trials"][0]["cleanup_index_after_trial"] == false);
     REQUIRE(candidates["trials"][1]["eval_type"] == "search");
     REQUIRE(candidates["trials"][1]["index_path"] == index_path);
+    REQUIRE(candidates["trials"][1]["cleanup_index_after_trial"] == false);
 
     std::remove(data_path.c_str());
     std::remove(index_path.c_str());
@@ -518,6 +577,8 @@ TEST_CASE("AutoTune runs real eval build-search integration for hgraph and ivf")
 
     uint64_t hgraph_count = 0;
     uint64_t ivf_count = 0;
+    uint64_t build_search_count = 0;
+    uint64_t search_count = 0;
     uint64_t failed_count = 0;
     for (const auto& trial : result["trials"]) {
         if (trial["index_name"] == "hgraph") {
@@ -525,6 +586,12 @@ TEST_CASE("AutoTune runs real eval build-search integration for hgraph and ivf")
         }
         if (trial["index_name"] == "ivf") {
             ++ivf_count;
+        }
+        if (trial["eval_type"] == "build,search") {
+            ++build_search_count;
+        }
+        if (trial["eval_type"] == "search") {
+            ++search_count;
         }
         if (trial["status"] != "success") {
             ++failed_count;
@@ -535,6 +602,8 @@ TEST_CASE("AutoTune runs real eval build-search integration for hgraph and ivf")
     }
     REQUIRE(hgraph_count == 12);
     REQUIRE(ivf_count == 12);
+    REQUIRE(build_search_count == 8);
+    REQUIRE(search_count == 16);
     REQUIRE(failed_count == 0);
 
     std::filesystem::remove_all(workspace_path);
