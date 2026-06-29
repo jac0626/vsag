@@ -19,6 +19,7 @@
 #include <sstream>
 #include <utility>
 
+#include "autotune_index_policy.h"
 #include "autotune_internal.h"
 
 namespace vsag::autotune::internal {
@@ -58,68 +59,6 @@ ExpandRange(const JsonType& range) {
     }
     Require(!values.empty(), "$range generated no value");
     return values;
-}
-
-void
-FillHGraphDefaults(JsonType& index_spec) {
-    auto& create_params = EnsureObject(index_spec, "create_params");
-    auto& index_param = EnsureObject(create_params, "index_param");
-    if (!index_param.contains("base_quantization_type")) {
-        index_param["base_quantization_type"] = JsonType::array({"fp32", "sq8_uniform"});
-    }
-    if (!index_param.contains("max_degree")) {
-        index_param["max_degree"] = JsonType::array({16, 32});
-    }
-    if (!index_param.contains("ef_construction")) {
-        index_param["ef_construction"] = JsonType::array({100, 200});
-    }
-
-    auto& search_params = EnsureObject(index_spec, "search_params");
-    auto& hgraph_params = EnsureObject(search_params, kIndexHGraph);
-    if (!hgraph_params.contains("ef_search")) {
-        hgraph_params["ef_search"] = JsonType::array({40, 80, 120});
-    }
-}
-
-void
-FillIvfDefaults(JsonType& index_spec) {
-    auto& create_params = EnsureObject(index_spec, "create_params");
-    auto& index_param = EnsureObject(create_params, "index_param");
-    if (!index_param.contains("partition_strategy_type")) {
-        index_param["partition_strategy_type"] = "ivf";
-    }
-    if (!index_param.contains("base_quantization_type")) {
-        index_param["base_quantization_type"] = JsonType::array({"fp32", "sq8_uniform"});
-    }
-    if (!index_param.contains("buckets_count")) {
-        index_param["buckets_count"] = JsonType::array({1024, 2048});
-    }
-    if (!index_param.contains("ivf_train_type")) {
-        index_param["ivf_train_type"] = "kmeans";
-    }
-
-    auto& search_params = EnsureObject(index_spec, "search_params");
-    auto& ivf_params = EnsureObject(search_params, kIndexIvf);
-    if (!ivf_params.contains("scan_buckets_count")) {
-        ivf_params["scan_buckets_count"] = JsonType::array({16, 32, 64});
-    }
-}
-
-void
-FillIndexDefaults(JsonType& index_spec) {
-    const auto index_name = GetString(index_spec, "name", "");
-    Require(IsSupportedIndex(index_name), "unsupported index: " + index_name);
-    if (index_name == kIndexHGraph) {
-        FillHGraphDefaults(index_spec);
-    } else if (index_name == kIndexIvf) {
-        FillIvfDefaults(index_spec);
-    }
-
-    const auto& create_params = index_spec["create_params"];
-    Require(create_params.contains("dim"), index_name + " create_params.dim is required");
-    Require(create_params.contains("dtype"), index_name + " create_params.dtype is required");
-    Require(create_params.contains("metric_type"),
-            index_name + " create_params.metric_type is required");
 }
 
 std::string
@@ -177,7 +116,8 @@ GenerateCandidates(const JsonType& request) {
     std::vector<CandidateSpec> candidates;
     for (const auto& raw_index_spec : request["indexes"]) {
         JsonType index_spec = raw_index_spec;
-        FillIndexDefaults(index_spec);
+        ApplyIndexDefaults(index_spec);
+        ValidateIndexSpec(index_spec);
 
         const auto index_name = index_spec["name"].get<std::string>();
         auto create_candidates = ExpandJson(index_spec["create_params"]);

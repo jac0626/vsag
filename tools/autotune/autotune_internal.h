@@ -25,9 +25,6 @@ namespace vsag::autotune::internal {
 
 using Clock = std::chrono::steady_clock;
 
-inline constexpr const char* kIndexHGraph = "hgraph";
-inline constexpr const char* kIndexIvf = "ivf";
-
 struct ExecutionOptions {
     int top_k{10};
     std::string search_mode{"knn"};
@@ -76,9 +73,6 @@ GetBool(const JsonType& object, const std::string& key, bool default_value);
 
 JsonType&
 EnsureObject(JsonType& object, const std::string& key);
-
-bool
-IsSupportedIndex(const std::string& index_name);
 
 bool
 IsSupportedConstraint(const std::string& constraint_name);

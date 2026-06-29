@@ -16,6 +16,7 @@ set (autotune_srcs
     autotune.cpp
     autotune_common.cpp
     autotune_evaluation.cpp
+    autotune_index_policy.cpp
     autotune_planner.cpp
     autotune_request.cpp
     autotune_result.cpp)

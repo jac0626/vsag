@@ -196,6 +196,70 @@ TEST_CASE("AutoTune generates covered hgraph and ivf trials") {
     std::remove(data_path.c_str());
 }
 
+TEST_CASE("AutoTune applies index policy defaults for hgraph and ivf") {
+    auto data_path = MakeTempFile("vsag_autotune_policy_defaults_test.hdf5");
+    auto request = R"({
+        "version": 1,
+        "data_path": "",
+        "indexes": [
+            {
+                "name": "hgraph",
+                "create_params": {
+                    "dim": 128,
+                    "dtype": "float32",
+                    "metric_type": "l2"
+                }
+            },
+            {
+                "name": "ivf",
+                "create_params": {
+                    "dim": 128,
+                    "dtype": "float32",
+                    "metric_type": "l2"
+                }
+            }
+        ],
+        "constraints": {
+            "recall_at_k": 0.5
+        }
+    })"_json;
+    request["data_path"] = data_path;
+
+    auto candidates = vsag::autotune::GenerateCandidatesForTest(request);
+    REQUIRE(candidates["candidate_count"] == 36);
+    REQUIRE(candidates["trial_count"] == 36);
+
+    uint64_t hgraph_count = 0;
+    uint64_t ivf_count = 0;
+    for (const auto& trial : candidates["trials"]) {
+        if (trial["index_name"] == "hgraph") {
+            ++hgraph_count;
+        }
+        if (trial["index_name"] == "ivf") {
+            ++ivf_count;
+        }
+    }
+    REQUIRE(hgraph_count == 24);
+    REQUIRE(ivf_count == 12);
+
+    const auto& first_hgraph = candidates["trials"][0];
+    REQUIRE(first_hgraph["index_name"] == "hgraph");
+    REQUIRE(first_hgraph["create_params"]["index_param"].contains("base_quantization_type"));
+    REQUIRE(first_hgraph["create_params"]["index_param"].contains("max_degree"));
+    REQUIRE(first_hgraph["create_params"]["index_param"].contains("ef_construction"));
+    REQUIRE(first_hgraph["search_params"]["hgraph"].contains("ef_search"));
+
+    const auto& first_ivf = candidates["trials"][24];
+    REQUIRE(first_ivf["index_name"] == "ivf");
+    REQUIRE(first_ivf["create_params"]["index_param"]["partition_strategy_type"] == "ivf");
+    REQUIRE(first_ivf["create_params"]["index_param"].contains("base_quantization_type"));
+    REQUIRE(first_ivf["create_params"]["index_param"].contains("buckets_count"));
+    REQUIRE(first_ivf["create_params"]["index_param"]["ivf_train_type"] == "kmeans");
+    REQUIRE(first_ivf["search_params"]["ivf"].contains("scan_buckets_count"));
+
+    std::remove(data_path.c_str());
+}
+
 TEST_CASE("AutoTune plans search-only trials for an existing index") {
     auto data_path = MakeTempFile("vsag_autotune_search_only_test.hdf5");
     auto index_path = MakeTempFile("vsag_autotune_existing.index");
@@ -308,6 +372,13 @@ TEST_CASE("AutoTune rejects unsupported P0 contract fields") {
     result = vsag::autotune::RunAutoTune(request);
     REQUIRE(result["status"] == "failed");
     REQUIRE(result["failure"]["message"].get<std::string>().find("unsupported in AutoTune P0") !=
+            std::string::npos);
+
+    request["execution"] = {{"search_mode", "knn"}};
+    request["indexes"][0]["name"] = "unsupported_index";
+    result = vsag::autotune::RunAutoTune(request);
+    REQUIRE(result["status"] == "failed");
+    REQUIRE(result["failure"]["message"].get<std::string>().find("unsupported index") !=
             std::string::npos);
 
     std::remove(data_path.c_str());

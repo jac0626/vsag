@@ -15,14 +15,10 @@
 #include <filesystem>
 #include <set>
 
+#include "autotune_index_policy.h"
 #include "autotune_internal.h"
 
 namespace vsag::autotune::internal {
-
-bool
-IsSupportedIndex(const std::string& index_name) {
-    return index_name == kIndexHGraph || index_name == kIndexIvf;
-}
 
 bool
 IsSupportedConstraint(const std::string& constraint_name) {
@@ -87,7 +83,7 @@ ValidateRequest(const JsonType& request) {
         const auto& index_spec = request["indexes"][i];
         Require(index_spec.is_object(), "indexes[] must be objects");
         const auto index_name = GetString(index_spec, "name", "");
-        Require(IsSupportedIndex(index_name), "unsupported index: " + index_name);
+        Require(HasIndexTunePolicy(index_name), "unsupported index: " + index_name);
     }
 
     Require(request.contains("constraints"), "constraints is required");
