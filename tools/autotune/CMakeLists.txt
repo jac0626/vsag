@@ -13,7 +13,12 @@
 # limitations under the License.
 
 set (autotune_srcs
-    autotune.cpp)
+    autotune.cpp
+    autotune_common.cpp
+    autotune_evaluation.cpp
+    autotune_planner.cpp
+    autotune_request.cpp
+    autotune_result.cpp)
 
 add_library (autotune_obj OBJECT ${autotune_srcs})
 target_include_directories (autotune_obj PUBLIC
