@@ -240,8 +240,10 @@ TEST_CASE("AutoTune generates covered hgraph and ivf trials") {
 
     auto candidates = vsag::autotune::GenerateCandidatesForTest(request);
     REQUIRE(candidates["candidate_count"] == 24);
+    REQUIRE(candidates["build_count"] == 8);
+    REQUIRE(candidates["build_group_count"] == 8);
     REQUIRE(candidates["trial_count"] == 24);
-    REQUIRE(candidates["trials"][0]["eval_type"] == "build,search");
+    REQUIRE(candidates["trials"][0]["eval_type"] == "search");
     REQUIRE(candidates["trials"][1]["eval_type"] == "search");
     REQUIRE(candidates["trials"][0]["build_id"] == candidates["trials"][1]["build_id"]);
     REQUIRE(candidates["trials"][0]["index_path"] == candidates["trials"][1]["index_path"]);
@@ -282,23 +284,26 @@ TEST_CASE("AutoTune reuses build artifacts across search-scoped variants") {
 
     auto candidates = vsag::autotune::GenerateCandidatesForTest(request);
     REQUIRE(candidates["candidate_count"] == 4);
+    REQUIRE(candidates["build_count"] == 2);
+    REQUIRE(candidates["build_group_count"] == 2);
     REQUIRE(candidates["trial_count"] == 4);
 
-    REQUIRE(candidates["trials"][0]["eval_type"] == "build,search");
+    REQUIRE(candidates["builds"][0]["use_existing_index"] == false);
+    REQUIRE(candidates["builds"][0]["cleanup_index_after_build_group"] == true);
+    REQUIRE(candidates["builds"][1]["use_existing_index"] == false);
+    REQUIRE(candidates["builds"][1]["cleanup_index_after_build_group"] == true);
+
+    REQUIRE(candidates["trials"][0]["eval_type"] == "search");
     REQUIRE(candidates["trials"][1]["eval_type"] == "search");
     REQUIRE(candidates["trials"][0]["build_id"] == candidates["trials"][1]["build_id"]);
     REQUIRE(candidates["trials"][0]["index_path"] == candidates["trials"][1]["index_path"]);
-    REQUIRE(candidates["trials"][0]["cleanup_index_after_trial"] == false);
-    REQUIRE(candidates["trials"][1]["cleanup_index_after_trial"] == true);
 
-    REQUIRE(candidates["trials"][2]["eval_type"] == "build,search");
+    REQUIRE(candidates["trials"][2]["eval_type"] == "search");
     REQUIRE(candidates["trials"][3]["eval_type"] == "search");
     REQUIRE(candidates["trials"][2]["build_id"] == candidates["trials"][3]["build_id"]);
     REQUIRE(candidates["trials"][2]["index_path"] == candidates["trials"][3]["index_path"]);
     REQUIRE(candidates["trials"][1]["build_id"] != candidates["trials"][2]["build_id"]);
     REQUIRE(candidates["trials"][1]["index_path"] != candidates["trials"][2]["index_path"]);
-    REQUIRE(candidates["trials"][2]["cleanup_index_after_trial"] == false);
-    REQUIRE(candidates["trials"][3]["cleanup_index_after_trial"] == true);
 
     std::remove(data_path.c_str());
 }
@@ -403,13 +408,15 @@ TEST_CASE("AutoTune plans search-only trials for an existing index") {
 
     auto candidates = vsag::autotune::GenerateCandidatesForTest(request);
     REQUIRE(candidates["candidate_count"] == 2);
+    REQUIRE(candidates["build_count"] == 0);
+    REQUIRE(candidates["build_group_count"] == 1);
     REQUIRE(candidates["trial_count"] == 2);
+    REQUIRE(candidates["builds"][0]["use_existing_index"] == true);
+    REQUIRE(candidates["builds"][0]["cleanup_index_after_build_group"] == false);
     REQUIRE(candidates["trials"][0]["eval_type"] == "search");
     REQUIRE(candidates["trials"][0]["index_path"] == index_path);
-    REQUIRE(candidates["trials"][0]["cleanup_index_after_trial"] == false);
     REQUIRE(candidates["trials"][1]["eval_type"] == "search");
     REQUIRE(candidates["trials"][1]["index_path"] == index_path);
-    REQUIRE(candidates["trials"][1]["cleanup_index_after_trial"] == false);
 
     std::remove(data_path.c_str());
     std::remove(index_path.c_str());
@@ -490,7 +497,19 @@ TEST_CASE("AutoTune rejects unsupported P0 contract fields") {
     REQUIRE(result["failure"]["message"].get<std::string>().find("unsupported index") !=
             std::string::npos);
 
+    auto index_path = MakeTempFile("vsag_autotune_existing_contract.index");
+    request["indexes"][0]["name"] = "hgraph";
+    request["indexes"][0]["create_params"]["index_param"] = {
+        {"base_quantization_type", "fp32"}, {"max_degree", {16, 32}}, {"ef_construction", 100}};
+    request["indexes"][0]["search_params"] = {{"hgraph", {{"ef_search", {40, 80}}}}};
+    request["index_path"] = index_path;
+    result = vsag::autotune::RunAutoTune(request);
+    REQUIRE(result["status"] == "failed");
+    REQUIRE(result["failure"]["message"].get<std::string>().find("index_path can only be used") !=
+            std::string::npos);
+
     std::remove(data_path.c_str());
+    std::remove(index_path.c_str());
 }
 
 TEST_CASE("AutoTune runs real eval build-search integration for hgraph and ivf") {
@@ -547,7 +566,9 @@ TEST_CASE("AutoTune runs real eval build-search integration for hgraph and ivf")
         "constraints": {
             "recall_at_k": 0.0,
             "latency_avg_ms": 1000.0,
-            "memory_peak_mb": 65536.0
+            "memory_peak_mb": 65536.0,
+            "build_seconds": 1000.0,
+            "index_size_mb": 1024.0
         },
         "execution": {
             "top_k": 3,
@@ -570,6 +591,9 @@ TEST_CASE("AutoTune runs real eval build-search integration for hgraph and ivf")
 
     auto result = vsag::autotune::RunAutoTune(request);
     REQUIRE(result["status"] == "success");
+    REQUIRE(result["build_count"] == 8);
+    REQUIRE(result["build_group_count"] == 8);
+    REQUIRE(result["builds"].size() == 8);
     REQUIRE(result["trial_count"] == 24);
     REQUIRE(result["trials"].size() == 24);
     REQUIRE(result["recommendation"].is_object());
@@ -577,7 +601,6 @@ TEST_CASE("AutoTune runs real eval build-search integration for hgraph and ivf")
 
     uint64_t hgraph_count = 0;
     uint64_t ivf_count = 0;
-    uint64_t build_search_count = 0;
     uint64_t search_count = 0;
     uint64_t failed_count = 0;
     for (const auto& trial : result["trials"]) {
@@ -586,9 +609,6 @@ TEST_CASE("AutoTune runs real eval build-search integration for hgraph and ivf")
         }
         if (trial["index_name"] == "ivf") {
             ++ivf_count;
-        }
-        if (trial["eval_type"] == "build,search") {
-            ++build_search_count;
         }
         if (trial["eval_type"] == "search") {
             ++search_count;
@@ -599,11 +619,14 @@ TEST_CASE("AutoTune runs real eval build-search integration for hgraph and ivf")
         REQUIRE(trial["metrics"].contains("recall_at_k"));
         REQUIRE(trial["metrics"].contains("latency_avg_ms"));
         REQUIRE(trial["metrics"].contains("memory_peak_mb"));
+        REQUIRE(trial["metrics"].contains("build_seconds"));
+        REQUIRE(trial["metrics"].contains("index_size_mb"));
+        REQUIRE(trial["metrics"]["build_seconds"].get<double>() > 0.0);
+        REQUIRE(trial["metrics"]["index_size_mb"].get<double>() > 0.0);
     }
     REQUIRE(hgraph_count == 12);
     REQUIRE(ivf_count == 12);
-    REQUIRE(build_search_count == 8);
-    REQUIRE(search_count == 16);
+    REQUIRE(search_count == 24);
     REQUIRE(failed_count == 0);
 
     std::filesystem::remove_all(workspace_path);

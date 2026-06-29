@@ -29,8 +29,8 @@ namespace {
 struct BuildGroupPlan {
     std::string build_id;
     std::string index_path;
-    uint64_t candidate_count{0};
-    uint64_t emitted_count{0};
+    std::string index_name;
+    JsonType create_params;
 };
 
 std::vector<JsonType>
@@ -183,7 +183,7 @@ GenerateCandidates(const JsonType& request) {
     return candidates;
 }
 
-std::vector<TrialSpec>
+AutoTunePlan
 PlanTrials(const JsonType& request,
            const std::vector<CandidateSpec>& candidates,
            const ExecutionOptions& options) {
@@ -210,43 +210,56 @@ PlanTrials(const JsonType& request,
         if (group.build_id.empty()) {
             ++build_ordinal;
             group.build_id = MakeBuildId(candidate.index_name, build_ordinal);
+            group.index_name = candidate.index_name;
+            group.create_params = candidate.create_params;
             group.index_path = (std::filesystem::path(options.workspace_path) / "trials" /
                                 (group.build_id + ".index"))
                                    .string();
         }
-        ++group.candidate_count;
     }
 
-    const bool use_existing_index = !existing_index_path.empty() && build_groups.size() == 1;
+    Require(existing_index_path.empty() || build_groups.size() == 1,
+            "index_path can only be used when indexes expand to one build candidate");
+
+    const bool use_existing_index = !existing_index_path.empty();
     if (use_existing_index) {
         for (auto& build_group : build_groups) {
             build_group.second.index_path = existing_index_path;
         }
     }
 
+    AutoTunePlan plan;
+    std::map<std::string, bool> emitted_builds;
+    for (const auto& build_key : build_keys) {
+        if (emitted_builds[build_key]) {
+            continue;
+        }
+        emitted_builds[build_key] = true;
+        const auto& build_group = build_groups[build_key];
+        plan.builds.emplace_back(BuildSpec{build_group.build_id,
+                                           build_group.index_name,
+                                           build_group.index_path,
+                                           build_group.create_params,
+                                           use_existing_index,
+                                           !use_existing_index});
+    }
+
     std::vector<TrialSpec> trials;
     for (uint64_t i = 0; i < candidates.size(); ++i) {
         const auto& candidate = candidates[i];
         auto& build_group = build_groups[build_keys[i]];
-        ++build_group.emitted_count;
-
-        const bool first_in_build_group = build_group.emitted_count == 1;
-        const bool last_in_build_group = build_group.emitted_count == build_group.candidate_count;
-        const std::string eval_type =
-            use_existing_index || !first_in_build_group ? "search" : "build,search";
-        const bool cleanup_index_after_trial = !use_existing_index && last_in_build_group;
 
         const auto trial_id = MakeTrialId(candidate.index_name, i + 1);
         trials.emplace_back(TrialSpec{trial_id,
                                       build_group.build_id,
                                       candidate.index_name,
-                                      eval_type,
+                                      "search",
                                       build_group.index_path,
                                       candidate.create_params,
-                                      candidate.search_params,
-                                      cleanup_index_after_trial});
+                                      candidate.search_params});
     }
-    return trials;
+    plan.trials = std::move(trials);
+    return plan;
 }
 
 }  // namespace vsag::autotune::internal

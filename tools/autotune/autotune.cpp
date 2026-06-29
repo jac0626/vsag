@@ -16,6 +16,7 @@
 
 #include <exception>
 #include <iostream>
+#include <map>
 #include <utility>
 #include <vector>
 
@@ -36,24 +37,55 @@ RunAutoTune(const JsonType& request) {
 
         const auto candidate_start = internal::Clock::now();
         auto candidates = internal::GenerateCandidates(request);
-        auto trials = internal::PlanTrials(request, candidates, options);
+        auto plan = internal::PlanTrials(request, candidates, options);
         elapsed_breakdown["candidate_generation"] = internal::ElapsedSeconds(candidate_start);
 
         const auto evaluation_start = internal::Clock::now();
         std::vector<JsonType> trial_results;
-        trial_results.reserve(trials.size());
+        trial_results.reserve(plan.trials.size());
+        std::vector<JsonType> build_results;
+        build_results.reserve(plan.builds.size());
+        std::map<std::string, std::vector<internal::TrialSpec>> trials_by_build_id;
+        for (const auto& trial : plan.trials) {
+            trials_by_build_id[trial.build_id].emplace_back(trial);
+        }
+
         uint64_t trial_ordinal = 0;
-        for (const auto& trial : trials) {
-            ++trial_ordinal;
-            std::cerr << "[AutoTune] running trial " << trial_ordinal << "/" << trials.size() << " "
-                      << trial.trial_id << " index=" << trial.index_name
-                      << " eval_type=" << trial.eval_type << std::endl;
-            auto trial_result = internal::RunTrial(trial, request, request["constraints"], options);
-            std::cerr << "[AutoTune] finished trial " << trial.trial_id
-                      << " status=" << trial_result["status"].get<std::string>()
-                      << " elapsed_seconds=" << trial_result["elapsed_seconds"].get<double>()
+        uint64_t build_ordinal = 0;
+        uint64_t executed_build_count = 0;
+        for (const auto& build : plan.builds) {
+            ++build_ordinal;
+            if (!build.use_existing_index) {
+                ++executed_build_count;
+            }
+            std::cerr << "[AutoTune] running build group " << build_ordinal << "/"
+                      << plan.builds.size() << " " << build.build_id
+                      << " index=" << build.index_name
+                      << " use_existing_index=" << build.use_existing_index << std::endl;
+            auto build_result = internal::RunBuild(build, request, options);
+            std::cerr << "[AutoTune] finished build group " << build.build_id
+                      << " status=" << build_result["status"].get<std::string>()
+                      << " elapsed_seconds=" << build_result["elapsed_seconds"].get<double>()
                       << std::endl;
-            trial_results.emplace_back(std::move(trial_result));
+
+            const auto& group_trials = trials_by_build_id[build.build_id];
+            for (const auto& trial : group_trials) {
+                ++trial_ordinal;
+                std::cerr << "[AutoTune] running trial " << trial_ordinal << "/"
+                          << plan.trials.size() << " " << trial.trial_id
+                          << " index=" << trial.index_name << " eval_type=" << trial.eval_type
+                          << " build_id=" << trial.build_id << std::endl;
+                auto trial_result = internal::RunSearchTrial(
+                    trial, build_result, request, request["constraints"], options);
+                std::cerr << "[AutoTune] finished trial " << trial.trial_id
+                          << " status=" << trial_result["status"].get<std::string>()
+                          << " elapsed_seconds=" << trial_result["elapsed_seconds"].get<double>()
+                          << std::endl;
+                trial_results.emplace_back(std::move(trial_result));
+            }
+
+            internal::CleanupBuildArtifact(build, options);
+            build_results.emplace_back(std::move(build_result));
         }
         elapsed_breakdown["evaluation"] = internal::ElapsedSeconds(evaluation_start);
 
@@ -69,8 +101,11 @@ RunAutoTune(const JsonType& request) {
         result["recommendation"] = selection["recommendation"];
         result["best_effort"] = selection["best_effort"];
         result["trial_count"] = trial_results.size();
+        result["build_count"] = executed_build_count;
+        result["build_group_count"] = build_results.size();
         result["failure"] = selection["failure"];
         if (options.include_trials) {
+            result["builds"] = build_results;
             result["trials"] = trial_results;
         }
 
@@ -100,21 +135,35 @@ GenerateCandidatesForTest(const JsonType& request) {
     internal::ValidateRequest(request);
     auto options = internal::ParseExecutionOptions(request);
     auto candidates = internal::GenerateCandidates(request);
-    auto trials = internal::PlanTrials(request, candidates, options);
+    auto plan = internal::PlanTrials(request, candidates, options);
     JsonType result;
     result["candidate_count"] = candidates.size();
-    result["trial_count"] = trials.size();
+    result["build_group_count"] = plan.builds.size();
+    uint64_t executed_build_count = 0;
+    result["builds"] = JsonType::array();
+    for (const auto& build : plan.builds) {
+        if (!build.use_existing_index) {
+            ++executed_build_count;
+        }
+        result["builds"].push_back(
+            JsonType{{"build_id", build.build_id},
+                     {"index_name", build.index_name},
+                     {"index_path", build.index_path},
+                     {"create_params", build.create_params},
+                     {"use_existing_index", build.use_existing_index},
+                     {"cleanup_index_after_build_group", build.cleanup_index_after_build_group}});
+    }
+    result["build_count"] = executed_build_count;
+    result["trial_count"] = plan.trials.size();
     result["trials"] = JsonType::array();
-    for (const auto& trial : trials) {
-        result["trials"].push_back(
-            JsonType{{"trial_id", trial.trial_id},
-                     {"build_id", trial.build_id},
-                     {"index_name", trial.index_name},
-                     {"eval_type", trial.eval_type},
-                     {"index_path", trial.index_path},
-                     {"create_params", trial.create_params},
-                     {"search_params", trial.search_params},
-                     {"cleanup_index_after_trial", trial.cleanup_index_after_trial}});
+    for (const auto& trial : plan.trials) {
+        result["trials"].push_back(JsonType{{"trial_id", trial.trial_id},
+                                            {"build_id", trial.build_id},
+                                            {"index_name", trial.index_name},
+                                            {"eval_type", trial.eval_type},
+                                            {"index_path", trial.index_path},
+                                            {"create_params", trial.create_params},
+                                            {"search_params", trial.search_params}});
     }
     return result;
 }

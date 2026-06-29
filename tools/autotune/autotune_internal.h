@@ -44,6 +44,15 @@ struct CandidateSpec {
     JsonType search_params;
 };
 
+struct BuildSpec {
+    std::string build_id;
+    std::string index_name;
+    std::string index_path;
+    JsonType create_params;
+    bool use_existing_index{false};
+    bool cleanup_index_after_build_group{false};
+};
+
 struct TrialSpec {
     std::string trial_id;
     std::string build_id;
@@ -52,7 +61,11 @@ struct TrialSpec {
     std::string index_path;
     JsonType create_params;
     JsonType search_params;
-    bool cleanup_index_after_trial{false};
+};
+
+struct AutoTunePlan {
+    std::vector<BuildSpec> builds;
+    std::vector<TrialSpec> trials;
 };
 
 double
@@ -91,16 +104,23 @@ ExpandJson(const JsonType& value);
 std::vector<CandidateSpec>
 GenerateCandidates(const JsonType& request);
 
-std::vector<TrialSpec>
+AutoTunePlan
 PlanTrials(const JsonType& request,
            const std::vector<CandidateSpec>& candidates,
            const ExecutionOptions& options);
 
 JsonType
-RunTrial(const TrialSpec& trial,
-         const JsonType& request,
-         const JsonType& constraints,
-         const ExecutionOptions& options);
+RunBuild(const BuildSpec& build, const JsonType& request, const ExecutionOptions& options);
+
+JsonType
+RunSearchTrial(const TrialSpec& trial,
+               const JsonType& build_result,
+               const JsonType& request,
+               const JsonType& constraints,
+               const ExecutionOptions& options);
+
+void
+CleanupBuildArtifact(const BuildSpec& build, const ExecutionOptions& options);
 
 JsonType
 SelectResult(const std::vector<JsonType>& trials);
