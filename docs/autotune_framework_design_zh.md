@@ -4,7 +4,7 @@
 
 本文档描述 VSAG AutoTune 的内部框架。外部输入输出契约见
 [`autotune_api_v1_zh.md`](autotune_api_v1_zh.md)。本文档的目标是指导第一阶段实现：
-先完成一个能替代人工网格搜索的官方调参执行框架，再逐步加入剪枝、采样和缓存复用。
+先完成一个能替代人工网格搜索的官方调参执行框架，再逐步加入剪枝、采样和其他成本优化手段。
 
 ## 1. 目标
 
@@ -30,7 +30,113 @@ AutoTune request
 - AutoTune 负责参数空间、评估编排、结果选择和报告。
 - 第一阶段不追求更快，只追求自动化和可复现。
 
-## 2. 模块分层
+## 2. 产品演进路线
+
+AutoTune 的产品演进分三步：先做可靠自动化，再降低调参成本，最后改变用户创建索引的
+产品入口。
+
+### 2.1 V1：参数调优自动化
+
+目标：替代人工脚本和手工 eval 配置。
+
+用户显式给出数据集、索引集合、候选参数和约束，AutoTune 负责展开候选、编排
+build/search eval、合并指标、过滤约束并输出推荐结果。
+
+这一阶段的核心判断标准是：
+
+```text
+人原来手写 eval 配置和 shell/python 网格搜索做的事，
+现在 AutoTune 可以官方、可复现、结构化地完成。
+```
+
+V1 不追求聪明优化器，也不承诺比人工网格搜索更快。它优先保证输入语义稳定、输出语义稳定、
+trial 可复现、失败可解释、指标来源可信。
+
+### 2.2 V1.5：索引侧默认候选策略收口
+
+目标：避免 AutoTune 变成第二套索引参数系统。
+
+索引默认参数已经由索引自己维护。长期看，默认候选空间、固定默认补齐、参数 scope 和明显
+非法组合过滤也应该由索引侧 policy 维护，AutoTune 框架只消费统一接口并执行调优流程。
+
+这一阶段要把所有权放清楚：
+
+```text
+索引侧：参数语义、索引默认值、默认候选建议、候选合法性
+AutoTune：候选展开、执行编排、指标合并、约束过滤、结果选择
+```
+
+这样扩展 HGraph、IVF、SINDI 或其他索引时，不需要在 AutoTune 中重复维护每个索引的完整参数
+语义。
+
+### 2.3 V2：成本感知优化
+
+目标：让自动调参变得更便宜、更快。
+
+V2 可以加入确定性的成本优化：
+
+- query sampling。
+- successive halving。
+- build-side pruning。
+- search-side pruning。
+- 完整 index artifact 复用。
+- 预算控制，例如最多 trial 数、最多 build 数、最大耗时。
+- 失败候选快速跳过。
+
+关键约束是：
+
+```text
+中间低成本结果只能用于剪枝；
+最终 recommendation 必须来自 full query validation。
+```
+
+这一阶段解决“自动但是太慢、太贵”的问题，但不改变 V1 的用户输入结构。
+
+### 2.4 V3：约束驱动建索引
+
+目标：把产品形态从“用户选择参数”升级为“用户声明目标”。
+
+当前用户创建索引时需要理解并填写：
+
+```json
+{
+  "index_name": "hgraph",
+  "index_param": {
+    "base_quantization_type": "sq8_uniform",
+    "max_degree": 32,
+    "ef_construction": 300
+  }
+}
+```
+
+V3 希望用户只声明数据和约束：
+
+```json
+{
+  "constraints": {
+    "recall_at_k": 0.95,
+    "latency_avg_ms": 2.0,
+    "memory_peak_mb": 8192
+  }
+}
+```
+
+系统根据数据特征和约束选择索引类型、量化策略、build 参数和 search 参数，返回可复现的建索引
+方案：
+
+```json
+{
+  "index_name": "hgraph",
+  "create_params": {},
+  "search_params": {},
+  "expected_metrics": {}
+}
+```
+
+最终可以沉淀为约束驱动的创建入口，例如 `CreateIndexWithConstraints(...)`。在这之前，
+AutoTune 应先作为官方、可信、可复现的调参执行系统站稳，再逐步演进到产品入口。
+
+## 3. 模块分层
 
 ```text
 AutoTuneRequest
@@ -47,7 +153,7 @@ AutoTuneRequest
   -> ReportWriter
 ```
 
-### 2.1 `AutoTuneRequest`
+### 3.1 `AutoTuneRequest`
 
 用户原始输入。它可以包含：
 
@@ -60,7 +166,7 @@ AutoTuneRequest
 
 这个对象只代表用户意图，不保证完整，也不保证所有默认值都已经补齐。
 
-### 2.2 `RequestValidator`
+### 3.2 `RequestValidator`
 
 职责：在进入调优前失败得足够早。
 
@@ -80,7 +186,7 @@ AutoTuneRequest
 - 合法 request 进入下一步。
 - 非法 request 返回结构化错误，不启动 eval。
 
-### 2.3 `RequestNormalizer`
+### 3.3 `RequestNormalizer`
 
 职责：把用户输入规整成内部稳定结构。
 
@@ -100,7 +206,7 @@ Normalizer 不展开候选组合，也不补索引参数默认候选。
 NormalizedTuneRequest
 ```
 
-### 2.4 `IndexPolicyRegistry`
+### 3.4 `IndexPolicyRegistry`
 
 职责：隔离“通用调参框架”和“具体索引知识”。
 
@@ -148,7 +254,7 @@ sindi  -> SindiTunePolicy
 }
 ```
 
-### 2.5 `CandidateGenerator`
+### 3.5 `CandidateGenerator`
 
 职责：把参数空间展开成候选组合。
 
@@ -177,7 +283,7 @@ CandidateSpec[]
 
 `CandidateSpec` 是完整参数，不再包含数组候选或 `$range`。
 
-### 2.6 `TrialPlanner`
+### 3.6 `TrialPlanner`
 
 职责：把候选参数变成 build group 和 search trial。
 
@@ -208,7 +314,7 @@ AutoTunePlan {
 当前实现仍然做全量枚举，但会复用同一 build group 的索引产物。后续完整 index
 artifact 复用、query sampling、successive halving 和剪枝都从 plan 或 strategy 层插入。
 
-### 2.7 `EvaluationStrategy`
+### 3.7 `EvaluationStrategy`
 
 职责：决定一批 trial 如何被评估。
 
@@ -240,7 +346,7 @@ SuccessiveHalvingStrategy:
   run final full validation
 ```
 
-### 2.8 `EvaluationRunner`
+### 3.8 `EvaluationRunner`
 
 职责：执行 build group 和 search trial。
 
@@ -310,7 +416,7 @@ BuildResult 包含：
 - `memory_peak_mb` 取 build/search 两侧峰值内存的较大值。
 - 使用已有索引时没有 build eval，因此不会产生 `build_seconds`。
 
-### 2.9 `ConstraintEvaluator`
+### 3.9 `ConstraintEvaluator`
 
 职责：判断 trial 是否满足用户约束。
 
@@ -331,7 +437,7 @@ EvaluatedTrialResult[]
 - `satisfied_constraints`
 - `violated_constraints`
 
-### 2.10 `ResultSelector`
+### 3.10 `ResultSelector`
 
 职责：选择推荐结果。
 
@@ -345,7 +451,7 @@ EvaluatedTrialResult[]
 
 `best_effort` 默认按 `recall_at_k` 最高、`latency_avg_ms` 最低排序。
 
-### 2.11 `ReportWriter`
+### 3.11 `ReportWriter`
 
 职责：输出最终 JSON。
 
@@ -361,7 +467,7 @@ EvaluatedTrialResult[]
 - 完整 trial 列表。
 - 每个 trial 的失败原因和中间产物路径。
 
-## 3. Query Sampling 插入方式
+## 4. Query Sampling 插入方式
 
 Query sampling 是 eval 的评估预算能力，不是新的参数搜索算法。
 
@@ -388,7 +494,7 @@ TrialSpec(search) + EvaluationBudget(query_count=1000)
 或者由 AutoTune 生成临时 sampled dataset。无论哪种实现，最终推荐结果必须经过 full
 query validation。
 
-## 4. Successive Halving 插入方式
+## 5. Successive Halving 插入方式
 
 Successive halving 是 AutoTune 的多轮调度策略。
 
@@ -434,7 +540,7 @@ CandidateGenerator
 - build group 可以跨轮复用；search budget 逐轮提升。
 - 用户输入结构不因为这个优化发生变化。
 
-## 5. 第一阶段验收标准
+## 6. 第一阶段验收标准
 
 当前第一阶段实现完成必须满足：
 
