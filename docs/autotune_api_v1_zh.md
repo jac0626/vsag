@@ -26,9 +26,9 @@ AutoTune 的第一阶段定位是：在现有 `eval_performance` 能力之上增
 
 - 不承诺比人工网格搜索更快。
 - 不实现复杂优化器、学习型搜索、自动剪枝策略。
-- 不把 `Index::Tune()` 或 Build Cache 作为核心路径。
+- 不把 `Index::Tune()` 作为核心路径。
 - 不让系统在用户未指定索引集合时自动选择索引类型。
-- 不支持 query sampling、successive halving、build cache、分布式执行。
+- 不支持 query sampling、successive halving、分布式执行。
 - 不支持自动调用 `Index::Tune()` 热修改已有索引。
 
 当前已实现能力：
@@ -814,7 +814,7 @@ tools/autotune/examples/sift_hgraph_ivf_autotune_result_p5.json
 第一阶段可以延后：
 
 - `range`、`knn_filter`、`range_filter` 的完整验收。
-- Build Cache 复用。
+- 完整 index artifact 复用。
 - `Index::Tune()` 热修改闭环。
 - trial 剪枝、successive halving、query sampling。
 - 分布式执行。
@@ -825,7 +825,7 @@ tools/autotune/examples/sift_hgraph_ivf_autotune_result_p5.json
 本文档的 API 不要求第一阶段实现优化器，但保留以下内部扩展点：
 
 1. 候选生成后、plan 生成前：可以加入非法组合剪枝。
-2. build group 执行前：可以查找 build cache，命中后跳过 build。
+2. build group 执行前：可以查找完整 index artifact，命中后跳过 build。
 3. build group 执行后、search trial 前：可以做 build 侧约束剪枝，例如
    `build_seconds` 或 `index_size_mb` 已经超限时跳过该 group 的 search。
 4. search trial 内部：可以先用少量 query 评估，再对 finalist 做 full validation。

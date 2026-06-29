@@ -199,8 +199,8 @@ AutoTunePlan {
 }
 ```
 
-当前实现仍然做全量枚举，但会复用同一 build group 的索引产物。后续 build cache、
-query sampling、successive halving 和剪枝都从 plan 或 strategy 层插入。
+当前实现仍然做全量枚举，但会复用同一 build group 的索引产物。后续完整 index
+artifact 复用、query sampling、successive halving 和剪枝都从 plan 或 strategy 层插入。
 
 ### 2.7 `EvaluationStrategy`
 
@@ -456,6 +456,6 @@ CandidateGenerator
 
 - query sampling。
 - successive halving。
-- build cache。
+- 完整 index artifact 复用。
 - 分布式执行。
 - 自动选择索引集合。
