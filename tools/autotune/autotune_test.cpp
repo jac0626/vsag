@@ -124,10 +124,10 @@ WriteDenseEvalDataset(const std::string& path) {
 }
 
 bool
-HasTunableParam(const vsag::autotune::JsonType& policy,
-                const std::string& path,
-                const std::string& scope) {
-    for (const auto& param : policy["tunable_params"]) {
+HasDefaultCandidateParam(const vsag::autotune::JsonType& policy,
+                         const std::string& path,
+                         const std::string& scope) {
+    for (const auto& param : policy["default_candidate_params"]) {
         if (param["path"] == path && param["scope"] == scope) {
             return true;
         }
@@ -175,25 +175,29 @@ TEST_CASE("AutoTune expands arrays, ranges and value escapes") {
     REQUIRE(expanded[0]["c"].size() == 2);
 }
 
-TEST_CASE("AutoTune index policies describe tunable parameter spaces") {
+TEST_CASE("AutoTune index policies describe default candidate spaces") {
     const auto hgraph_policy = vsag::autotune::internal::DescribeIndexTunePolicy("hgraph");
     REQUIRE(hgraph_policy["name"] == "hgraph");
-    REQUIRE(hgraph_policy["tunable_params"].size() == 4);
+    REQUIRE(hgraph_policy["default_candidate_params"].size() == 4);
     REQUIRE(hgraph_policy["fixed_defaults"].empty());
-    REQUIRE(HasTunableParam(
+    REQUIRE(HasDefaultCandidateParam(
         hgraph_policy, "/create_params/index_param/base_quantization_type", "build"));
-    REQUIRE(HasTunableParam(hgraph_policy, "/create_params/index_param/max_degree", "build"));
-    REQUIRE(HasTunableParam(hgraph_policy, "/create_params/index_param/ef_construction", "build"));
-    REQUIRE(HasTunableParam(hgraph_policy, "/search_params/hgraph/ef_search", "search"));
+    REQUIRE(
+        HasDefaultCandidateParam(hgraph_policy, "/create_params/index_param/max_degree", "build"));
+    REQUIRE(HasDefaultCandidateParam(
+        hgraph_policy, "/create_params/index_param/ef_construction", "build"));
+    REQUIRE(HasDefaultCandidateParam(hgraph_policy, "/search_params/hgraph/ef_search", "search"));
 
     const auto ivf_policy = vsag::autotune::internal::DescribeIndexTunePolicy("ivf");
     REQUIRE(ivf_policy["name"] == "ivf");
-    REQUIRE(ivf_policy["tunable_params"].size() == 3);
+    REQUIRE(ivf_policy["default_candidate_params"].size() == 3);
     REQUIRE(ivf_policy["fixed_defaults"].size() == 2);
+    REQUIRE(HasDefaultCandidateParam(
+        ivf_policy, "/create_params/index_param/base_quantization_type", "build"));
     REQUIRE(
-        HasTunableParam(ivf_policy, "/create_params/index_param/base_quantization_type", "build"));
-    REQUIRE(HasTunableParam(ivf_policy, "/create_params/index_param/buckets_count", "build"));
-    REQUIRE(HasTunableParam(ivf_policy, "/search_params/ivf/scan_buckets_count", "search"));
+        HasDefaultCandidateParam(ivf_policy, "/create_params/index_param/buckets_count", "build"));
+    REQUIRE(
+        HasDefaultCandidateParam(ivf_policy, "/search_params/ivf/scan_buckets_count", "search"));
     REQUIRE(
         HasFixedDefault(ivf_policy, "/create_params/index_param/partition_strategy_type", "ivf"));
     REQUIRE(HasFixedDefault(ivf_policy, "/create_params/index_param/ivf_train_type", "kmeans"));
@@ -383,6 +387,85 @@ TEST_CASE("AutoTune applies index policy defaults for hgraph and ivf") {
     REQUIRE(first_ivf["create_params"]["index_param"].contains("buckets_count"));
     REQUIRE(first_ivf["create_params"]["index_param"]["ivf_train_type"] == "kmeans");
     REQUIRE(first_ivf["search_params"]["ivf"].contains("scan_buckets_count"));
+
+    std::remove(data_path.c_str());
+}
+
+TEST_CASE("AutoTune expands user-provided candidates outside default candidate spaces") {
+    auto data_path = MakeTempFile("vsag_autotune_user_candidate_test.hdf5");
+    auto request = R"({
+        "version": 1,
+        "data_path": "",
+        "indexes": [
+            {
+                "name": "hgraph",
+                "create_params": {
+                    "dim": 128,
+                    "dtype": "float32",
+                    "metric_type": "l2",
+                    "index_param": {
+                        "base_quantization_type": "fp32",
+                        "max_degree": 16,
+                        "ef_construction": 100,
+                        "use_reorder": [false, true]
+                    }
+                },
+                "search_params": {
+                    "hgraph": {
+                        "ef_search": 40
+                    }
+                }
+            }
+        ],
+        "constraints": {
+            "recall_at_k": 0.5
+        }
+    })"_json;
+    request["data_path"] = data_path;
+
+    auto candidates = vsag::autotune::GenerateCandidatesForTest(request);
+    REQUIRE(candidates["candidate_count"] == 2);
+    REQUIRE(candidates["build_count"] == 2);
+    REQUIRE(candidates["build_group_count"] == 2);
+    REQUIRE(candidates["trial_count"] == 2);
+    REQUIRE(candidates["trials"][0]["create_params"]["index_param"]["use_reorder"] == false);
+    REQUIRE(candidates["trials"][1]["create_params"]["index_param"]["use_reorder"] == true);
+
+    std::remove(data_path.c_str());
+}
+
+TEST_CASE("AutoTune does not override user-fixed default candidate parameters") {
+    auto data_path = MakeTempFile("vsag_autotune_user_fixed_default_test.hdf5");
+    auto request = R"({
+        "version": 1,
+        "data_path": "",
+        "indexes": [
+            {
+                "name": "hgraph",
+                "create_params": {
+                    "dim": 128,
+                    "dtype": "float32",
+                    "metric_type": "l2",
+                    "index_param": {
+                        "max_degree": 48
+                    }
+                }
+            }
+        ],
+        "constraints": {
+            "recall_at_k": 0.5
+        }
+    })"_json;
+    request["data_path"] = data_path;
+
+    auto candidates = vsag::autotune::GenerateCandidatesForTest(request);
+    REQUIRE(candidates["candidate_count"] == 12);
+    REQUIRE(candidates["build_count"] == 4);
+    REQUIRE(candidates["build_group_count"] == 4);
+    REQUIRE(candidates["trial_count"] == 12);
+    for (const auto& trial : candidates["trials"]) {
+        REQUIRE(trial["create_params"]["index_param"]["max_degree"] == 48);
+    }
 
     std::remove(data_path.c_str());
 }

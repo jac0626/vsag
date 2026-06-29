@@ -26,11 +26,11 @@ constexpr const char* kIndexHGraph = "hgraph";
 constexpr const char* kIndexIvf = "ivf";
 
 const char*
-ScopeName(TuneParamScope scope) {
+ScopeName(CandidateParamScope scope) {
     switch (scope) {
-        case TuneParamScope::Build:
+        case CandidateParamScope::Build:
             return "build";
-        case TuneParamScope::Search:
+        case CandidateParamScope::Search:
             return "search";
     }
     return "unknown";
@@ -73,21 +73,21 @@ ValidateCommonCreateParams(const JsonType& index_spec) {
             index_name + " create_params.metric_type is required");
 }
 
-const std::vector<IndexTuneParam>&
-HGraphTuneParams() {
-    static const std::vector<IndexTuneParam> params = {
-        IndexTuneParam{{"create_params", "index_param", "base_quantization_type"},
-                       TuneParamScope::Build,
-                       JsonType::array({"fp32", "sq8_uniform"})},
-        IndexTuneParam{{"create_params", "index_param", "max_degree"},
-                       TuneParamScope::Build,
-                       JsonType::array({16, 32})},
-        IndexTuneParam{{"create_params", "index_param", "ef_construction"},
-                       TuneParamScope::Build,
-                       JsonType::array({100, 200})},
-        IndexTuneParam{{"search_params", kIndexHGraph, "ef_search"},
-                       TuneParamScope::Search,
-                       JsonType::array({40, 80, 120})},
+const std::vector<IndexDefaultCandidateParam>&
+HGraphDefaultCandidateParams() {
+    static const std::vector<IndexDefaultCandidateParam> params = {
+        IndexDefaultCandidateParam{{"create_params", "index_param", "base_quantization_type"},
+                                   CandidateParamScope::Build,
+                                   JsonType::array({"fp32", "sq8_uniform"})},
+        IndexDefaultCandidateParam{{"create_params", "index_param", "max_degree"},
+                                   CandidateParamScope::Build,
+                                   JsonType::array({16, 32})},
+        IndexDefaultCandidateParam{{"create_params", "index_param", "ef_construction"},
+                                   CandidateParamScope::Build,
+                                   JsonType::array({100, 200})},
+        IndexDefaultCandidateParam{{"search_params", kIndexHGraph, "ef_search"},
+                                   CandidateParamScope::Search,
+                                   JsonType::array({40, 80, 120})},
     };
     return params;
 }
@@ -103,18 +103,18 @@ ValidateHGraphSpec(const JsonType& index_spec) {
     ValidateCommonCreateParams(index_spec);
 }
 
-const std::vector<IndexTuneParam>&
-IvfTuneParams() {
-    static const std::vector<IndexTuneParam> params = {
-        IndexTuneParam{{"create_params", "index_param", "base_quantization_type"},
-                       TuneParamScope::Build,
-                       JsonType::array({"fp32", "sq8_uniform"})},
-        IndexTuneParam{{"create_params", "index_param", "buckets_count"},
-                       TuneParamScope::Build,
-                       JsonType::array({1024, 2048})},
-        IndexTuneParam{{"search_params", kIndexIvf, "scan_buckets_count"},
-                       TuneParamScope::Search,
-                       JsonType::array({16, 32, 64})},
+const std::vector<IndexDefaultCandidateParam>&
+IvfDefaultCandidateParams() {
+    static const std::vector<IndexDefaultCandidateParam> params = {
+        IndexDefaultCandidateParam{{"create_params", "index_param", "base_quantization_type"},
+                                   CandidateParamScope::Build,
+                                   JsonType::array({"fp32", "sq8_uniform"})},
+        IndexDefaultCandidateParam{{"create_params", "index_param", "buckets_count"},
+                                   CandidateParamScope::Build,
+                                   JsonType::array({1024, 2048})},
+        IndexDefaultCandidateParam{{"search_params", kIndexIvf, "scan_buckets_count"},
+                                   CandidateParamScope::Search,
+                                   JsonType::array({16, 32, 64})},
     };
     return params;
 }
@@ -136,8 +136,9 @@ ValidateIvfSpec(const JsonType& index_spec) {
 const std::array<IndexTunePolicy, 2>&
 Policies() {
     static const std::array<IndexTunePolicy, 2> policies = {
-        IndexTunePolicy{kIndexHGraph, &HGraphTuneParams, &HGraphFixedDefaults, &ValidateHGraphSpec},
-        IndexTunePolicy{kIndexIvf, &IvfTuneParams, &IvfFixedDefaults, &ValidateIvfSpec},
+        IndexTunePolicy{
+            kIndexHGraph, &HGraphDefaultCandidateParams, &HGraphFixedDefaults, &ValidateHGraphSpec},
+        IndexTunePolicy{kIndexIvf, &IvfDefaultCandidateParams, &IvfFixedDefaults, &ValidateIvfSpec},
     };
     return policies;
 }
@@ -153,7 +154,7 @@ FindPolicy(const std::string& index_name) {
 }
 
 JsonType
-DescribeParam(const IndexTuneParam& param) {
+DescribeParam(const IndexDefaultCandidateParam& param) {
     return JsonType{{"name", param.path.back()},
                     {"path", FormatPath(param.path)},
                     {"scope", ScopeName(param.scope)},
@@ -173,11 +174,11 @@ HasIndexTunePolicy(const std::string& index_name) {
     return FindPolicy(index_name) != nullptr;
 }
 
-const std::vector<IndexTuneParam>&
-GetIndexTuneParams(const std::string& index_name) {
+const std::vector<IndexDefaultCandidateParam>&
+GetIndexDefaultCandidateParams(const std::string& index_name) {
     const auto* policy = FindPolicy(index_name);
     Require(policy != nullptr, "unsupported index: " + index_name);
-    return policy->tunable_params();
+    return policy->default_candidate_params();
 }
 
 JsonType
@@ -187,9 +188,9 @@ DescribeIndexTunePolicy(const std::string& index_name) {
 
     JsonType description;
     description["name"] = policy->name;
-    description["tunable_params"] = JsonType::array();
-    for (const auto& param : policy->tunable_params()) {
-        description["tunable_params"].push_back(DescribeParam(param));
+    description["default_candidate_params"] = JsonType::array();
+    for (const auto& param : policy->default_candidate_params()) {
+        description["default_candidate_params"].push_back(DescribeParam(param));
     }
     description["fixed_defaults"] = JsonType::array();
     for (const auto& param : policy->fixed_defaults()) {
@@ -206,7 +207,7 @@ ApplyIndexDefaults(JsonType& index_spec) {
     for (const auto& param : policy->fixed_defaults()) {
         ApplyDefault(index_spec, param.path, param.value);
     }
-    for (const auto& param : policy->tunable_params()) {
+    for (const auto& param : policy->default_candidate_params()) {
         ApplyDefault(index_spec, param.path, param.default_candidates);
     }
 }

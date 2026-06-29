@@ -119,8 +119,12 @@ sindi  -> SindiTunePolicy
 - 声明索引是否支持 AutoTune。
 - 补齐缺失的默认候选参数。
 - 判断参数组合是否明显非法。
-- 维护该索引的可调参数空间。
-- 声明每个可调参数属于 build scope 还是 search scope。
+- 维护该索引的默认候选空间。
+- 声明每个默认候选参数属于 build scope 还是 search scope。
+
+`IndexTunePolicy` 不是参数白名单。用户显式写出的任何参数候选都会由通用展开逻辑处理，
+即使该参数不在默认候选空间中。默认候选空间只决定“用户没写时系统自动探索什么”；
+用户没写、policy 也没声明的参数继续使用索引内部默认值。
 
 例如 HGraph policy 可以补齐：
 
@@ -162,6 +166,8 @@ NormalizedTuneRequest + IndexTunePolicy
 4. 处理 `$value`，避免真实数组参数被误认为候选集合。
 5. 对 create/search 参数做笛卡尔积。
 6. 调用 index policy 过滤明显非法组合。
+
+展开阶段不检查候选字段是否属于默认候选空间。policy 只提供默认候选，不限制用户显式候选。
 
 输出：
 

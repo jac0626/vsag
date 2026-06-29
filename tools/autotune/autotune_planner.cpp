@@ -96,16 +96,19 @@ FormatPath(const std::vector<std::string>& path) {
 }
 
 void
-ValidatePolicyScopes(const std::string& index_name) {
-    for (const auto& param : GetIndexTuneParams(index_name)) {
-        Require(!param.path.empty(), index_name + " tune param path must not be empty");
-        if (param.scope == TuneParamScope::Build) {
+ValidateDefaultCandidateScopes(const std::string& index_name) {
+    for (const auto& param : GetIndexDefaultCandidateParams(index_name)) {
+        Require(!param.path.empty(),
+                index_name + " default candidate param path must not be empty");
+        if (param.scope == CandidateParamScope::Build) {
             Require(param.path[0] == "create_params",
-                    index_name + " build-scoped tune param must be under create_params: " +
+                    index_name +
+                        " build-scoped default candidate param must be under create_params: " +
                         FormatPath(param.path));
         } else {
             Require(param.path[0] == "search_params",
-                    index_name + " search-scoped tune param must be under search_params: " +
+                    index_name +
+                        " search-scoped default candidate param must be under search_params: " +
                         FormatPath(param.path));
         }
     }
@@ -113,7 +116,7 @@ ValidatePolicyScopes(const std::string& index_name) {
 
 std::string
 MakeBuildKey(const CandidateSpec& candidate) {
-    ValidatePolicyScopes(candidate.index_name);
+    ValidateDefaultCandidateScopes(candidate.index_name);
     const JsonType build_identity =
         JsonType{{"index_name", candidate.index_name}, {"create_params", candidate.create_params}};
     return build_identity.dump();

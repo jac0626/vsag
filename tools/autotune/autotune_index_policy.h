@@ -21,11 +21,11 @@
 
 namespace vsag::autotune::internal {
 
-enum class TuneParamScope { Build, Search };
+enum class CandidateParamScope { Build, Search };
 
-struct IndexTuneParam {
+struct IndexDefaultCandidateParam {
     std::vector<std::string> path;
-    TuneParamScope scope;
+    CandidateParamScope scope;
     JsonType default_candidates;
 };
 
@@ -36,7 +36,7 @@ struct IndexDefaultParam {
 
 struct IndexTunePolicy {
     const char* name;
-    const std::vector<IndexTuneParam>& (*tunable_params)();
+    const std::vector<IndexDefaultCandidateParam>& (*default_candidate_params)();
     const std::vector<IndexDefaultParam>& (*fixed_defaults)();
     void (*validate)(const JsonType& index_spec);
 };
@@ -44,8 +44,8 @@ struct IndexTunePolicy {
 bool
 HasIndexTunePolicy(const std::string& index_name);
 
-const std::vector<IndexTuneParam>&
-GetIndexTuneParams(const std::string& index_name);
+const std::vector<IndexDefaultCandidateParam>&
+GetIndexDefaultCandidateParams(const std::string& index_name);
 
 JsonType
 DescribeIndexTunePolicy(const std::string& index_name);
