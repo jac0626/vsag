@@ -1,6 +1,6 @@
 # AutoTune 框架设计草案
 
-状态：P0 草案，已对齐当前 `tools/autotune` 实现
+状态：P6 草案，已对齐当前 `tools/autotune` 实现
 
 本文档描述 VSAG AutoTune 的内部框架。外部输入输出契约见
 [`autotune_api_v1_zh.md`](autotune_api_v1_zh.md)。本文档的目标是指导第一阶段实现：
@@ -15,8 +15,10 @@ AutoTune request
   -> 参数校验
   -> 默认候选补齐
   -> 参数候选展开
-  -> trial 规划
-  -> eval 执行
+  -> build group / search trial 规划
+  -> build group 执行
+  -> search trial 执行
+  -> build/search 指标合并
   -> 约束过滤
   -> 推荐结果输出
 ```
@@ -26,7 +28,7 @@ AutoTune request
 - AutoTune 不重新实现召回、延迟、内存等评估逻辑。
 - AutoTune 复用 `tools/eval` 的 build/search 能力。
 - AutoTune 负责参数空间、评估编排、结果选择和报告。
-- P0 不追求更快，只追求自动化和可复现。
+- 第一阶段不追求更快，只追求自动化和可复现。
 
 ## 2. 模块分层
 
@@ -37,6 +39,7 @@ AutoTuneRequest
   -> IndexPolicyRegistry
   -> CandidateGenerator
   -> TrialPlanner
+       -> AutoTunePlan(BuildSpec[] + TrialSpec[])
   -> EvaluationStrategy
        -> EvaluationRunner
   -> ConstraintEvaluator
@@ -109,14 +112,15 @@ ivf    -> IvfTunePolicy
 sindi  -> SindiTunePolicy
 ```
 
-当前 P0 只实现 `hgraph` 和 `ivf` 的 policy；`sindi` 是后续扩展示例。
+当前只实现 `hgraph` 和 `ivf` 的 policy；`sindi` 是后续扩展示例。
 
 每个 `IndexTunePolicy` 负责：
 
 - 声明索引是否支持 AutoTune。
 - 补齐缺失的默认候选参数。
 - 判断参数组合是否明显非法。
-- 维护该索引的 build/search 参数形态。
+- 维护该索引的可调参数空间。
+- 声明每个可调参数属于 build scope 还是 search scope。
 
 例如 HGraph policy 可以补齐：
 
@@ -169,37 +173,49 @@ CandidateSpec[]
 
 ### 2.6 `TrialPlanner`
 
-职责：把候选参数变成可执行 trial。
+职责：把候选参数变成 build group 和 search trial。
 
-Candidate 只说明“参数是什么”。Trial 说明“如何执行这组参数”。
+Candidate 只说明“参数是什么”。Plan 说明“如何执行这批参数”。
 
 典型决策：
 
-- 没有 `index_path`：生成 `build,search` trial。
-- 有 `index_path` 且只有 search 参数变化：生成 `search` trial。
-- 有 `index_path` 但 build 或量化参数变化：生成新的 `build,search` trial。
+- 按 `index_name + create_params` 聚合唯一 build candidate。
+- 没有 `index_path`：每个唯一 build candidate 生成一个 `BuildSpec`。
+- 有 `index_path` 且只有一个 build candidate：生成一个 `BuildSpec`，标记为
+  `use_existing_index = true`。
+- 有 `index_path` 但存在多个 build candidates：validation 失败，避免静默 rebuild。
+- 每个完整 candidate 生成一个 `TrialSpec`，trial 固定表示 search 评估。
 - 生成 trial id。
-- 生成 trial index path。
-- 决定 trial 执行顺序。
+- 生成 build id。
+- 生成 build artifact index path。
+- 决定 build group 与 search trial 的执行顺序。
 
 输出：
 
 ```text
-TrialSpec[]
+AutoTunePlan {
+  builds: BuildSpec[]
+  trials: TrialSpec[]
+}
 ```
 
-P0 中 `TrialPlanner` 只做全量枚举。后续 build cache、query sampling、
-successive halving 和剪枝都从这里附近插入。
+当前实现仍然做全量枚举，但会复用同一 build group 的索引产物。后续 build cache、
+query sampling、successive halving 和剪枝都从 plan 或 strategy 层插入。
 
 ### 2.7 `EvaluationStrategy`
 
 职责：决定一批 trial 如何被评估。
 
-P0 策略：
+当前策略：
 
 ```text
 OneShotFullEvaluationStrategy:
-  all TrialSpec -> full eval -> TrialResult[]
+  AutoTunePlan
+    -> for each BuildSpec:
+         run build once or mark existing index
+         run each TrialSpec(search) in this build group
+         merge build metrics into each search trial result
+    -> TrialResult[]
 ```
 
 后续策略：
@@ -220,16 +236,29 @@ SuccessiveHalvingStrategy:
 
 ### 2.8 `EvaluationRunner`
 
-职责：执行一个 `TrialSpec`。
+职责：执行 build group 和 search trial。
 
-P0 直接复用 eval 的进程内能力：
+当前实现直接复用 eval 的进程内能力：
 
 ```text
-TrialSpec
+BuildSpec
   -> eval::EvalConfig
+  -> action_type = "build"
   -> eval::EvalCase::MakeInstance()
   -> EvalCase::Run()
-  -> raw eval json
+  -> raw build eval json
+  -> build metrics
+```
+
+```text
+TrialSpec(search)
+  -> eval::EvalConfig
+  -> action_type = "search"
+  -> eval::EvalCase::MakeInstance()
+  -> EvalCase::Run()
+  -> raw search eval json
+  -> search metrics
+  -> merge(build metrics, search metrics)
 ```
 
 这样可以最大化复用现有 build/search、召回率、延迟、内存统计逻辑。
@@ -237,21 +266,43 @@ TrialSpec
 输出：
 
 ```text
-TrialResult
+BuildResult[]
+TrialResult[]
 ```
+
+BuildResult 包含：
+
+- `build_id`
+- `status`
+- `index_name`
+- `eval_type`，取值为 `build` 或 `existing_index`
+- 完整 `create_params`
+- build metrics
+- `raw_eval_result`
+- `artifacts.index_path`
+- `failure`
 
 每个结果包含：
 
 - `trial_id`
+- `build_id`
 - `status`
 - `index_name`
 - `eval_type`
 - 完整 `create_params`
 - 完整 `search_params`
-- `metrics`
+- 合并后的 `metrics`
 - `elapsed_seconds`
 - `raw_eval_result`
 - `failure`
+
+指标合并规则：
+
+- `recall_at_k`、`latency_avg_ms`、`latency_p99_ms`、`qps` 来自 search eval。
+- `build_seconds` 来自 build eval。
+- `index_size_mb` 来自 build artifact。
+- `memory_peak_mb` 取 build/search 两侧峰值内存的较大值。
+- 使用已有索引时没有 build eval，因此不会产生 `build_seconds`。
 
 ### 2.9 `ConstraintEvaluator`
 
@@ -299,6 +350,8 @@ EvaluatedTrialResult[]
 - 分阶段耗时。
 - 推荐参数。
 - `best_effort`。
+- build group 数量和实际 build 次数。
+- 完整 build 列表。
 - 完整 trial 列表。
 - 每个 trial 的失败原因和中间产物路径。
 
@@ -306,10 +359,10 @@ EvaluatedTrialResult[]
 
 Query sampling 是 eval 的评估预算能力，不是新的参数搜索算法。
 
-它的语义是：同一个 trial 可以只用一部分 query 做低成本评估。
+它的语义是：同一个 search trial 可以只用一部分 query 做低成本评估。
 
 ```text
-TrialSpec + EvaluationBudget(query_count=1000)
+TrialSpec(search) + EvaluationBudget(query_count=1000)
   -> sampled eval
 ```
 
@@ -359,11 +412,12 @@ round 2:
 CandidateGenerator
   -> TrialPlanner
   -> SuccessiveHalvingStrategy
-       -> EvaluationRunner(round 0 budget)
+       -> BuildRunner(needed build groups)
+       -> SearchRunner(round 0 budget)
        -> EarlyPruner
-       -> EvaluationRunner(round 1 budget)
+       -> SearchRunner(round 1 budget)
        -> EarlyPruner
-       -> EvaluationRunner(full budget)
+       -> SearchRunner(full budget)
   -> ResultSelector
 ```
 
@@ -371,29 +425,34 @@ CandidateGenerator
 
 - 中间轮结果只能用于剪枝。
 - 最终 `recommendation` 必须来自 full query validation。
+- build group 可以跨轮复用；search budget 逐轮提升。
 - 用户输入结构不因为这个优化发生变化。
 
-## 5. P0 验收标准
+## 5. 第一阶段验收标准
 
-P0 实现完成必须满足：
+当前第一阶段实现完成必须满足：
 
 1. 可以读取 AutoTune request JSON。
 2. 可以展开 HGraph 和 IVF 的 build 参数、量化参数和 search 参数候选。
-3. 可以生成多个 `build,search` trial。
-4. 可以复用 eval 真实构建索引并搜索。
-5. 可以解析 eval 指标。
-6. 可以按约束筛选并输出推荐结果。
-7. 可以输出所有 trial 的完整参数、指标、耗时和失败原因。
-8. request validation 失败时可以返回结构化 JSON，不启动 eval。
-9. 可以规划已有索引上的 search-only trial。
-10. 可以使用真实 `sift-128-euclidean.hdf5` 数据集跑通一个非简单路径 example：
+3. 可以按唯一 build candidate 生成 build group。
+4. 可以为每个 candidate 生成 search trial。
+5. 可以复用 eval 真实构建索引并搜索。
+6. 可以把 build metrics 合并到同 build group 的每个 search trial。
+7. 可以解析 eval 指标。
+8. 可以按约束筛选并输出推荐结果。
+9. 可以输出所有 build/trial 的完整参数、指标、耗时和失败原因。
+10. request validation 失败时可以返回结构化 JSON，不启动 eval。
+11. 可以规划已有索引上的 search-only trial。
+12. 可以拒绝 `index_path` 与多个 build candidates 同时出现的输入。
+13. 可以使用真实 `sift-128-euclidean.hdf5` 数据集跑通一个非简单路径 example：
    - 包含 HGraph 和 IVF。
    - 每个索引至少两个 build 参数候选。
    - 每个索引至少两个量化候选。
    - 每个索引至少三个 search 参数候选。
    - 总候选数量不少于 20。
+   - 实际 build group 数量小于 search trial 数量。
 
-P0 不要求：
+当前第一阶段不要求：
 
 - query sampling。
 - successive halving。

@@ -1,0 +1,296 @@
+{
+  "version": 1,
+  "status": "success",
+  "elapsed_seconds": 128.41,
+  "elapsed_breakdown_seconds": {
+    "validation": 0.02,
+    "candidate_generation": 0.01,
+    "evaluation": 128.35,
+    "selection": 0.03
+  },
+  "recommendation": {
+    "trial_id": "hgraph-000002",
+    "index_name": "hgraph",
+    "create_params": {
+      "dim": 128,
+      "dtype": "float32",
+      "metric_type": "l2",
+      "index_param": {
+        "base_quantization_type": "fp32",
+        "max_degree": 32,
+        "ef_construction": 300
+      }
+    },
+    "search_params": {
+      "hgraph": {
+        "ef_search": 80
+      }
+    },
+    "metrics": {
+      "recall_at_k": 0.957,
+      "latency_avg_ms": 1.73,
+      "latency_p99_ms": 4.91,
+      "qps": 27742.0,
+      "memory_peak_mb": 6144.0,
+      "build_seconds": 96.4,
+      "index_size_mb": 1240.5
+    },
+    "selection_reason": "satisfied constraints and had the lowest latency_avg_ms"
+  },
+  "best_effort": null,
+  "trial_count": 3,
+  "build_count": 2,
+  "build_group_count": 2,
+  "failure": null,
+  "builds": [
+    {
+      "build_id": "hgraph-build-000001",
+      "status": "success",
+      "index_name": "hgraph",
+      "eval_type": "build",
+      "create_params": {
+        "dim": 128,
+        "dtype": "float32",
+        "metric_type": "l2",
+        "index_param": {
+          "base_quantization_type": "fp32",
+          "max_degree": 32,
+          "ef_construction": 300
+        }
+      },
+      "metrics": {
+        "build_seconds": 96.4,
+        "memory_peak_mb": 6144.0,
+        "index_size_mb": 1240.5
+      },
+      "raw_eval_result": {
+        "action": "build",
+        "duration(s)": 96.4,
+        "memory_peak(build)": "6144 MB"
+      },
+      "elapsed_seconds": 96.8,
+      "artifacts": {
+        "index_path": "/tmp/vsag_autotune_sift/trials/hgraph-build-000001.index",
+        "use_existing_index": false,
+        "cleanup_index_after_build_group": true
+      },
+      "failure": null
+    },
+    {
+      "build_id": "ivf-build-000002",
+      "status": "success",
+      "index_name": "ivf",
+      "eval_type": "build",
+      "create_params": {
+        "dim": 128,
+        "dtype": "float32",
+        "metric_type": "l2",
+        "index_param": {
+          "partition_strategy_type": "ivf",
+          "base_quantization_type": "sq8_uniform",
+          "buckets_count": 1024,
+          "ivf_train_type": "kmeans"
+        }
+      },
+      "metrics": {
+        "build_seconds": 18.2,
+        "memory_peak_mb": 3072.0,
+        "index_size_mb": 512.0
+      },
+      "raw_eval_result": {
+        "action": "build",
+        "duration(s)": 18.2,
+        "memory_peak(build)": "3072 MB"
+      },
+      "elapsed_seconds": 18.4,
+      "artifacts": {
+        "index_path": "/tmp/vsag_autotune_sift/trials/ivf-build-000002.index",
+        "use_existing_index": false,
+        "cleanup_index_after_build_group": true
+      },
+      "failure": null
+    }
+  ],
+  "trials": [
+    {
+      "trial_id": "hgraph-000001",
+      "build_id": "hgraph-build-000001",
+      "status": "success",
+      "index_name": "hgraph",
+      "eval_type": "search",
+      "create_params": {
+        "dim": 128,
+        "dtype": "float32",
+        "metric_type": "l2",
+        "index_param": {
+          "base_quantization_type": "fp32",
+          "max_degree": 32,
+          "ef_construction": 300
+        }
+      },
+      "search_params": {
+        "hgraph": {
+          "ef_search": 40
+        }
+      },
+      "metrics": {
+        "recall_at_k": 0.942,
+        "latency_avg_ms": 1.12,
+        "latency_p99_ms": 3.86,
+        "qps": 30321.0,
+        "memory_peak_mb": 6144.0,
+        "build_seconds": 96.4,
+        "index_size_mb": 1240.5
+      },
+      "raw_eval_result": {
+        "build": {
+          "action": "build",
+          "duration(s)": 96.4,
+          "memory_peak(build)": "6144 MB"
+        },
+        "search": {
+          "action": "search",
+          "recall_avg": 0.942,
+          "latency_avg(ms)": 1.12,
+          "latency_detail(ms)": {
+            "p99": 3.86
+          },
+          "qps": 30321.0,
+          "memory_peak(search)": "2048 MB"
+        }
+      },
+      "satisfied_constraints": false,
+      "violated_constraints": [
+        {
+          "name": "recall_at_k",
+          "direction": "min",
+          "expected": 0.95,
+          "actual": 0.942
+        }
+      ],
+      "elapsed_seconds": 15.4,
+      "artifacts": {
+        "index_path": "/tmp/vsag_autotune_sift/trials/hgraph-build-000001.index"
+      },
+      "failure": null
+    },
+    {
+      "trial_id": "hgraph-000002",
+      "build_id": "hgraph-build-000001",
+      "status": "success",
+      "index_name": "hgraph",
+      "eval_type": "search",
+      "create_params": {
+        "dim": 128,
+        "dtype": "float32",
+        "metric_type": "l2",
+        "index_param": {
+          "base_quantization_type": "fp32",
+          "max_degree": 32,
+          "ef_construction": 300
+        }
+      },
+      "search_params": {
+        "hgraph": {
+          "ef_search": 80
+        }
+      },
+      "metrics": {
+        "recall_at_k": 0.957,
+        "latency_avg_ms": 1.73,
+        "latency_p99_ms": 4.91,
+        "qps": 27742.0,
+        "memory_peak_mb": 6144.0,
+        "build_seconds": 96.4,
+        "index_size_mb": 1240.5
+      },
+      "raw_eval_result": {
+        "build": {
+          "action": "build",
+          "duration(s)": 96.4,
+          "memory_peak(build)": "6144 MB"
+        },
+        "search": {
+          "action": "search",
+          "recall_avg": 0.957,
+          "latency_avg(ms)": 1.73,
+          "latency_detail(ms)": {
+            "p99": 4.91
+          },
+          "qps": 27742.0,
+          "memory_peak(search)": "2048 MB"
+        }
+      },
+      "satisfied_constraints": true,
+      "violated_constraints": [],
+      "elapsed_seconds": 15.9,
+      "artifacts": {
+        "index_path": "/tmp/vsag_autotune_sift/trials/hgraph-build-000001.index"
+      },
+      "failure": null
+    },
+    {
+      "trial_id": "ivf-000003",
+      "build_id": "ivf-build-000002",
+      "status": "success",
+      "index_name": "ivf",
+      "eval_type": "search",
+      "create_params": {
+        "dim": 128,
+        "dtype": "float32",
+        "metric_type": "l2",
+        "index_param": {
+          "partition_strategy_type": "ivf",
+          "base_quantization_type": "sq8_uniform",
+          "buckets_count": 1024,
+          "ivf_train_type": "kmeans"
+        }
+      },
+      "search_params": {
+        "ivf": {
+          "scan_buckets_count": 64
+        }
+      },
+      "metrics": {
+        "recall_at_k": 0.901,
+        "latency_avg_ms": 0.62,
+        "latency_p99_ms": 1.51,
+        "qps": 51200.0,
+        "memory_peak_mb": 3072.0,
+        "build_seconds": 18.2,
+        "index_size_mb": 512.0
+      },
+      "raw_eval_result": {
+        "build": {
+          "action": "build",
+          "duration(s)": 18.2,
+          "memory_peak(build)": "3072 MB"
+        },
+        "search": {
+          "action": "search",
+          "recall_avg": 0.901,
+          "latency_avg(ms)": 0.62,
+          "latency_detail(ms)": {
+            "p99": 1.51
+          },
+          "qps": 51200.0,
+          "memory_peak(search)": "1024 MB"
+        }
+      },
+      "satisfied_constraints": false,
+      "violated_constraints": [
+        {
+          "name": "recall_at_k",
+          "direction": "min",
+          "expected": 0.95,
+          "actual": 0.901
+        }
+      ],
+      "elapsed_seconds": 6.2,
+      "artifacts": {
+        "index_path": "/tmp/vsag_autotune_sift/trials/ivf-build-000002.index"
+      },
+      "failure": null
+    }
+  ]
+}

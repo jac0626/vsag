@@ -1,13 +1,13 @@
 # AutoTune API v1 草案
 
-状态：P0 草案，已对齐当前 `tools/autotune` 实现
+状态：P6 草案，已对齐当前 `tools/autotune` 实现
 
 本文档定义 VSAG AutoTune 的用户输入、输出结果和执行语义。它不是公开稳定 API
 文档，当前用途是作为实现与评审的共同契约。后续 API 稳定后，再同步到
 `docs/docs/{zh,en}/src/` 的用户文档中。
 
-当前 P0 实现入口是 `tools/autotune/autotune`，输入为 JSON request 文件，核心路径
-直接复用 `tools/eval` 的进程内 build/search 能力。本文档中标为“P0 已实现”的行为
+当前实现入口是 `tools/autotune/autotune`，输入为 JSON request 文件，核心路径
+直接复用 `tools/eval` 的进程内 build/search 能力。本文档中标为“当前已实现”的行为
 必须和代码保持一致；标为“后续”的行为只代表 API 演进方向。
 
 ## 1. 定位
@@ -31,22 +31,23 @@ AutoTune 的第一阶段定位是：在现有 `eval_performance` 能力之上增
 - 不支持 query sampling、successive halving、build cache、分布式执行。
 - 不支持自动调用 `Index::Tune()` 热修改已有索引。
 
-P0 已实现能力：
+当前已实现能力：
 
 - 支持 JSON request。
 - 支持 `hgraph` 和 `ivf` 两类索引候选。
-- 支持 build+search trial。
-- 支持已有索引上的 search-only trial 规划。
+- 支持按 build group 只构建一次，再对同一构建产物执行多个 search trial。
+- 支持已有索引上的 search-only 调优。
 - 支持数组候选、`$range` 候选和 `$value` 数组转义。
 - 支持系统默认补齐 HGraph / IVF 的基础候选空间。
 - 支持 `knn` search mode。
-- 支持约束过滤、推荐结果选择、完整 trial 报告和结构化失败输出。
+- 支持 build 指标与 search 指标合并后的约束过滤。
+- 支持推荐结果选择、完整 build/trial 报告和结构化失败输出。
 
 ## 2. 设计原则
 
 1. 输入尽量接近现有 eval 输入。
-2. 用户侧不暴露 eval 的 `type` 字段。AutoTune 根据输入推导执行 build、search
-   或 build+search。
+2. 用户侧不暴露 eval 的 `type` 字段。AutoTune 根据输入推导 build group 和
+   search trial。
 3. `indexes` 必须显式给出。索引类型差异很大，系统不在 v1 中替用户猜索引集合。
 4. `create_params` 和 `search_params` 使用 VSAG 现有参数结构，不重新发明参数名。
 5. 标量表示固定值，数组表示候选值，缺失字段表示系统默认候选策略。
@@ -114,9 +115,13 @@ AutoTune request 使用 JSON 语义定义。实现可以支持 JSON 文件、YAM
 
 `index_path` 表示一个已存在索引。它是只读输入，不允许 AutoTune 覆盖。
 
-当 request 只包含 search 参数候选时，AutoTune 可以对 `index_path` 执行 search-only
-评估。当 request 包含 build 参数候选或量化参数候选时，AutoTune 需要基于 `data_path`
-构建新的 trial index，而不是在原索引上原地修改。P0 不额外执行 baseline trial。
+当 request 展开后只有一个 build candidate 时，AutoTune 可以对 `index_path` 执行
+search-only 评估。此时 `index_path` 只读，`build_count = 0`，`builds[].eval_type`
+等价于 `existing_index`。
+
+当 request 传入 `index_path`，但 `indexes` 展开后存在多个 build candidate 时，当前实现会
+返回结构化失败，失败信息包含 `index_path can only be used`。这样可以避免用户以为正在调
+已有索引，实际却触发临时 rebuild。
 
 第一阶段若复用 `eval_performance`，即使是 search-only，也仍然需要给出能够创建索引对象的
 `create_params`。原因是 eval 当前会先通过 `index_name + create_params` 创建 index 对象，
@@ -151,12 +156,12 @@ AutoTune request 使用 JSON 语义定义。实现可以支持 JSON 文件、YAM
 
 | 字段 | 必填 | 类型 | 说明 |
 | --- | --- | --- | --- |
-| `name` | 是 | string | VSAG 索引名。P0 支持 `hgraph`、`ivf`。 |
+| `name` | 是 | string | VSAG 索引名。当前支持 `hgraph`、`ivf`。 |
 | `create_params` | 否 | object | 传给 `Factory::CreateIndex` 的参数结构。 |
 | `search_params` | 否 | object | 传给 search API 的参数结构。 |
 
 支持的索引集合由 AutoTune 实现显式声明。未声明支持的索引必须在 validation 阶段失败。
-P0 只声明支持 `hgraph` 和 `ivf`；如果用户传入其他索引名，应返回结构化失败结果，
+当前只声明支持 `hgraph` 和 `ivf`；如果用户传入其他索引名，应返回结构化失败结果，
 失败信息包含 `unsupported index`。
 
 后续可以增加 `sindi`、`brute_force` 等索引 policy。`diskann`、`hnsw`、`sparse`
@@ -250,7 +255,17 @@ max_degree=32, ef_construction=200
 | `build_seconds` | 上限 | 构建耗时必须小于等于该值。 |
 | `index_size_mb` | 上限 | 索引产物大小必须小于等于该值。 |
 
-P0 只接受上表列出的约束名。未知约束名必须在 validation 阶段失败，失败信息包含
+指标来源：
+
+- `recall_at_k`、`latency_avg_ms`、`latency_p99_ms`、`qps` 来自 search eval。
+- `build_seconds` 来自 build eval。复用同一 build group 的多个 search trial 共享同一个
+  `build_seconds`。
+- `index_size_mb` 来自 build group 的索引产物大小。
+- `memory_peak_mb` 是 build 侧和 search 侧峰值内存的较大值。
+- 使用已有 `index_path` 时，AutoTune 不执行 build，因此不会产生 `build_seconds`。如果用户在
+  existing index 场景声明 `build_seconds` 约束，该 trial 会因为缺少指标而不满足约束。
+
+当前只接受上表列出的约束名。未知约束名必须在 validation 阶段失败，失败信息包含
 `unsupported constraint`。
 
 如果某个 trial 没有产生约束要求的指标，该 trial 视为不满足约束，并在
@@ -280,22 +295,22 @@ P0 只接受上表列出的约束名。未知约束名必须在 validation 阶�
 | 字段 | 默认值 | 说明 |
 | --- | --- | --- |
 | `top_k` | `10` | KNN topk。 |
-| `search_mode` | `knn` | 搜索模式。P0 只支持 `knn`。 |
+| `search_mode` | `knn` | 搜索模式。当前只支持 `knn`。 |
 | `search_query_count` | `0` | 参与评估的 query 数。`0` 表示使用 eval 默认的全量 query 行为。 |
 | `num_threads_building` | `1` | 构建线程数。 |
 | `num_threads_searching` | `1` | 搜索线程数。 |
-| `workspace_path` | `/tmp/vsag_autotune` | trial index、eval 配置和中间结果目录。 |
-| `keep_intermediate` | `false` | 是否保留 trial index 和 eval 配置。 |
+| `workspace_path` | `/tmp/vsag_autotune` | build artifact、eval 配置和中间结果目录。 |
+| `keep_intermediate` | `false` | 是否保留 build artifact 和 eval 配置。 |
 | `max_trials` | 无限制 | 候选组合数量上限。超过时 validation 失败。 |
 
 ### 8.1 `search_mode`
 
-`search_mode` 的语义与 eval 保持一致。P0 只支持：
+`search_mode` 的语义与 eval 保持一致。当前只支持：
 
 - `knn`
 
 如果用户传入其他值，当前实现返回结构化失败结果，失败信息包含
-`execution.search_mode is unsupported in AutoTune P0`。
+`execution.search_mode is unsupported`。
 
 后续可以在不改变 request 结构的前提下增加：
 
@@ -309,12 +324,12 @@ P0 只接受上表列出的约束名。未知约束名必须在 validation 阶�
 
 | 输入情况 | 推导执行方式 | 说明 |
 | --- | --- | --- |
-| 无 `index_path` | build+search | 需要先构建 trial index，再搜索评估。 |
-| 有 `index_path`，只有 search 候选 | search-only | 加载已有索引，评估不同 search 参数。 |
-| 有 `index_path`，存在 build 或 quant 候选 | build+search | 基于 `data_path` 构建新 trial index；P0 不额外执行 baseline trial。 |
-| 只要求构建指标，不要求搜索指标 | build-only | 后续能力，P0 不支持。 |
+| 无 `index_path` | build group + search trials | 每个唯一 build candidate 只构建一次，再复用该索引执行多个 search trial。 |
+| 有 `index_path`，只有一个 build candidate | existing index + search trials | 不执行 build，加载已有索引，评估不同 search 参数。 |
+| 有 `index_path`，存在多个 build candidates | validation 失败 | 当前实现拒绝该输入，避免静默 rebuild。 |
+| 只要求构建指标，不要求搜索指标 | build-only | 后续能力，当前不支持。 |
 
-第一阶段主路径是 build+search 和 search-only。
+第一阶段主路径是 build group + search trials 和 existing index + search trials。
 
 ## 10. 结果选择规则
 
@@ -337,15 +352,15 @@ AutoTune 默认不暴露 `objective` 字段。
 {
   "version": 1,
   "status": "success",
-  "elapsed_seconds": 613.42,
+  "elapsed_seconds": 128.41,
   "elapsed_breakdown_seconds": {
     "validation": 0.02,
     "candidate_generation": 0.01,
-    "evaluation": 613.21,
-    "selection": 0.18
+    "evaluation": 128.35,
+    "selection": 0.03
   },
   "recommendation": {
-    "trial_id": "hgraph-0007",
+    "trial_id": "hgraph-000002",
     "index_name": "hgraph",
     "create_params": {
       "dim": 128,
@@ -374,22 +389,121 @@ AutoTune 默认不暴露 `objective` 字段。
     "selection_reason": "satisfied constraints and had the lowest latency_avg_ms"
   },
   "best_effort": null,
-  "trial_count": 1,
+  "trial_count": 2,
+  "build_count": 1,
+  "build_group_count": 1,
   "failure": null,
-  "trials": [
+  "builds": [
     {
-      "trial_id": "hgraph-0007",
+      "build_id": "hgraph-build-000001",
       "status": "success",
       "index_name": "hgraph",
-      "eval_type": "build,search",
-      "create_params": {},
-      "search_params": {},
-      "metrics": {},
+      "eval_type": "build",
+      "create_params": {
+        "dim": 128,
+        "dtype": "float32",
+        "metric_type": "l2",
+        "index_param": {
+          "base_quantization_type": "fp32",
+          "max_degree": 32,
+          "ef_construction": 300
+        }
+      },
+      "metrics": {
+        "build_seconds": 96.4,
+        "memory_peak_mb": 6144.0,
+        "index_size_mb": 1240.5
+      },
+      "elapsed_seconds": 96.8,
+      "artifacts": {
+        "index_path": "/tmp/vsag_autotune/trials/hgraph-build-000001.index",
+        "use_existing_index": false,
+        "cleanup_index_after_build_group": true
+      },
+      "failure": null
+    }
+  ],
+  "trials": [
+    {
+      "trial_id": "hgraph-000001",
+      "status": "success",
+      "build_id": "hgraph-build-000001",
+      "index_name": "hgraph",
+      "eval_type": "search",
+      "create_params": {
+        "dim": 128,
+        "dtype": "float32",
+        "metric_type": "l2",
+        "index_param": {
+          "base_quantization_type": "fp32",
+          "max_degree": 32,
+          "ef_construction": 300
+        }
+      },
+      "search_params": {
+        "hgraph": {
+          "ef_search": 40
+        }
+      },
+      "metrics": {
+        "recall_at_k": 0.942,
+        "latency_avg_ms": 1.12,
+        "latency_p99_ms": 3.86,
+        "qps": 30321.0,
+        "memory_peak_mb": 6144.0,
+        "build_seconds": 96.4,
+        "index_size_mb": 1240.5
+      },
+      "satisfied_constraints": false,
+      "violated_constraints": [
+        {
+          "name": "recall_at_k",
+          "direction": "min",
+          "expected": 0.95,
+          "actual": 0.942
+        }
+      ],
+      "elapsed_seconds": 15.4,
+      "artifacts": {
+        "index_path": "/tmp/vsag_autotune/trials/hgraph-build-000001.index"
+      },
+      "failure": null
+    },
+    {
+      "trial_id": "hgraph-000002",
+      "status": "success",
+      "build_id": "hgraph-build-000001",
+      "index_name": "hgraph",
+      "eval_type": "search",
+      "create_params": {
+        "dim": 128,
+        "dtype": "float32",
+        "metric_type": "l2",
+        "index_param": {
+          "base_quantization_type": "fp32",
+          "max_degree": 32,
+          "ef_construction": 300
+        }
+      },
+      "search_params": {
+        "hgraph": {
+          "ef_search": 80
+        }
+      },
+      "metrics": {
+        "recall_at_k": 0.957,
+        "latency_avg_ms": 1.73,
+        "latency_p99_ms": 4.91,
+        "qps": 27742.0,
+        "memory_peak_mb": 6144.0,
+        "build_seconds": 96.4,
+        "index_size_mb": 1240.5
+      },
       "satisfied_constraints": true,
       "violated_constraints": [],
-      "elapsed_seconds": 98.2,
+      "elapsed_seconds": 15.9,
       "artifacts": {
-        "index_path": "/tmp/vsag_autotune/hgraph-0007.index"
+        "index_path": "/tmp/vsag_autotune/trials/hgraph-build-000001.index"
       },
       "failure": null
     }
@@ -405,13 +519,13 @@ AutoTune 默认不暴露 `objective` 字段。
 
 - 输入校验时间。
 - 候选生成时间。
-- eval 配置生成时间。
-- build 时间。
-- search 时间。
+- build group 执行时间。
+- search trial 执行时间。
 - 指标解析和结果选择时间。
 
-如果 trial 是 build+search，trial 耗时包含构建时间。如果 trial 是 search-only，trial
-耗时不包含构建时间。
+`builds[].elapsed_seconds` 是单个 build group 的耗时。`trials[].elapsed_seconds` 是单个
+search trial 的耗时，不包含 build 耗时。trial 的 `metrics.build_seconds` 来自对应
+build group 的 build 指标，不来自 trial 自身耗时。
 
 ### 11.2 `status`
 
@@ -435,24 +549,66 @@ validation 失败时，`trial_count = 0`，通常没有 `trials` 字段。
 所有 trial 都失败时，顶层 `failure.message` 为 `all trials failed`，每个 trial 的
 `failure` 字段记录各自的失败原因。
 
-### 11.4 `trials`
+### 11.4 `build_count` 和 `build_group_count`
+
+`build_group_count` 是本次 plan 中唯一 build candidate 的数量。
+
+`build_count` 是实际执行 build 的次数：
+
+- 无 `index_path` 时，`build_count == build_group_count`。
+- 有 `index_path` 且输入合法时，`build_group_count = 1`，`build_count = 0`。
+
+这两个字段用于解释 AutoTune 的执行成本。`trial_count` 仍然表示 search trial 数量，也就是
+最终参与约束过滤和结果选择的候选数量。
+
+### 11.5 `builds`
+
+`builds` 是 build group 记录。第一阶段默认在 `output.include_trials = true` 时输出。
+如果 `output.include_trials = false`，响应可以省略 `builds` 和 `trials`。
+
+每个 build 记录包含：
+
+- `build_id`：build group 的稳定 ID。
+- `status`：`success` 或 `failed`。
+- `eval_type`：无 `index_path` 时为 `build`；复用已有索引时为 `existing_index`。
+- 展开后的完整 `create_params`。
+- build 侧指标。
+- build group 耗时。
+- `artifacts.index_path`。
+- `artifacts.use_existing_index`。
+- `artifacts.cleanup_index_after_build_group`。
+- `failure`。
+
+如果 build 失败，该 build group 下所有 search trial 都会失败，失败原因包含
+`build failed`。
+
+### 11.6 `trials`
 
 `trials` 是完整试验记录。第一阶段默认保留，方便 review 和复现实验。
 如果 `output.include_trials = false`，响应可以省略该字段。
 
 每个 trial 必须记录：
 
+- `build_id`。
 - 展开后的完整 `create_params`。
 - 展开后的完整 `search_params`。
-- eval 执行类型。
+- eval 执行类型。当前实现中 trial 固定为 `search`。
 - 成功、失败或跳过状态。
-- 指标结果。
+- 合并后的指标结果。
 - trial 耗时。
 - 失败原因。
 - 可选产物路径。
 
-当 `execution.keep_intermediate = false` 时，build+search trial 的临时索引会在指标提取后
-删除。此时 `artifacts.index_path` 表示该 trial 使用过的路径，不保证响应返回后文件仍存在。
+trial 的 `metrics` 是 build metrics 和 search metrics 的合并结果：
+
+- `recall_at_k`、`latency_avg_ms`、`latency_p99_ms`、`qps` 来自 search eval。
+- `build_seconds` 来自 build eval。
+- `index_size_mb` 来自 build group 的索引产物。
+- `memory_peak_mb` 是 build/search 两侧峰值内存的较大值。
+
+当 `execution.keep_intermediate = false` 时，AutoTune 会在 build group 下所有 search trial
+完成后删除临时索引。此时 `artifacts.index_path` 表示该 trial 使用过的路径，不保证响应
+返回后文件仍存在。
 
 ## 12. 示例
 
@@ -621,6 +777,22 @@ validation 失败时，`trial_count = 0`，通常没有 `trials` 字段。
 }
 ```
 
+### 12.5 P5 输出示例
+
+完整 P5 response 示例见：
+
+```text
+tools/autotune/examples/sift_hgraph_ivf_autotune_result_p5.json
+```
+
+该示例展示：
+
+- `build_count`、`build_group_count`、`trial_count` 的区别。
+- `builds[]` 中的 build group 记录。
+- `trials[]` 中复用同一 `build_id` 的多个 search trial。
+- `metrics` 中 build 指标和 search 指标的合并结果。
+- `raw_eval_result.build` 和 `raw_eval_result.search` 的分离。
+
 ## 13. 第一阶段实现边界
 
 第一阶段必须完成：
@@ -628,13 +800,15 @@ validation 失败时，`trial_count = 0`，通常没有 `trials` 字段。
 - request validation。
 - 参数候选展开。
 - 系统默认候选补齐。
-- build+search trial 编排。
-- existing index search-only trial 编排。
+- build group 编排。
+- search trial 编排。
+- build metrics 与 search metrics 合并。
+- existing index search-only 编排。
 - eval 结果解析。
 - 约束过滤和推荐结果选择。
 - 完整 JSON result 输出。
 - request validation 失败时的结构化 JSON 输出。
-- HGraph 和 IVF build+search 主路径验证。
+- HGraph 和 IVF build/search 主路径验证。
 
 第一阶段可以延后：
 
@@ -647,11 +821,13 @@ validation 失败时，`trial_count = 0`，通常没有 `trials` 字段。
 
 ## 14. 后续优化插入点
 
-本文档的 API 不要求 P0 实现优化器，但保留以下内部扩展点：
+本文档的 API 不要求第一阶段实现优化器，但保留以下内部扩展点：
 
-1. 候选生成后、eval 执行前：可以加入非法组合剪枝。
-2. build trial 后、search trial 前：可以复用已构建索引或缓存中间产物。
-3. search trial 内部：可以先用少量 query 评估，再对 finalist 做 full validation。
-4. result selection 前：可以增加多目标排序或 Pareto frontier 报告。
+1. 候选生成后、plan 生成前：可以加入非法组合剪枝。
+2. build group 执行前：可以查找 build cache，命中后跳过 build。
+3. build group 执行后、search trial 前：可以做 build 侧约束剪枝，例如
+   `build_seconds` 或 `index_size_mb` 已经超限时跳过该 group 的 search。
+4. search trial 内部：可以先用少量 query 评估，再对 finalist 做 full validation。
+5. result selection 前：可以增加多目标排序或 Pareto frontier 报告。
 
 这些优化不应改变用户输入结构。它们只改变执行成本和 trial 调度方式。
