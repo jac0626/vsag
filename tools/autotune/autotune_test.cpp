@@ -176,6 +176,10 @@ TEST_CASE("AutoTune expands arrays, ranges and value escapes") {
 }
 
 TEST_CASE("AutoTune index policies describe default candidate spaces") {
+    REQUIRE(vsag::autotune::internal::HasIndexTunePolicy("hgraph"));
+    REQUIRE(vsag::autotune::internal::HasIndexTunePolicy("ivf"));
+    REQUIRE_FALSE(vsag::autotune::internal::HasIndexTunePolicy("sindi"));
+
     const auto hgraph_policy = vsag::autotune::internal::DescribeIndexTunePolicy("hgraph");
     REQUIRE(hgraph_policy["name"] == "hgraph");
     REQUIRE(hgraph_policy["default_candidate_params"].size() == 4);

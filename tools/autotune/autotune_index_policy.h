@@ -41,6 +41,15 @@ struct IndexTunePolicy {
     void (*validate)(const JsonType& index_spec);
 };
 
+const IndexTunePolicy&
+HGraphTunePolicy();
+
+const IndexTunePolicy&
+IvfTunePolicy();
+
+void
+ValidateCommonCreateParams(const JsonType& index_spec);
+
 bool
 HasIndexTunePolicy(const std::string& index_name);
 

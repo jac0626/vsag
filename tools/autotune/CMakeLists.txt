@@ -19,7 +19,9 @@ set (autotune_srcs
     autotune_index_policy.cpp
     autotune_planner.cpp
     autotune_request.cpp
-    autotune_result.cpp)
+    autotune_result.cpp
+    policies/hgraph_policy.cpp
+    policies/ivf_policy.cpp)
 
 add_library (autotune_obj OBJECT ${autotune_srcs})
 target_include_directories (autotune_obj PUBLIC
