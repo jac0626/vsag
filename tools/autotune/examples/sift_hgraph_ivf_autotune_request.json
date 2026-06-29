@@ -1,0 +1,82 @@
+{
+  "version": 1,
+  "data_path": "/root/data/sift-128-euclidean.hdf5",
+  "indexes": [
+    {
+      "name": "hgraph",
+      "create_params": {
+        "dim": 128,
+        "dtype": "float32",
+        "metric_type": "l2",
+        "index_param": {
+          "base_quantization_type": [
+            "fp32",
+            "sq8_uniform"
+          ],
+          "max_degree": [
+            16,
+            32
+          ],
+          "ef_construction": 100
+        }
+      },
+      "search_params": {
+        "hgraph": {
+          "ef_search": [
+            40,
+            80,
+            120
+          ]
+        }
+      }
+    },
+    {
+      "name": "ivf",
+      "create_params": {
+        "dim": 128,
+        "dtype": "float32",
+        "metric_type": "l2",
+        "index_param": {
+          "partition_strategy_type": "ivf",
+          "base_quantization_type": [
+            "fp32",
+            "sq8_uniform"
+          ],
+          "buckets_count": [
+            512,
+            1024
+          ],
+          "ivf_train_type": "kmeans"
+        }
+      },
+      "search_params": {
+        "ivf": {
+          "scan_buckets_count": [
+            16,
+            32,
+            64
+          ]
+        }
+      }
+    }
+  ],
+  "constraints": {
+    "recall_at_k": 0.5,
+    "latency_avg_ms": 1000.0,
+    "memory_peak_mb": 65536.0
+  },
+  "execution": {
+    "top_k": 10,
+    "search_mode": "knn",
+    "search_query_count": 0,
+    "num_threads_building": 48,
+    "num_threads_searching": 48,
+    "workspace_path": "/tmp/vsag_autotune_sift",
+    "keep_intermediate": false,
+    "max_trials": 24
+  },
+  "output": {
+    "result_path": "/tmp/vsag_autotune_sift/result.json",
+    "include_trials": true
+  }
+}
