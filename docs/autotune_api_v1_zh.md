@@ -544,7 +544,8 @@ build group 的 build 指标，不来自 trial 自身耗时。
   trial 的 `violated_constraints` 中。
 - `status = "failed"` 时，`failure` 是对象，至少包含 `message`。
 
-validation 失败时，`trial_count = 0`，通常没有 `trials` 字段。
+validation 失败时，`trial_count = 0`，`build_count = 0`，`build_group_count = 0`，
+通常没有 `builds` 和 `trials` 字段。
 
 所有 trial 都失败时，顶层 `failure.message` 为 `all trials failed`，每个 trial 的
 `failure` 字段记录各自的失败原因。

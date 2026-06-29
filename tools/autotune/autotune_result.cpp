@@ -166,6 +166,8 @@ MakeFailedResult(const JsonType& request,
     result["recommendation"] = nullptr;
     result["best_effort"] = nullptr;
     result["trial_count"] = 0;
+    result["build_count"] = 0;
+    result["build_group_count"] = 0;
     result["failure"] = JsonType{{"message", message}};
     return result;
 }

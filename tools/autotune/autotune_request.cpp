@@ -55,7 +55,7 @@ ParseExecutionOptions(const JsonType& request) {
     Require(options.num_threads_building > 0, "execution.num_threads_building must be positive");
     Require(options.num_threads_searching > 0, "execution.num_threads_searching must be positive");
     Require(options.search_mode == "knn",
-            "execution.search_mode is unsupported in AutoTune P0: " + options.search_mode);
+            "execution.search_mode is unsupported: " + options.search_mode);
 
     const JsonType output = request.contains("output") ? request["output"] : JsonType::object();
     Require(output.is_object(), "output must be an object");

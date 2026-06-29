@@ -22,6 +22,7 @@
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
+#include <map>
 #include <vector>
 
 #include "autotune_index_policy.h"
@@ -140,6 +141,20 @@ HasFixedDefault(const vsag::autotune::JsonType& policy,
                 const vsag::autotune::JsonType& value) {
     for (const auto& param : policy["fixed_defaults"]) {
         if (param["path"] == path && param["value"] == value) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool
+HasMissingMetricViolation(const vsag::autotune::JsonType& trial, const std::string& name) {
+    if (!trial.contains("violated_constraints") || !trial["violated_constraints"].is_array()) {
+        return false;
+    }
+    for (const auto& violation : trial["violated_constraints"]) {
+        if (violation.value("name", "") == name &&
+            violation.value("reason", "") == "missing_metric") {
             return true;
         }
     }
@@ -451,13 +466,15 @@ TEST_CASE("AutoTune returns structured failure result") {
     auto result = vsag::autotune::RunAutoTune(request);
     REQUIRE(result["status"] == "failed");
     REQUIRE(result["trial_count"] == 0);
+    REQUIRE(result["build_count"] == 0);
+    REQUIRE(result["build_group_count"] == 0);
     REQUIRE(result["failure"]["message"].get<std::string>().find("data_path does not exist") !=
             std::string::npos);
     REQUIRE(std::filesystem::exists(result_path));
     std::remove(result_path.c_str());
 }
 
-TEST_CASE("AutoTune rejects unsupported P0 contract fields") {
+TEST_CASE("AutoTune rejects unsupported contract fields") {
     auto data_path = MakeTempFile("vsag_autotune_contract_test.hdf5");
     auto request = R"({
         "version": 1,
@@ -480,6 +497,8 @@ TEST_CASE("AutoTune rejects unsupported P0 contract fields") {
 
     auto result = vsag::autotune::RunAutoTune(request);
     REQUIRE(result["status"] == "failed");
+    REQUIRE(result["build_count"] == 0);
+    REQUIRE(result["build_group_count"] == 0);
     REQUIRE(result["failure"]["message"].get<std::string>().find("unsupported constraint") !=
             std::string::npos);
 
@@ -487,13 +506,17 @@ TEST_CASE("AutoTune rejects unsupported P0 contract fields") {
     request["execution"] = {{"search_mode", "range"}};
     result = vsag::autotune::RunAutoTune(request);
     REQUIRE(result["status"] == "failed");
-    REQUIRE(result["failure"]["message"].get<std::string>().find("unsupported in AutoTune P0") !=
-            std::string::npos);
+    REQUIRE(result["build_count"] == 0);
+    REQUIRE(result["build_group_count"] == 0);
+    REQUIRE(result["failure"]["message"].get<std::string>().find(
+                "execution.search_mode is unsupported") != std::string::npos);
 
     request["execution"] = {{"search_mode", "knn"}};
     request["indexes"][0]["name"] = "unsupported_index";
     result = vsag::autotune::RunAutoTune(request);
     REQUIRE(result["status"] == "failed");
+    REQUIRE(result["build_count"] == 0);
+    REQUIRE(result["build_group_count"] == 0);
     REQUIRE(result["failure"]["message"].get<std::string>().find("unsupported index") !=
             std::string::npos);
 
@@ -505,6 +528,8 @@ TEST_CASE("AutoTune rejects unsupported P0 contract fields") {
     request["index_path"] = index_path;
     result = vsag::autotune::RunAutoTune(request);
     REQUIRE(result["status"] == "failed");
+    REQUIRE(result["build_count"] == 0);
+    REQUIRE(result["build_group_count"] == 0);
     REQUIRE(result["failure"]["message"].get<std::string>().find("index_path can only be used") !=
             std::string::npos);
 
@@ -577,7 +602,7 @@ TEST_CASE("AutoTune runs real eval build-search integration for hgraph and ivf")
             "num_threads_building": 2,
             "num_threads_searching": 2,
             "workspace_path": "",
-            "keep_intermediate": false,
+            "keep_intermediate": true,
             "max_trials": 24
         },
         "output": {
@@ -599,10 +624,27 @@ TEST_CASE("AutoTune runs real eval build-search integration for hgraph and ivf")
     REQUIRE(result["recommendation"].is_object());
     REQUIRE(std::filesystem::exists(result_path));
 
+    std::map<std::string, vsag::autotune::JsonType> builds_by_id;
+    for (const auto& build : result["builds"]) {
+        REQUIRE(build["status"] == "success");
+        REQUIRE(build["eval_type"] == "build");
+        REQUIRE(build["artifacts"]["use_existing_index"] == false);
+        REQUIRE(build["artifacts"]["cleanup_index_after_build_group"] == true);
+        REQUIRE(build["metrics"].contains("build_seconds"));
+        REQUIRE(build["metrics"].contains("memory_peak_mb"));
+        REQUIRE(build["metrics"].contains("index_size_mb"));
+        REQUIRE(build["metrics"]["build_seconds"].get<double>() > 0.0);
+        REQUIRE(build["metrics"]["index_size_mb"].get<double>() > 0.0);
+        REQUIRE(build["raw_eval_result"].is_object());
+        REQUIRE(std::filesystem::exists(build["artifacts"]["index_path"].get<std::string>()));
+        builds_by_id.emplace(build["build_id"].get<std::string>(), build);
+    }
+
     uint64_t hgraph_count = 0;
     uint64_t ivf_count = 0;
     uint64_t search_count = 0;
     uint64_t failed_count = 0;
+    std::map<std::string, uint64_t> trial_count_by_build_id;
     for (const auto& trial : result["trials"]) {
         if (trial["index_name"] == "hgraph") {
             ++hgraph_count;
@@ -623,11 +665,111 @@ TEST_CASE("AutoTune runs real eval build-search integration for hgraph and ivf")
         REQUIRE(trial["metrics"].contains("index_size_mb"));
         REQUIRE(trial["metrics"]["build_seconds"].get<double>() > 0.0);
         REQUIRE(trial["metrics"]["index_size_mb"].get<double>() > 0.0);
+
+        const auto build_id = trial["build_id"].get<std::string>();
+        REQUIRE(builds_by_id.find(build_id) != builds_by_id.end());
+        const auto& build = builds_by_id.at(build_id);
+        ++trial_count_by_build_id[build_id];
+        REQUIRE(trial["raw_eval_result"]["build"] == build["raw_eval_result"]);
+        REQUIRE(trial["raw_eval_result"]["search"].is_object());
+        REQUIRE(trial["metrics"]["build_seconds"] == build["metrics"]["build_seconds"]);
+        REQUIRE(trial["metrics"]["index_size_mb"] == build["metrics"]["index_size_mb"]);
+        REQUIRE(trial["metrics"]["memory_peak_mb"].get<double>() >=
+                build["metrics"]["memory_peak_mb"].get<double>());
     }
     REQUIRE(hgraph_count == 12);
     REQUIRE(ivf_count == 12);
     REQUIRE(search_count == 24);
     REQUIRE(failed_count == 0);
+    REQUIRE(trial_count_by_build_id.size() == 8);
+    for (const auto& item : trial_count_by_build_id) {
+        REQUIRE(item.second == 3);
+    }
+
+    const auto existing_index_path =
+        result["builds"][0]["artifacts"]["index_path"].get<std::string>();
+    REQUIRE(result["builds"][0]["index_name"] == "hgraph");
+    REQUIRE(std::filesystem::exists(existing_index_path));
+
+    auto existing_request = R"({
+        "version": 1,
+        "data_path": "",
+        "index_path": "",
+        "indexes": [
+            {
+                "name": "hgraph",
+                "create_params": {},
+                "search_params": {
+                    "hgraph": {
+                        "ef_search": [10, 20]
+                    }
+                }
+            }
+        ],
+        "constraints": {
+            "recall_at_k": 0.0,
+            "latency_avg_ms": 1000.0,
+            "memory_peak_mb": 65536.0,
+            "index_size_mb": 1024.0
+        },
+        "execution": {
+            "top_k": 3,
+            "search_mode": "knn",
+            "num_threads_searching": 2,
+            "workspace_path": "",
+            "keep_intermediate": false,
+            "max_trials": 2
+        },
+        "output": {
+            "include_trials": true
+        }
+    })"_json;
+    existing_request["data_path"] = dataset_path;
+    existing_request["index_path"] = existing_index_path;
+    existing_request["indexes"][0]["create_params"] = result["builds"][0]["create_params"];
+    existing_request["execution"]["workspace_path"] = workspace_path;
+
+    auto existing_result = vsag::autotune::RunAutoTune(existing_request);
+    REQUIRE(existing_result["status"] == "success");
+    REQUIRE(existing_result["build_count"] == 0);
+    REQUIRE(existing_result["build_group_count"] == 1);
+    REQUIRE(existing_result["trial_count"] == 2);
+    REQUIRE(existing_result["builds"].size() == 1);
+    REQUIRE(existing_result["builds"][0]["eval_type"] == "existing_index");
+    REQUIRE(existing_result["builds"][0]["artifacts"]["use_existing_index"] == true);
+    REQUIRE(existing_result["builds"][0]["artifacts"]["cleanup_index_after_build_group"] == false);
+    REQUIRE(existing_result["builds"][0]["raw_eval_result"].is_null());
+    REQUIRE(existing_result["builds"][0]["metrics"].contains("index_size_mb"));
+    REQUIRE_FALSE(existing_result["builds"][0]["metrics"].contains("build_seconds"));
+    REQUIRE(existing_result["trials"].size() == 2);
+    for (const auto& trial : existing_result["trials"]) {
+        REQUIRE(trial["status"] == "success");
+        REQUIRE(trial["eval_type"] == "search");
+        REQUIRE(trial["build_id"] == existing_result["builds"][0]["build_id"]);
+        REQUIRE(trial["artifacts"]["index_path"] == existing_index_path);
+        REQUIRE(trial["raw_eval_result"]["build"].is_null());
+        REQUIRE(trial["raw_eval_result"]["search"].is_object());
+        REQUIRE(trial["metrics"].contains("recall_at_k"));
+        REQUIRE(trial["metrics"].contains("latency_avg_ms"));
+        REQUIRE(trial["metrics"].contains("memory_peak_mb"));
+        REQUIRE(trial["metrics"].contains("index_size_mb"));
+        REQUIRE_FALSE(trial["metrics"].contains("build_seconds"));
+        REQUIRE(trial["satisfied_constraints"] == true);
+    }
+
+    existing_request["constraints"]["build_seconds"] = 1000.0;
+    auto existing_build_seconds_result = vsag::autotune::RunAutoTune(existing_request);
+    REQUIRE(existing_build_seconds_result["status"] == "no_candidate_satisfied");
+    REQUIRE(existing_build_seconds_result["build_count"] == 0);
+    REQUIRE(existing_build_seconds_result["build_group_count"] == 1);
+    REQUIRE(existing_build_seconds_result["trial_count"] == 2);
+    REQUIRE(existing_build_seconds_result["best_effort"].is_object());
+    for (const auto& trial : existing_build_seconds_result["trials"]) {
+        REQUIRE(trial["status"] == "success");
+        REQUIRE_FALSE(trial["metrics"].contains("build_seconds"));
+        REQUIRE(trial["satisfied_constraints"] == false);
+        REQUIRE(HasMissingMetricViolation(trial, "build_seconds"));
+    }
 
     std::filesystem::remove_all(workspace_path);
     std::remove(dataset_path.c_str());
