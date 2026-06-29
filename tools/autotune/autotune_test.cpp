@@ -24,6 +24,8 @@
 #include <fstream>
 #include <vector>
 
+#include "autotune_index_policy.h"
+
 using namespace nlohmann::literals;
 
 namespace {
@@ -120,6 +122,30 @@ WriteDenseEvalDataset(const std::string& path) {
     }
 }
 
+bool
+HasTunableParam(const vsag::autotune::JsonType& policy,
+                const std::string& path,
+                const std::string& scope) {
+    for (const auto& param : policy["tunable_params"]) {
+        if (param["path"] == path && param["scope"] == scope) {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool
+HasFixedDefault(const vsag::autotune::JsonType& policy,
+                const std::string& path,
+                const vsag::autotune::JsonType& value) {
+    for (const auto& param : policy["fixed_defaults"]) {
+        if (param["path"] == path && param["value"] == value) {
+            return true;
+        }
+    }
+    return false;
+}
+
 }  // namespace
 
 TEST_CASE("AutoTune expands arrays, ranges and value escapes") {
@@ -132,6 +158,30 @@ TEST_CASE("AutoTune expands arrays, ranges and value escapes") {
     REQUIRE(expanded.size() == 4);
     REQUIRE(expanded[0]["c"].is_array());
     REQUIRE(expanded[0]["c"].size() == 2);
+}
+
+TEST_CASE("AutoTune index policies describe tunable parameter spaces") {
+    const auto hgraph_policy = vsag::autotune::internal::DescribeIndexTunePolicy("hgraph");
+    REQUIRE(hgraph_policy["name"] == "hgraph");
+    REQUIRE(hgraph_policy["tunable_params"].size() == 4);
+    REQUIRE(hgraph_policy["fixed_defaults"].empty());
+    REQUIRE(HasTunableParam(
+        hgraph_policy, "/create_params/index_param/base_quantization_type", "build"));
+    REQUIRE(HasTunableParam(hgraph_policy, "/create_params/index_param/max_degree", "build"));
+    REQUIRE(HasTunableParam(hgraph_policy, "/create_params/index_param/ef_construction", "build"));
+    REQUIRE(HasTunableParam(hgraph_policy, "/search_params/hgraph/ef_search", "search"));
+
+    const auto ivf_policy = vsag::autotune::internal::DescribeIndexTunePolicy("ivf");
+    REQUIRE(ivf_policy["name"] == "ivf");
+    REQUIRE(ivf_policy["tunable_params"].size() == 3);
+    REQUIRE(ivf_policy["fixed_defaults"].size() == 2);
+    REQUIRE(
+        HasTunableParam(ivf_policy, "/create_params/index_param/base_quantization_type", "build"));
+    REQUIRE(HasTunableParam(ivf_policy, "/create_params/index_param/buckets_count", "build"));
+    REQUIRE(HasTunableParam(ivf_policy, "/search_params/ivf/scan_buckets_count", "search"));
+    REQUIRE(
+        HasFixedDefault(ivf_policy, "/create_params/index_param/partition_strategy_type", "ivf"));
+    REQUIRE(HasFixedDefault(ivf_policy, "/create_params/index_param/ivf_train_type", "kmeans"));
 }
 
 TEST_CASE("AutoTune generates covered hgraph and ivf trials") {

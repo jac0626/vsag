@@ -15,19 +15,40 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include "autotune.h"
 
 namespace vsag::autotune::internal {
 
+enum class TuneParamScope { Build, Search };
+
+struct IndexTuneParam {
+    std::vector<std::string> path;
+    TuneParamScope scope;
+    JsonType default_candidates;
+};
+
+struct IndexDefaultParam {
+    std::vector<std::string> path;
+    JsonType value;
+};
+
 struct IndexTunePolicy {
     const char* name;
-    void (*fill_defaults)(JsonType& index_spec);
+    const std::vector<IndexTuneParam>& (*tunable_params)();
+    const std::vector<IndexDefaultParam>& (*fixed_defaults)();
     void (*validate)(const JsonType& index_spec);
 };
 
 bool
 HasIndexTunePolicy(const std::string& index_name);
+
+const std::vector<IndexTuneParam>&
+GetIndexTuneParams(const std::string& index_name);
+
+JsonType
+DescribeIndexTunePolicy(const std::string& index_name);
 
 void
 ApplyIndexDefaults(JsonType& index_spec);
