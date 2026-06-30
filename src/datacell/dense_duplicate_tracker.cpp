@@ -81,6 +81,49 @@ DenseDuplicateTracker::GetGroupId(InnerIdType id) const -> InnerIdType {
 }
 
 void
+DenseDuplicateTracker::DetachDuplicateId(InnerIdType id) {
+    std::scoped_lock lock(mutex_);
+
+    if (id >= duplicate_ids_.size() || duplicate_ids_[id] == id) {
+        return;
+    }
+
+    auto previous_id = id;
+    while (duplicate_ids_[previous_id] != id) {
+        previous_id = duplicate_ids_[previous_id];
+    }
+
+    auto next_id = duplicate_ids_[id];
+    duplicate_ids_[id] = id;
+    if (previous_id == next_id) {
+        duplicate_ids_[previous_id] = previous_id;
+        duplicate_count_--;
+        return;
+    }
+    duplicate_ids_[previous_id] = next_id;
+}
+
+void
+DenseDuplicateTracker::MoveId(InnerIdType from, InnerIdType to) {
+    std::scoped_lock lock(mutex_);
+
+    if (from == to || from >= duplicate_ids_.size() || to >= duplicate_ids_.size() ||
+        duplicate_ids_[from] == from) {
+        return;
+    }
+
+    auto previous_id = from;
+    while (duplicate_ids_[previous_id] != from) {
+        previous_id = duplicate_ids_[previous_id];
+    }
+
+    auto next_id = duplicate_ids_[from];
+    duplicate_ids_[from] = from;
+    duplicate_ids_[to] = next_id;
+    duplicate_ids_[previous_id] = to;
+}
+
+void
 DenseDuplicateTracker::Serialize(StreamWriter& writer) const {
     std::shared_lock lock(mutex_);
 

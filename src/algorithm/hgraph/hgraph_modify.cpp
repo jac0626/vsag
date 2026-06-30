@@ -132,9 +132,16 @@ HGraph::graph_force_remove_one(const InnerIdType& inner_id,
 
 void
 HGraph::move_id(InnerIdType from, InnerIdType to) {
-    basic_flatten_codes_->Move(from, to);
-    if (high_precise_codes_) {
-        high_precise_codes_->Move(from, to);
+    if (this->using_dedup_storage()) {
+        this->code_slot_map_->MoveLogical(from, to);
+    } else {
+        basic_flatten_codes_->Move(from, to);
+        if (high_precise_codes_) {
+            high_precise_codes_->Move(from, to);
+        }
+        if (create_new_raw_vector_) {
+            raw_vector_->Move(from, to);
+        }
     }
 
     if (extra_infos_) {
@@ -151,6 +158,21 @@ HGraph::move_id(InnerIdType from, InnerIdType to) {
     if (entry_point_id_ == from) {
         entry_point_id_ = to;
     }
+}
+
+void
+HGraph::compact_physical_codes_after(InnerIdType removed_slot) {
+    auto old_physical_count = this->code_slot_map_->PhysicalCount();
+    for (InnerIdType slot = removed_slot + 1; slot < old_physical_count; ++slot) {
+        basic_flatten_codes_->Move(slot, slot - 1);
+        if (high_precise_codes_) {
+            high_precise_codes_->Move(slot, slot - 1);
+        }
+        if (create_new_raw_vector_) {
+            raw_vector_->Move(slot, slot - 1);
+        }
+    }
+    this->code_slot_map_->CompactPhysicalSlotsAfter(removed_slot);
 }
 
 uint32_t
@@ -179,9 +201,30 @@ HGraph::force_remove_one(int64_t label) {
     {
         std::unique_lock lock(this->label_lookup_mutex_);
         was_mark_removed = this->label_table_->IsRemoved(inner_id);
+        InnerIdType removed_slot = 0;
+        bool should_compact_physical_slot = false;
+        if (this->using_dedup_storage()) {
+            auto duplicate_tracker = this->bottom_graph_->GetDuplicateTracker();
+            CHECK_ARGUMENT(duplicate_tracker != nullptr,
+                           "deduplicate_storage force remove requires duplicate tracker");
+            removed_slot = this->code_slot_map_->Resolve(inner_id);
+            should_compact_physical_slot = duplicate_tracker->GetGroupSize(inner_id) == 1;
+            duplicate_tracker->DetachDuplicateId(inner_id);
+            if (swap_id != inner_id) {
+                duplicate_tracker->MoveId(swap_id, inner_id);
+            }
+        }
         this->label_table_->ForceRemove(label, inner_id);
+        if (this->using_dedup_storage()) {
+            if (swap_id == inner_id) {
+                this->code_slot_map_->RemoveLogical(inner_id);
+            }
+        }
         if (swap_id != inner_id) {
             this->move_id(swap_id, inner_id);
+        }
+        if (this->using_dedup_storage() && should_compact_physical_slot) {
+            this->compact_physical_codes_after(removed_slot);
         }
     }
     if (was_mark_removed) {
@@ -195,13 +238,30 @@ void
 HGraph::shrink_to_fit() {
     auto total_count = this->total_count_.load();
 
-    basic_flatten_codes_->ShrinkToFit(total_count);
-    if (high_precise_codes_) {
-        high_precise_codes_->ShrinkToFit(total_count);
+    if (this->using_dedup_storage()) {
+        auto physical_count = this->code_slot_map_->PhysicalCount();
+        basic_flatten_codes_->ShrinkToFit(physical_count);
+        if (high_precise_codes_) {
+            high_precise_codes_->ShrinkToFit(physical_count);
+        }
+        if (create_new_raw_vector_) {
+            raw_vector_->ShrinkToFit(physical_count);
+        }
+        this->physical_code_capacity_.store(physical_count, std::memory_order_release);
+    } else {
+        basic_flatten_codes_->ShrinkToFit(total_count);
+        if (high_precise_codes_) {
+            high_precise_codes_->ShrinkToFit(total_count);
+        }
+        if (create_new_raw_vector_) {
+            raw_vector_->ShrinkToFit(total_count);
+        }
     }
     bottom_graph_->ShrinkToFit(total_count);
+    bottom_graph_->SetTotalCount(total_count);
     for (const auto& route_graph : route_graphs_) {
         route_graph->ShrinkToFit(total_count);
+        route_graph->SetTotalCount(total_count);
     }
     label_table_->ShrinkToFit(total_count);
 }

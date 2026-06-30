@@ -17,9 +17,14 @@
 #include <datacell/compressed_graph_datacell_parameter.h>
 #include <fmt/format.h>
 
+#include <array>
 #include <atomic>
+#include <limits>
 #include <memory>
+#include <mutex>
+#include <new>
 #include <stdexcept>
+#include <utility>
 
 #include "algorithm/inner_index_interface.h"
 #include "analyzer/analyzer.h"
@@ -46,6 +51,614 @@
 
 namespace vsag {
 
+namespace {
+
+constexpr InnerIdType INVALID_CODE_SLOT = std::numeric_limits<InnerIdType>::max();
+
+class HGraphCodeSlotAdapter : public FlattenInterface {
+public:
+    HGraphCodeSlotAdapter(FlattenInterfacePtr base,
+                          std::shared_ptr<const HGraphCodeSlotMap> mapping,
+                          Allocator* allocator,
+                          const std::atomic<uint64_t>* logical_total_count)
+        : base_(std::move(base)),
+          mapping_(std::move(mapping)),
+          allocator_(allocator),
+          logical_total_count_(logical_total_count) {
+        this->refresh_metadata();
+    }
+
+    void
+    Query(float* result_dists,
+          const ComputerInterfacePtr& computer,
+          const InnerIdType* idx,
+          InnerIdType id_count,
+          QueryContext* ctx = nullptr) override {
+        this->with_mapped_ids(idx, id_count, ctx, [&](const InnerIdType* mapped_ids) {
+            base_->Query(result_dists, computer, mapped_ids, id_count, ctx);
+        });
+    }
+
+    void
+    QueryWithDistanceFilter(float* result_dists,
+                            const ComputerInterfacePtr& computer,
+                            const InnerIdType* idx,
+                            InnerIdType id_count,
+                            float threshold,
+                            QueryContext* ctx = nullptr) override {
+        this->with_mapped_ids(idx, id_count, ctx, [&](const InnerIdType* mapped_ids) {
+            base_->QueryWithDistanceFilter(
+                result_dists, computer, mapped_ids, id_count, threshold, ctx);
+        });
+    }
+
+    void
+    QueryWithDistanceLowerBound(float* result_dists,
+                                float* lower_bounds,
+                                const ComputerInterfacePtr& computer,
+                                const InnerIdType* idx,
+                                InnerIdType id_count,
+                                QueryContext* ctx = nullptr) override {
+        this->with_mapped_ids(idx, id_count, ctx, [&](const InnerIdType* mapped_ids) {
+            base_->QueryWithDistanceLowerBound(
+                result_dists, lower_bounds, computer, mapped_ids, id_count, ctx);
+        });
+    }
+
+    ComputerInterfacePtr
+    FactoryComputer(const void* query) override {
+        return base_->FactoryComputer(query);
+    }
+
+    void
+    Train(const void* data, uint64_t count) override {
+        base_->Train(data, count);
+        this->refresh_metadata();
+    }
+
+    void
+    InsertVector(const void* vector, InnerIdType idx) override {
+        base_->InsertVector(vector, mapping_->Resolve(idx));
+    }
+
+    void
+    InsertVectorToSlot(const void* vector, InnerIdType code_slot_id) {
+        base_->InsertVector(vector, code_slot_id);
+    }
+
+    bool
+    UpdateVector(const void* vector, InnerIdType idx) override {
+        return base_->UpdateVector(vector, mapping_->Resolve(idx));
+    }
+
+    void
+    BatchInsertVector(const void* vectors, InnerIdType count, InnerIdType* idx_vec) override {
+        if (idx_vec == nullptr) {
+            throw VsagException(ErrorType::INTERNAL_ERROR,
+                                "HGraph code-slot adapter requires explicit logical ids");
+        }
+        Vector<InnerIdType> code_slot_ids(static_cast<uint64_t>(count), allocator_);
+        for (InnerIdType i = 0; i < count; ++i) {
+            code_slot_ids[i] = mapping_->Resolve(idx_vec[i]);
+        }
+        base_->BatchInsertVector(vectors, count, code_slot_ids.data());
+    }
+
+    float
+    ComputePairVectors(InnerIdType id1, InnerIdType id2) override {
+        InnerIdType code_slot_id1 = 0;
+        InnerIdType code_slot_id2 = 0;
+        mapping_->ResolvePair(id1, id2, code_slot_id1, code_slot_id2);
+        return base_->ComputePairVectors(code_slot_id1, code_slot_id2);
+    }
+
+    void
+    Prefetch(InnerIdType id) override {
+        base_->Prefetch(mapping_->Resolve(id));
+    }
+
+    std::string
+    GetQuantizerName() override {
+        return base_->GetQuantizerName();
+    }
+
+    MetricType
+    GetMetricType() override {
+        return base_->GetMetricType();
+    }
+
+    void
+    Resize(InnerIdType capacity) override {
+        base_->Resize(capacity);
+        this->refresh_metadata();
+    }
+
+    void
+    ExportModel(const FlattenInterfacePtr& other) const override {
+        auto other_adapter = std::dynamic_pointer_cast<HGraphCodeSlotAdapter>(other);
+        if (other_adapter != nullptr) {
+            base_->ExportModel(other_adapter->base_);
+            return;
+        }
+        base_->ExportModel(other);
+    }
+
+    void
+    InitIO(const IOParamPtr& io_param) override {
+        base_->InitIO(io_param);
+        this->refresh_metadata();
+    }
+
+    int64_t
+    GetMemoryUsage() const override {
+        return base_->GetMemoryUsage();
+    }
+
+    IndexCommonParam
+    ExportCommonParam() override {
+        return base_->ExportCommonParam();
+    }
+
+    bool
+    SetRuntimeParameters(const UnorderedMap<std::string, float>& new_params) override {
+        auto ret = base_->SetRuntimeParameters(new_params);
+        this->refresh_metadata();
+        return ret;
+    }
+
+    bool
+    Decode(const uint8_t* codes, float* vector) override {
+        return base_->Decode(codes, vector);
+    }
+
+    bool
+    Encode(const float* vector, uint8_t* codes) override {
+        return base_->Encode(vector, codes);
+    }
+
+    const uint8_t*
+    GetCodesById(InnerIdType id, bool& need_release) const override {
+        return base_->GetCodesById(mapping_->Resolve(id), need_release);
+    }
+
+    void
+    Release(const uint8_t* data) const override {
+        base_->Release(data);
+    }
+
+    bool
+    GetCodesById(InnerIdType id, uint8_t* codes) const override {
+        return base_->GetCodesById(mapping_->Resolve(id), codes);
+    }
+
+    InnerIdType
+    TotalCount() const override {
+        return static_cast<InnerIdType>(logical_total_count_->load(std::memory_order_acquire));
+    }
+
+    void
+    Serialize(StreamWriter& writer) override {
+        base_->Serialize(writer);
+    }
+
+    void
+    Deserialize(lvalue_or_rvalue<StreamReader> reader) override {
+        base_->Deserialize(std::move(reader));
+        this->refresh_metadata();
+    }
+
+    bool
+    InMemory() const override {
+        return base_->InMemory();
+    }
+
+    bool
+    HoldMolds() const override {
+        return base_->HoldMolds();
+    }
+
+    void
+    MergeOther(const FlattenInterfacePtr& other, InnerIdType bias) override {
+        auto other_adapter = std::dynamic_pointer_cast<HGraphCodeSlotAdapter>(other);
+        if (other_adapter == nullptr) {
+            throw VsagException(ErrorType::INTERNAL_ERROR,
+                                "HGraph code-slot adapter can only merge with same adapter");
+        }
+        base_->MergeOther(other_adapter->base_, bias);
+        this->refresh_metadata();
+    }
+
+    void
+    Move(InnerIdType from, InnerIdType to) override {
+        base_->Move(from, to);
+        this->refresh_metadata();
+    }
+
+    void
+    ShrinkToFit(InnerIdType capacity) override {
+        base_->ShrinkToFit(capacity);
+        this->refresh_metadata();
+    }
+
+private:
+    void
+    refresh_metadata() {
+        this->code_size_ = base_->code_size_;
+        this->max_capacity_ = base_->max_capacity_;
+        this->total_count_ = base_->total_count_;
+        this->prefetch_stride_code_ = base_->prefetch_stride_code_;
+        this->prefetch_depth_code_ = base_->prefetch_depth_code_;
+    }
+
+    template <typename QueryFunc>
+    void
+    with_mapped_ids(const InnerIdType* idx,
+                    InnerIdType id_count,
+                    QueryContext* ctx,
+                    QueryFunc&& query_func) const {
+        if (id_count == 0) {
+            query_func(idx);
+            return;
+        }
+        if (id_count == 1) {
+            InnerIdType mapped_id = 0;
+            mapped_id = mapping_->Resolve(idx[0]);
+            query_func(&mapped_id);
+            return;
+        }
+        constexpr InnerIdType stack_mapped_id_count = 128;
+        if (id_count <= stack_mapped_id_count) {
+            std::array<InnerIdType, stack_mapped_id_count> mapped_ids{};
+            mapping_->ResolveBatch(idx, id_count, mapped_ids.data());
+            query_func(mapped_ids.data());
+            return;
+        }
+        Allocator* allocator = select_query_allocator(ctx, allocator_);
+        Vector<InnerIdType> mapped_ids(static_cast<uint64_t>(id_count), allocator);
+        mapping_->ResolveBatch(idx, id_count, mapped_ids.data());
+        query_func(mapped_ids.data());
+    }
+
+    FlattenInterfacePtr base_{nullptr};
+    std::shared_ptr<const HGraphCodeSlotMap> mapping_{nullptr};
+    Allocator* allocator_{nullptr};
+    const std::atomic<uint64_t>* logical_total_count_{nullptr};
+};
+
+}  // namespace
+
+FlattenInterfacePtr
+MakeHGraphCodeSlotAdapter(FlattenInterfacePtr base,
+                          std::shared_ptr<const HGraphCodeSlotMap> mapping,
+                          Allocator* allocator,
+                          const std::atomic<uint64_t>* logical_total_count) {
+    return std::make_shared<HGraphCodeSlotAdapter>(
+        std::move(base), std::move(mapping), allocator, logical_total_count);
+}
+
+void
+InsertVectorToHGraphCodeSlot(const FlattenInterfacePtr& flatten,
+                             const void* vector,
+                             InnerIdType code_slot_id) {
+    auto adapter = std::dynamic_pointer_cast<HGraphCodeSlotAdapter>(flatten);
+    if (adapter != nullptr) {
+        adapter->InsertVectorToSlot(vector, code_slot_id);
+        return;
+    }
+    flatten->InsertVector(vector, code_slot_id);
+}
+
+HGraphCodeSlotMap::HGraphCodeSlotMap(Allocator* allocator) : allocator_(allocator) {
+}
+
+HGraphCodeSlotMap::~HGraphCodeSlotMap() {
+    this->ReleaseSlots();
+}
+
+InnerIdType
+HGraphCodeSlotMap::AllocateSlot() {
+    auto slot_id = physical_count_.fetch_add(1, std::memory_order_acq_rel);
+    if (slot_id >= logical_capacity_) {
+        physical_count_.fetch_sub(1, std::memory_order_acq_rel);
+        throw VsagException(ErrorType::INVALID_ARGUMENT,
+                            fmt::format("code slot capacity is not reserved for slot {}", slot_id));
+    }
+    return slot_id;
+}
+
+void
+// NOLINTNEXTLINE(readability-make-member-function-const): publishing mutates slot bindings.
+HGraphCodeSlotMap::PublishSlot(InnerIdType inner_id, InnerIdType code_slot_id) {
+    auto physical_count = physical_count_.load(std::memory_order_acquire);
+    CHECK_ARGUMENT(
+        code_slot_id < physical_count,
+        fmt::format(
+            "code_slot_id({}) must be less than physical_count({})", code_slot_id, physical_count));
+    if (inner_id >= logical_capacity_) {
+        throw VsagException(ErrorType::INVALID_ARGUMENT,
+                            fmt::format("inner_id({}) has no reserved code slot", inner_id));
+    }
+    auto expected = INVALID_CODE_SLOT;
+    auto published = inner_to_slot_[inner_id].compare_exchange_strong(
+        expected, code_slot_id, std::memory_order_release, std::memory_order_acquire);
+    CHECK_ARGUMENT(published, fmt::format("inner_id({}) is already bound", inner_id));
+    published_logical_count_.fetch_add(1, std::memory_order_acq_rel);
+}
+
+void
+HGraphCodeSlotMap::RebindSlot(InnerIdType inner_id, InnerIdType code_slot_id) {
+    auto physical_count = physical_count_.load(std::memory_order_acquire);
+    CHECK_ARGUMENT(
+        code_slot_id < physical_count,
+        fmt::format(
+            "code_slot_id({}) must be less than physical_count({})", code_slot_id, physical_count));
+    if (inner_id >= logical_capacity_) {
+        throw VsagException(ErrorType::INVALID_ARGUMENT,
+                            fmt::format("inner_id({}) has no reserved code slot", inner_id));
+    }
+    auto old_slot = inner_to_slot_[inner_id].exchange(INVALID_CODE_SLOT, std::memory_order_acq_rel);
+    CHECK_ARGUMENT(old_slot != INVALID_CODE_SLOT,
+                   fmt::format("inner_id({}) has no bound code slot", inner_id));
+    inner_to_slot_[inner_id].store(code_slot_id, std::memory_order_release);
+}
+
+void
+HGraphCodeSlotMap::RemoveLogical(InnerIdType inner_id) {
+    if (inner_id >= logical_capacity_) {
+        throw VsagException(ErrorType::INVALID_ARGUMENT,
+                            fmt::format("inner_id({}) has no reserved code slot", inner_id));
+    }
+    auto old_slot = inner_to_slot_[inner_id].exchange(INVALID_CODE_SLOT, std::memory_order_acq_rel);
+    CHECK_ARGUMENT(old_slot != INVALID_CODE_SLOT,
+                   fmt::format("inner_id({}) has no bound code slot", inner_id));
+    published_logical_count_.fetch_sub(1, std::memory_order_acq_rel);
+}
+
+void
+HGraphCodeSlotMap::MoveLogical(InnerIdType from, InnerIdType to) {
+    if (from == to) {
+        this->RemoveLogical(to);
+        return;
+    }
+    if (from >= logical_capacity_ || to >= logical_capacity_) {
+        throw VsagException(
+            ErrorType::INVALID_ARGUMENT,
+            fmt::format("cannot move code slot from inner_id({}) to inner_id({})", from, to));
+    }
+
+    auto from_slot = inner_to_slot_[from].exchange(INVALID_CODE_SLOT, std::memory_order_acq_rel);
+    CHECK_ARGUMENT(from_slot != INVALID_CODE_SLOT,
+                   fmt::format("inner_id({}) has no bound code slot", from));
+    auto to_slot = inner_to_slot_[to].load(std::memory_order_acquire);
+    CHECK_ARGUMENT(to_slot != INVALID_CODE_SLOT,
+                   fmt::format("inner_id({}) has no bound code slot", to));
+    inner_to_slot_[to].store(from_slot, std::memory_order_release);
+    published_logical_count_.fetch_sub(1, std::memory_order_acq_rel);
+}
+
+void
+HGraphCodeSlotMap::CompactPhysicalSlotsAfter(InnerIdType removed_slot) {
+    auto physical_count = physical_count_.load(std::memory_order_acquire);
+    CHECK_ARGUMENT(
+        removed_slot < physical_count,
+        fmt::format(
+            "removed_slot({}) must be less than physical_count({})", removed_slot, physical_count));
+    for (InnerIdType inner_id = 0; inner_id < logical_capacity_; ++inner_id) {
+        auto slot = inner_to_slot_[inner_id].load(std::memory_order_acquire);
+        if (slot != INVALID_CODE_SLOT && slot > removed_slot) {
+            inner_to_slot_[inner_id].store(slot - 1, std::memory_order_release);
+        }
+    }
+    physical_count_.store(physical_count - 1, std::memory_order_release);
+}
+
+InnerIdType
+HGraphCodeSlotMap::Resolve(InnerIdType inner_id) const {
+    if (inner_id >= logical_capacity_) {
+        throw VsagException(ErrorType::INVALID_ARGUMENT,
+                            fmt::format("inner_id({}) has no bound code slot", inner_id));
+    }
+    auto slot = inner_to_slot_[inner_id].load(std::memory_order_acquire);
+    if (slot == INVALID_CODE_SLOT) {
+        throw VsagException(ErrorType::INVALID_ARGUMENT,
+                            fmt::format("inner_id({}) has no bound code slot", inner_id));
+    }
+    return slot;
+}
+
+void
+HGraphCodeSlotMap::ResolvePair(InnerIdType inner_id1,
+                               InnerIdType inner_id2,
+                               InnerIdType& code_slot_id1,
+                               InnerIdType& code_slot_id2) const {
+    if (inner_id1 >= logical_capacity_) {
+        throw VsagException(ErrorType::INVALID_ARGUMENT,
+                            fmt::format("inner_id({}) has no bound code slot", inner_id1));
+    }
+    if (inner_id2 >= logical_capacity_) {
+        throw VsagException(ErrorType::INVALID_ARGUMENT,
+                            fmt::format("inner_id({}) has no bound code slot", inner_id2));
+    }
+    code_slot_id1 = inner_to_slot_[inner_id1].load(std::memory_order_acquire);
+    code_slot_id2 = inner_to_slot_[inner_id2].load(std::memory_order_acquire);
+    if (code_slot_id1 == INVALID_CODE_SLOT) {
+        throw VsagException(ErrorType::INVALID_ARGUMENT,
+                            fmt::format("inner_id({}) has no bound code slot", inner_id1));
+    }
+    if (code_slot_id2 == INVALID_CODE_SLOT) {
+        throw VsagException(ErrorType::INVALID_ARGUMENT,
+                            fmt::format("inner_id({}) has no bound code slot", inner_id2));
+    }
+}
+
+void
+HGraphCodeSlotMap::ResolveBatch(const InnerIdType* inner_ids,
+                                InnerIdType count,
+                                InnerIdType* code_slot_ids) const {
+    for (InnerIdType i = 0; i < count; ++i) {
+        auto inner_id = inner_ids[i];
+        if (inner_id >= logical_capacity_) {
+            throw VsagException(ErrorType::INVALID_ARGUMENT,
+                                fmt::format("inner_id({}) has no bound code slot", inner_id));
+        }
+        auto slot = inner_to_slot_[inner_id].load(std::memory_order_acquire);
+        if (slot == INVALID_CODE_SLOT) {
+            throw VsagException(ErrorType::INVALID_ARGUMENT,
+                                fmt::format("inner_id({}) has no bound code slot", inner_id));
+        }
+        code_slot_ids[i] = slot;
+    }
+}
+
+void
+HGraphCodeSlotMap::ReserveLogicalSize(InnerIdType new_size) {
+    std::unique_lock lock(mutex_);
+    this->EnsureLogicalSize(new_size);
+}
+
+void
+HGraphCodeSlotMap::MergeOther(const HGraphCodeSlotMap& other,
+                              InnerIdType logical_bias,
+                              InnerIdType physical_bias) {
+    if (this == &other) {
+        throw VsagException(ErrorType::INVALID_ARGUMENT, "code slot map cannot merge itself");
+    }
+
+    auto other_logical_count = other.PublishedLogicalCount();
+    auto other_physical_count = other.PhysicalCount();
+    auto current_physical_count = this->PhysicalCount();
+    CHECK_ARGUMENT(current_physical_count == physical_bias,
+                   fmt::format("code slot physical bias({}) must match physical count({})",
+                               physical_bias,
+                               current_physical_count));
+
+    this->ReserveLogicalSize(logical_bias + other_logical_count);
+    for (InnerIdType slot_id = 0; slot_id < other_physical_count; ++slot_id) {
+        auto allocated_slot = this->AllocateSlot();
+        CHECK_ARGUMENT(allocated_slot == physical_bias + slot_id,
+                       fmt::format("allocated code slot({}) must match expected slot({})",
+                                   allocated_slot,
+                                   physical_bias + slot_id));
+    }
+    for (InnerIdType inner_id = 0; inner_id < other_logical_count; ++inner_id) {
+        auto code_slot_id = other.Resolve(inner_id);
+        this->PublishSlot(logical_bias + inner_id, physical_bias + code_slot_id);
+    }
+}
+
+InnerIdType
+HGraphCodeSlotMap::PhysicalCount() const {
+    return physical_count_.load(std::memory_order_acquire);
+}
+
+InnerIdType
+HGraphCodeSlotMap::PublishedLogicalCount() const {
+    return published_logical_count_.load(std::memory_order_acquire);
+}
+
+void
+HGraphCodeSlotMap::Clear() {
+    std::unique_lock lock(mutex_);
+    this->ReleaseSlots();
+    physical_count_.store(0, std::memory_order_release);
+    published_logical_count_.store(0, std::memory_order_release);
+}
+
+void
+HGraphCodeSlotMap::Serialize(StreamWriter& writer) const {
+    std::shared_lock lock(mutex_);
+    auto physical_count = physical_count_.load(std::memory_order_acquire);
+    StreamWriter::WriteObj(writer, physical_count);
+    auto serialized_slot_count = logical_capacity_;
+    while (serialized_slot_count > 0) {
+        auto slot = inner_to_slot_[serialized_slot_count - 1].load(std::memory_order_acquire);
+        if (slot != INVALID_CODE_SLOT) {
+            break;
+        }
+        --serialized_slot_count;
+    }
+    Vector<InnerIdType> slots(allocator_);
+    slots.resize(serialized_slot_count);
+    for (InnerIdType inner_id = 0; inner_id < serialized_slot_count; ++inner_id) {
+        slots[inner_id] = inner_to_slot_[inner_id].load(std::memory_order_acquire);
+    }
+    StreamWriter::WriteVector(writer, slots);
+}
+
+void
+HGraphCodeSlotMap::Deserialize(StreamReader& reader) {
+    std::unique_lock lock(mutex_);
+    InnerIdType physical_count = 0;
+    StreamReader::ReadObj(reader, physical_count);
+    Vector<InnerIdType> slots(allocator_);
+    StreamReader::ReadVector(reader, slots);
+    this->ReleaseSlots();
+    this->EnsureLogicalSize(static_cast<InnerIdType>(slots.size()));
+    InnerIdType published_logical_count = 0;
+    for (InnerIdType inner_id = 0; inner_id < slots.size(); ++inner_id) {
+        auto slot = slots[inner_id];
+        if (slot != INVALID_CODE_SLOT && slot >= physical_count) {
+            throw VsagException(
+                ErrorType::INVALID_ARGUMENT,
+                fmt::format("invalid code slot mapping: slot {} >= physical count {}",
+                            slot,
+                            physical_count));
+        }
+        if (slot != INVALID_CODE_SLOT) {
+            ++published_logical_count;
+        }
+        inner_to_slot_[inner_id].store(slot, std::memory_order_release);
+    }
+    physical_count_.store(physical_count, std::memory_order_release);
+    published_logical_count_.store(published_logical_count, std::memory_order_release);
+}
+
+int64_t
+HGraphCodeSlotMap::GetMemoryUsage() const {
+    std::shared_lock lock(mutex_);
+    auto memory = static_cast<uint64_t>(sizeof(*this));
+    memory += static_cast<uint64_t>(logical_capacity_) * sizeof(std::atomic<InnerIdType>);
+    return static_cast<int64_t>(memory);
+}
+
+void
+HGraphCodeSlotMap::EnsureLogicalSize(InnerIdType new_size) {
+    if (new_size <= logical_capacity_) {
+        return;
+    }
+    auto old_capacity = logical_capacity_;
+    auto* new_slots = static_cast<std::atomic<InnerIdType>*>(allocator_->Allocate(
+        static_cast<uint64_t>(new_size) * static_cast<uint64_t>(sizeof(std::atomic<InnerIdType>))));
+    if (new_slots == nullptr) {
+        throw VsagException(ErrorType::NO_ENOUGH_MEMORY, "failed to allocate HGraph code slot map");
+    }
+    for (InnerIdType inner_id = 0; inner_id < new_size; ++inner_id) {
+        new (new_slots + inner_id) std::atomic<InnerIdType>(INVALID_CODE_SLOT);
+    }
+    for (InnerIdType inner_id = 0; inner_id < old_capacity; ++inner_id) {
+        new_slots[inner_id].store(inner_to_slot_[inner_id].load(std::memory_order_acquire),
+                                  std::memory_order_release);
+    }
+    this->ReleaseSlots();
+    inner_to_slot_ = new_slots;
+    logical_capacity_ = new_size;
+}
+
+void
+HGraphCodeSlotMap::ReleaseSlots() {
+    if (inner_to_slot_ == nullptr) {
+        logical_capacity_ = 0;
+        return;
+    }
+    using AtomicSlot = std::atomic<InnerIdType>;
+    for (InnerIdType inner_id = 0; inner_id < logical_capacity_; ++inner_id) {
+        inner_to_slot_[inner_id].~AtomicSlot();
+    }
+    allocator_->Deallocate(inner_to_slot_);
+    inner_to_slot_ = nullptr;
+    logical_capacity_ = 0;
+}
+
 class HGraphAnalyzer;
 
 HGraph::HGraph(const HGraphParameterPtr& hgraph_param, const vsag::IndexCommonParam& common_param)
@@ -65,7 +678,15 @@ HGraph::HGraph(const HGraphParameterPtr& hgraph_param, const vsag::IndexCommonPa
       hierarchical_datacell_param_(hgraph_param->hierarchical_graph_param),
       use_old_serial_format_(common_param.use_old_serial_format_) {
     this->support_duplicate_ = hgraph_param->support_duplicate;
+    this->deduplicate_storage_ = hgraph_param->deduplicate_storage;
+    if (this->deduplicate_storage_ && this->graph_type_ != GRAPH_TYPE_VALUE_NSW) {
+        throw VsagException(ErrorType::INVALID_ARGUMENT,
+                            "HGraph deduplicate_storage only supports nsw graph");
+    }
     this->persist_source_id_ = hgraph_param->persist_source_id;
+    if (this->support_duplicate_ && this->deduplicate_storage_) {
+        this->code_slot_map_ = std::make_shared<HGraphCodeSlotMap>(allocator_);
+    }
     neighbors_mutex_ = std::make_shared<PointsMutex>(0, common_param.allocator_.get());
     this->basic_flatten_codes_ =
         FlattenInterface::MakeInstance(hgraph_param->base_codes_param, common_param);
@@ -96,6 +717,18 @@ HGraph::HGraph(const HGraphParameterPtr& hgraph_param, const vsag::IndexCommonPa
         optimizer_ = std::make_shared<Optimizer<BasicSearcher>>(common_param);
     }
     check_and_init_raw_vector(hgraph_param->raw_vector_param, common_param);
+    if (this->support_duplicate_ && this->deduplicate_storage_) {
+        this->basic_flatten_codes_ = MakeHGraphCodeSlotAdapter(
+            this->basic_flatten_codes_, this->code_slot_map_, allocator_, &this->total_count_);
+        if (this->high_precise_codes_ != nullptr) {
+            this->high_precise_codes_ = MakeHGraphCodeSlotAdapter(
+                this->high_precise_codes_, this->code_slot_map_, allocator_, &this->total_count_);
+        }
+        if (this->create_new_raw_vector_ && this->raw_vector_ != nullptr) {
+            this->raw_vector_ = MakeHGraphCodeSlotAdapter(
+                this->raw_vector_, this->code_slot_map_, allocator_, &this->total_count_);
+        }
+    }
     resize(bottom_graph_->max_capacity_);
 }
 
@@ -197,12 +830,26 @@ HGraph::Tune(const std::string& parameters, bool disable_future_tuning) {
         }
     }
 
+    auto wrap_new_code = [this](FlattenInterfacePtr code) -> FlattenInterfacePtr {
+        if (not this->using_dedup_storage() or code == nullptr) {
+            return code;
+        }
+
+        auto physical_capacity = this->physical_code_capacity_.load(std::memory_order_acquire);
+        if (physical_capacity > 0) {
+            code->Resize(physical_capacity);
+        }
+        return MakeHGraphCodeSlotAdapter(
+            std::move(code), this->code_slot_map_, this->allocator_, &this->total_count_);
+    };
+
     auto tune_and_rebuild =
         [&](bool need_tune, FlattenInterfacePtr old_code, FlattenInterfacePtr new_code) {
             if (not need_tune) {
                 return old_code;
             }
 
+            new_code = wrap_new_code(new_code);
             new_code->Train(train_data.data(), train_count);
 
             Vector<float> insert_buffer(dim_, 0, allocator_);
@@ -405,21 +1052,53 @@ HGraph::Merge(const std::vector<MergeUnit>& merge_units) {
     for (const auto& merge_unit : merge_units) {
         const auto other_index = std::dynamic_pointer_cast<HGraph>(
             std::dynamic_pointer_cast<IndexImpl<HGraph>>(merge_unit.index)->GetInnerIndex());
+        CHECK_ARGUMENT(this->support_duplicate_ == other_index->support_duplicate_,
+                       "cannot merge HGraph with different support_duplicate settings");
+        CHECK_ARGUMENT(this->using_dedup_storage() == other_index->using_dedup_storage(),
+                       "cannot merge HGraph with different deduplicate_storage settings");
+
+        auto logical_bias = this->total_count_.load(std::memory_order_acquire);
+        auto physical_bias = logical_bias;
+        if (this->using_dedup_storage()) {
+            CHECK_ARGUMENT(
+                this->code_slot_map_ != nullptr and other_index->code_slot_map_ != nullptr,
+                "deduplicate_storage merge requires code slot maps");
+            auto duplicate_tracker = this->bottom_graph_->GetDuplicateTracker();
+            auto other_duplicate_tracker = other_index->bottom_graph_->GetDuplicateTracker();
+            CHECK_ARGUMENT(duplicate_tracker != nullptr and other_duplicate_tracker != nullptr,
+                           "deduplicate_storage merge requires duplicate trackers");
+
+            physical_bias = this->code_slot_map_->PhysicalCount();
+            auto required_physical_capacity =
+                physical_bias + other_index->code_slot_map_->PhysicalCount();
+            this->ensure_physical_code_capacity(required_physical_capacity);
+        }
         if (total_count_ == 0) {
             this->entry_point_id_ = other_index->entry_point_id_;
         }
-        basic_flatten_codes_->MergeOther(other_index->basic_flatten_codes_, this->total_count_);
+        basic_flatten_codes_->MergeOther(other_index->basic_flatten_codes_, physical_bias);
         label_table_->MergeOther(other_index->label_table_, merge_unit.id_map_func);
         if (has_precise_reorder()) {
-            high_precise_codes_->MergeOther(other_index->high_precise_codes_, this->total_count_);
+            high_precise_codes_->MergeOther(other_index->high_precise_codes_, physical_bias);
         }
-        bottom_graph_->MergeOther(other_index->bottom_graph_, this->total_count_);
+        if (this->using_dedup_storage()) {
+            if (create_new_raw_vector_) {
+                raw_vector_->MergeOther(other_index->raw_vector_, physical_bias);
+            }
+            this->code_slot_map_->MergeOther(
+                *other_index->code_slot_map_, logical_bias, physical_bias);
+            this->bottom_graph_->GetDuplicateTracker()->MergeOther(
+                *other_index->bottom_graph_->GetDuplicateTracker(),
+                logical_bias,
+                other_index->GetNumElements());
+        }
+        bottom_graph_->MergeOther(other_index->bottom_graph_, logical_bias);
         if (route_graphs_.size() < other_index->route_graphs_.size()) {
             route_graphs_.push_back(this->generate_one_route_graph());
         }
         for (int j = 0; j < std::min(other_index->route_graphs_.size(), route_graphs_.size());
              ++j) {
-            route_graphs_[j]->MergeOther(other_index->route_graphs_[j], this->total_count_);
+            route_graphs_[j]->MergeOther(other_index->route_graphs_[j], logical_bias);
         }
         this->total_count_ += other_index->GetNumElements();
     }
@@ -650,12 +1329,28 @@ HGraph::UpdateVector(int64_t id, const DatasetPtr& new_base, bool force_update) 
         }
     }
 
+    if (this->using_dedup_storage()) {
+        auto duplicate_tracker = this->bottom_graph_->GetDuplicateTracker();
+        CHECK_ARGUMENT(duplicate_tracker != nullptr,
+                       "deduplicate_storage update requires duplicate tracker");
+        if (duplicate_tracker->GetGroupSize(inner_id) > 1) {
+            auto code_slot_id = this->code_slot_map_->AllocateSlot();
+            this->ensure_physical_code_capacity(code_slot_id + 1);
+            this->insert_persistent_codes_to_slot(new_base_vec, code_slot_id);
+            this->code_slot_map_->RebindSlot(inner_id, code_slot_id);
+            duplicate_tracker->DetachDuplicateId(inner_id);
+            return true;
+        }
+    }
+
     // note that only modify vector need to obtain unique lock
     // and the lock has been obtained inside datacell
-    auto codes = (has_precise_reorder()) ? high_precise_codes_ : basic_flatten_codes_;
     bool update_status = basic_flatten_codes_->UpdateVector(new_base_vec, inner_id);
     if (has_precise_reorder()) {
         update_status = update_status && high_precise_codes_->UpdateVector(new_base_vec, inner_id);
+    }
+    if (create_new_raw_vector_) {
+        update_status = update_status && raw_vector_->UpdateVector(new_base_vec, inner_id);
     }
     return update_status;
 }

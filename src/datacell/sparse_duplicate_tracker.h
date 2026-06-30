@@ -36,6 +36,12 @@ public:
     GetGroupId(InnerIdType id) const -> InnerIdType override;
 
     void
+    DetachDuplicateId(InnerIdType id) override;
+
+    void
+    MoveId(InnerIdType from, InnerIdType to) override;
+
+    void
     Serialize(StreamWriter& writer) const override;
 
     void
