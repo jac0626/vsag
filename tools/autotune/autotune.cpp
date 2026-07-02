@@ -15,10 +15,7 @@
 #include "autotune.h"
 
 #include <exception>
-#include <iostream>
-#include <map>
 #include <utility>
-#include <vector>
 
 #include "autotune_internal.h"
 
@@ -41,56 +38,11 @@ RunAutoTune(const JsonType& request) {
         elapsed_breakdown["candidate_generation"] = internal::ElapsedSeconds(candidate_start);
 
         const auto evaluation_start = internal::Clock::now();
-        std::vector<JsonType> trial_results;
-        trial_results.reserve(plan.trials.size());
-        std::vector<JsonType> build_results;
-        build_results.reserve(plan.builds.size());
-        std::map<std::string, std::vector<internal::TrialSpec>> trials_by_build_id;
-        for (const auto& trial : plan.trials) {
-            trials_by_build_id[trial.build_id].emplace_back(trial);
-        }
-
-        uint64_t trial_ordinal = 0;
-        uint64_t build_ordinal = 0;
-        uint64_t executed_build_count = 0;
-        for (const auto& build : plan.builds) {
-            ++build_ordinal;
-            if (!build.use_existing_index) {
-                ++executed_build_count;
-            }
-            std::cerr << "[AutoTune] running build group " << build_ordinal << "/"
-                      << plan.builds.size() << " " << build.build_id
-                      << " index=" << build.index_name
-                      << " use_existing_index=" << build.use_existing_index << std::endl;
-            auto build_result = internal::RunBuild(build, request, options);
-            std::cerr << "[AutoTune] finished build group " << build.build_id
-                      << " status=" << build_result["status"].get<std::string>()
-                      << " elapsed_seconds=" << build_result["elapsed_seconds"].get<double>()
-                      << std::endl;
-
-            const auto& group_trials = trials_by_build_id[build.build_id];
-            for (const auto& trial : group_trials) {
-                ++trial_ordinal;
-                std::cerr << "[AutoTune] running trial " << trial_ordinal << "/"
-                          << plan.trials.size() << " " << trial.trial_id
-                          << " index=" << trial.index_name << " eval_type=" << trial.eval_type
-                          << " build_id=" << trial.build_id << std::endl;
-                auto trial_result = internal::RunSearchTrial(
-                    trial, build_result, request, request["constraints"], options);
-                std::cerr << "[AutoTune] finished trial " << trial.trial_id
-                          << " status=" << trial_result["status"].get<std::string>()
-                          << " elapsed_seconds=" << trial_result["elapsed_seconds"].get<double>()
-                          << std::endl;
-                trial_results.emplace_back(std::move(trial_result));
-            }
-
-            internal::CleanupBuildArtifact(build, options);
-            build_results.emplace_back(std::move(build_result));
-        }
+        auto evaluation_result = internal::FullGridEvaluationStrategy().Run(plan, request, options);
         elapsed_breakdown["evaluation"] = internal::ElapsedSeconds(evaluation_start);
 
         const auto selection_start = internal::Clock::now();
-        auto selection = internal::SelectResult(trial_results);
+        auto selection = internal::SelectResult(evaluation_result.trial_results);
         elapsed_breakdown["selection"] = internal::ElapsedSeconds(selection_start);
 
         JsonType result;
@@ -100,13 +52,13 @@ RunAutoTune(const JsonType& request) {
         result["elapsed_breakdown_seconds"] = elapsed_breakdown;
         result["recommendation"] = selection["recommendation"];
         result["best_effort"] = selection["best_effort"];
-        result["trial_count"] = trial_results.size();
-        result["build_count"] = executed_build_count;
-        result["build_group_count"] = build_results.size();
+        result["trial_count"] = evaluation_result.trial_results.size();
+        result["build_count"] = evaluation_result.executed_build_count;
+        result["build_group_count"] = evaluation_result.build_results.size();
         result["failure"] = selection["failure"];
         if (options.include_trials) {
-            result["builds"] = build_results;
-            result["trials"] = trial_results;
+            result["builds"] = std::move(evaluation_result.build_results);
+            result["trials"] = std::move(evaluation_result.trial_results);
         }
 
         internal::WriteJsonFile(options.result_path, result);

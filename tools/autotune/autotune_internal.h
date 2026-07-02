@@ -68,6 +68,22 @@ struct AutoTunePlan {
     std::vector<TrialSpec> trials;
 };
 
+struct EvaluationResult {
+    std::vector<JsonType> build_results;
+    std::vector<JsonType> trial_results;
+    uint64_t executed_build_count{0};
+};
+
+class EvaluationStrategy {
+public:
+    virtual ~EvaluationStrategy() = default;
+
+    virtual EvaluationResult
+    Run(const AutoTunePlan& plan,
+        const JsonType& request,
+        const ExecutionOptions& options) const = 0;
+};
+
 double
 ElapsedSeconds(const Clock::time_point& start);
 
@@ -121,6 +137,9 @@ RunSearchTrial(const TrialSpec& trial,
 
 void
 CleanupBuildArtifact(const BuildSpec& build, const ExecutionOptions& options);
+
+const EvaluationStrategy&
+FullGridEvaluationStrategy();
 
 JsonType
 SelectResult(const std::vector<JsonType>& trials);

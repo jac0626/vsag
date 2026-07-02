@@ -20,6 +20,7 @@ set (autotune_srcs
     autotune_planner.cpp
     autotune_request.cpp
     autotune_result.cpp
+    autotune_strategy.cpp
     policies/hgraph_policy.cpp
     policies/ivf_policy.cpp)
 
