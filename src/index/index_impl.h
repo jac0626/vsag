@@ -63,6 +63,12 @@ public:
                                     "immutable index no support " operation_str)); \
     }
 
+#define CHECK_DESERIALIZE_EMPTY_INDEX                                                        \
+    if (GetNumElements() != 0) {                                                             \
+        return tl::unexpected(                                                               \
+            Error(ErrorType::INDEX_NOT_EMPTY, "failed to deserialize: index is not empty")); \
+    }
+
 #define CHECK_NONEMPTY_DATASET(dataset)     \
     if ((dataset)->GetNumElements() == 0) { \
         return std::vector<int64_t>();      \
@@ -159,16 +165,19 @@ public:
 
     tl::expected<void, Error>
     Deserialize(const BinarySet& binary_set) override {
+        CHECK_DESERIALIZE_EMPTY_INDEX;
         SAFE_CALL(this->inner_index_->Deserialize(binary_set));
     }
 
     tl::expected<void, Error>
     Deserialize(const ReaderSet& reader_set) override {
+        CHECK_DESERIALIZE_EMPTY_INDEX;
         SAFE_CALL(this->inner_index_->Deserialize(reader_set));
     }
 
     tl::expected<void, Error>
     Deserialize(std::istream& in_stream) override {
+        CHECK_DESERIALIZE_EMPTY_INDEX;
         SAFE_CALL(this->inner_index_->Deserialize(in_stream));
     }
 

@@ -1081,8 +1081,8 @@ TEST_CASE("(PR) HGraph Reasoning Zero Overhead When Disabled", "[ft][hgraph][rea
         std::chrono::duration_cast<std::chrono::microseconds>(end_no_reasoning - start_no_reasoning)
             .count();
 
-    double ratio =
-        static_cast<double>(no_reasoning_us) / static_cast<double>(std::max(baseline_us, 1L));
+    const auto baseline_denominator = std::max(baseline_us, decltype(baseline_us){1});
+    double ratio = static_cast<double>(no_reasoning_us) / static_cast<double>(baseline_denominator);
     REQUIRE(ratio < 1.5);
 }
 
