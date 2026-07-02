@@ -1,6 +1,6 @@
 # AutoTune API v1 草案
 
-状态：P6 草案，已对齐当前 `tools/autotune` 实现
+状态：设计草案，已对齐当前 `tools/autotune` 实现
 
 本文档定义 VSAG AutoTune 的用户输入、输出结果和执行语义。它不是公开稳定 API
 文档，当前用途是作为实现与评审的共同契约。后续 API 稳定后，再同步到
@@ -28,7 +28,7 @@ AutoTune 的第一阶段定位是：在现有 `eval_performance` 能力之上增
 - 不实现复杂优化器、学习型搜索、自动剪枝策略。
 - 不把 `Index::Tune()` 作为核心路径。
 - 不让系统在用户未指定索引集合时自动选择索引类型。
-- 不支持 query sampling、successive halving、分布式执行。
+- 不要求 query sampling、successive halving、分布式执行等成本优化策略。
 - 不支持自动调用 `Index::Tune()` 热修改已有索引。
 
 当前已实现能力：
@@ -42,6 +42,8 @@ AutoTune 的第一阶段定位是：在现有 `eval_performance` 能力之上增
 - 支持 `knn` search mode。
 - 支持 build 指标与 search 指标合并后的约束过滤。
 - 支持推荐结果选择、完整 build/trial 报告和结构化失败输出。
+- 支持实验性的 `query_sampling` evaluation strategy：先用部分 query 评估全部 trial，
+  再对 finalist 做 full query validation；最终推荐只来自 full validation。
 
 ## 2. 设计原则
 
@@ -303,7 +305,10 @@ index policy 不是“允许调参字段白名单”。它只说明用户缺失�
     "num_threads_searching": 48,
     "workspace_path": "/tmp/vsag_autotune",
     "keep_intermediate": false,
-    "max_trials": 1000
+    "max_trials": 1000,
+    "evaluation_strategy": "full_grid",
+    "sample_query_count": 1000,
+    "finalist_count": 8
   }
 }
 ```
@@ -314,12 +319,15 @@ index policy 不是“允许调参字段白名单”。它只说明用户缺失�
 | --- | --- | --- |
 | `top_k` | `10` | KNN topk。 |
 | `search_mode` | `knn` | 搜索模式。当前只支持 `knn`。 |
-| `search_query_count` | `0` | 参与评估的 query 数。`0` 表示使用 eval 默认的全量 query 行为。 |
+| `search_query_count` | `0` | eval 搜索评估的重复 query 数控制。`0` 在 AutoTune 中表示使用数据集全量 query；它不是 query sampling 语义。 |
 | `num_threads_building` | `1` | 构建线程数。 |
 | `num_threads_searching` | `1` | 搜索线程数。 |
 | `workspace_path` | `/tmp/vsag_autotune` | build artifact、eval 配置和中间结果目录。 |
 | `keep_intermediate` | `false` | 是否保留 build artifact 和 eval 配置。 |
 | `max_trials` | 无限制 | 候选组合数量上限。超过时 validation 失败。 |
+| `evaluation_strategy` | `full_grid` | 评估策略。当前支持 `full_grid` 和 `query_sampling`。 |
+| `sample_query_count` | `0` | `query_sampling` 策略的 sampled 阶段 query 数。 |
+| `finalist_count` | `1` | `query_sampling` 策略进入 full validation 的 finalist 数。 |
 
 ### 8.1 `search_mode`
 
@@ -335,6 +343,24 @@ index policy 不是“允许调参字段白名单”。它只说明用户缺失�
 - `range`
 - `knn_filter`
 - `range_filter`
+
+### 8.2 `evaluation_strategy`
+
+`evaluation_strategy` 决定一批 trial 如何被评估。当前支持：
+
+| 取值 | 说明 |
+| --- | --- |
+| `full_grid` | 默认策略。所有 trial 都跑 full query eval，是准确性 baseline。 |
+| `query_sampling` | 先用 `sample_query_count` 个 query 评估所有 trial，再选择 `finalist_count` 个 finalist 做 full query validation。 |
+
+`query_sampling` 的约束是：
+
+- sampled 结果只用于选择 finalist。
+- 最终 `recommendation` 只从 full validation trial 中选择。
+- 输出的 `trials[]` 会同时包含 sampled trial 和 full validation trial。
+- sampled trial 的 `evaluation_stage` 为 `sampled`。
+- full validation trial 的 `evaluation_stage` 为 `full_validation`。
+- `recommendation.evaluation_stage` 必须是 `full_validation`。
 
 ## 9. 执行类型推导
 
@@ -834,7 +860,7 @@ tools/autotune/examples/sift_hgraph_ivf_autotune_result_p5.json
 - `range`、`knn_filter`、`range_filter` 的完整验收。
 - 完整 index artifact 复用。
 - `Index::Tune()` 热修改闭环。
-- trial 剪枝、successive halving、query sampling。
+- trial 剪枝、successive halving。
 - 分布式执行。
 - 自动索引类型选择。
 

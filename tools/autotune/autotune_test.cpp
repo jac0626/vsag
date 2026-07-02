@@ -861,3 +861,99 @@ TEST_CASE("AutoTune runs real eval build-search integration for hgraph and ivf")
     std::filesystem::remove_all(workspace_path);
     std::remove(dataset_path.c_str());
 }
+
+TEST_CASE("AutoTune query sampling strategy validates finalists with full queries") {
+    const auto dataset_path =
+        (std::filesystem::temp_directory_path() / "vsag_autotune_sampling_eval_test.hdf5").string();
+    const auto workspace_path =
+        (std::filesystem::temp_directory_path() / "vsag_autotune_sampling_eval_workspace").string();
+    std::filesystem::remove_all(workspace_path);
+    WriteDenseEvalDataset(dataset_path);
+
+    auto request = R"({
+        "version": 1,
+        "data_path": "",
+        "indexes": [
+            {
+                "name": "hgraph",
+                "create_params": {
+                    "dim": 8,
+                    "dtype": "float32",
+                    "metric_type": "l2",
+                    "index_param": {
+                        "base_quantization_type": "fp32",
+                        "max_degree": [8, 16],
+                        "ef_construction": 40
+                    }
+                },
+                "search_params": {
+                    "hgraph": {
+                        "ef_search": [10, 20, 30]
+                    }
+                }
+            }
+        ],
+        "constraints": {
+            "recall_at_k": 0.0,
+            "latency_avg_ms": 1000.0,
+            "memory_peak_mb": 65536.0,
+            "build_seconds": 1000.0,
+            "index_size_mb": 1024.0
+        },
+        "execution": {
+            "top_k": 3,
+            "search_mode": "knn",
+            "search_query_count": 0,
+            "num_threads_building": 2,
+            "num_threads_searching": 2,
+            "workspace_path": "",
+            "keep_intermediate": false,
+            "max_trials": 6,
+            "evaluation_strategy": "query_sampling",
+            "sample_query_count": 4,
+            "finalist_count": 2
+        },
+        "output": {
+            "include_trials": true
+        }
+    })"_json;
+    request["data_path"] = dataset_path;
+    request["execution"]["workspace_path"] = workspace_path;
+
+    auto result = vsag::autotune::RunAutoTune(request);
+    REQUIRE(result["status"] == "success");
+    REQUIRE(result["evaluation_strategy"]["name"] == "query_sampling");
+    REQUIRE(result["evaluation_strategy"]["sample_query_count"] == 4);
+    REQUIRE(result["evaluation_strategy"]["finalist_count"] == 2);
+    REQUIRE(result["evaluation_strategy"]["sampled_trial_count"] == 6);
+    REQUIRE(result["evaluation_strategy"]["full_validation_trial_count"] == 2);
+    REQUIRE(result["build_count"] == 2);
+    REQUIRE(result["build_group_count"] == 2);
+    REQUIRE(result["trial_count"] == 8);
+    REQUIRE(result["trials"].size() == 8);
+    REQUIRE(result["recommendation"].is_object());
+    REQUIRE(result["recommendation"]["evaluation_stage"] == "full_validation");
+
+    uint64_t sampled_count = 0;
+    uint64_t full_validation_count = 0;
+    for (const auto& trial : result["trials"]) {
+        REQUIRE(trial["status"] == "success");
+        REQUIRE(trial.contains("evaluation_stage"));
+        if (trial["evaluation_stage"] == "sampled") {
+            ++sampled_count;
+            REQUIRE(trial["trial_id"].get<std::string>().find("-sampled") != std::string::npos);
+            REQUIRE(trial["query_limit_count"] == 4);
+            REQUIRE(trial["raw_eval_result"]["search"]["statistics_query_count"] == 4);
+        } else if (trial["evaluation_stage"] == "full_validation") {
+            ++full_validation_count;
+            REQUIRE_FALSE(trial["trial_id"].get<std::string>().find("-sampled") !=
+                          std::string::npos);
+            REQUIRE(trial["raw_eval_result"]["search"]["statistics_query_count"] == 8);
+        }
+    }
+    REQUIRE(sampled_count == 6);
+    REQUIRE(full_validation_count == 2);
+
+    std::filesystem::remove_all(workspace_path);
+    std::remove(dataset_path.c_str());
+}

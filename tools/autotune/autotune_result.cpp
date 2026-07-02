@@ -73,12 +73,16 @@ BestEffortLess(const JsonType& left, const JsonType& right) {
 
 JsonType
 MakeRecommendation(const JsonType& trial, const std::string& reason) {
-    return JsonType{{"trial_id", trial["trial_id"]},
-                    {"index_name", trial["index_name"]},
-                    {"create_params", trial["create_params"]},
-                    {"search_params", trial["search_params"]},
-                    {"metrics", trial["metrics"]},
-                    {"selection_reason", reason}};
+    JsonType recommendation = JsonType{{"trial_id", trial["trial_id"]},
+                                       {"index_name", trial["index_name"]},
+                                       {"create_params", trial["create_params"]},
+                                       {"search_params", trial["search_params"]},
+                                       {"metrics", trial["metrics"]},
+                                       {"selection_reason", reason}};
+    if (trial.contains("evaluation_stage")) {
+        recommendation["evaluation_stage"] = trial["evaluation_stage"];
+    }
+    return recommendation;
 }
 
 }  // namespace

@@ -17,6 +17,7 @@
 
 #include <omp.h>
 
+#include <algorithm>
 #include <cstdio>
 #include <cstdlib>
 #include <fstream>
@@ -31,6 +32,18 @@
 #include "vsag_exception.h"
 
 namespace vsag::eval {
+
+namespace {
+
+uint64_t
+GetRunQueryCount(uint64_t query_count, const EvalConfig& config) {
+    if (config.query_limit_count > 0) {
+        return std::min(query_count, config.query_limit_count);
+    }
+    return std::max(query_count, config.search_query_count);
+}
+
+}  // namespace
 
 class FilterObj : public vsag::Filter {
 public:
@@ -155,7 +168,7 @@ SearchEvalCase::do_knn_search() {
     uint64_t topk = config_.top_k;
     auto query_count = this->dataset_ptr_->GetNumberOfQuery();
     this->logger_->Debug("query count is " + std::to_string(query_count));
-    auto min_query = std::max(static_cast<uint64_t>(query_count), config_.search_query_count);
+    auto min_query = GetRunQueryCount(static_cast<uint64_t>(query_count), config_);
     for (uint64_t monitor_id = 0; monitor_id < this->monitors_.size(); ++monitor_id) {
         auto& monitor = this->monitors_[monitor_id];
         const bool collect_statistics = monitor_id == 0;

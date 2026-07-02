@@ -29,11 +29,15 @@ struct ExecutionOptions {
     int top_k{10};
     std::string search_mode{"knn"};
     uint64_t search_query_count{0};
+    uint64_t query_limit_count{0};
     int32_t num_threads_building{1};
     int32_t num_threads_searching{1};
     std::string workspace_path{"/tmp/vsag_autotune"};
     bool keep_intermediate{false};
     uint64_t max_trials{0};
+    std::string evaluation_strategy{"full_grid"};
+    uint64_t sample_query_count{0};
+    uint64_t finalist_count{1};
     bool include_trials{true};
     std::string result_path;
 };
@@ -71,7 +75,9 @@ struct AutoTunePlan {
 struct EvaluationResult {
     std::vector<JsonType> build_results;
     std::vector<JsonType> trial_results;
+    std::vector<JsonType> selection_trial_results;
     uint64_t executed_build_count{0};
+    JsonType strategy_report{JsonType::object()};
 };
 
 class EvaluationStrategy {
@@ -140,6 +146,12 @@ CleanupBuildArtifact(const BuildSpec& build, const ExecutionOptions& options);
 
 const EvaluationStrategy&
 FullGridEvaluationStrategy();
+
+const EvaluationStrategy&
+QuerySamplingEvaluationStrategy();
+
+const EvaluationStrategy&
+GetEvaluationStrategy(const ExecutionOptions& options);
 
 JsonType
 SelectResult(const std::vector<JsonType>& trials);

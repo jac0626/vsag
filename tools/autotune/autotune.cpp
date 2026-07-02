@@ -38,11 +38,12 @@ RunAutoTune(const JsonType& request) {
         elapsed_breakdown["candidate_generation"] = internal::ElapsedSeconds(candidate_start);
 
         const auto evaluation_start = internal::Clock::now();
-        auto evaluation_result = internal::FullGridEvaluationStrategy().Run(plan, request, options);
+        auto evaluation_result =
+            internal::GetEvaluationStrategy(options).Run(plan, request, options);
         elapsed_breakdown["evaluation"] = internal::ElapsedSeconds(evaluation_start);
 
         const auto selection_start = internal::Clock::now();
-        auto selection = internal::SelectResult(evaluation_result.trial_results);
+        auto selection = internal::SelectResult(evaluation_result.selection_trial_results);
         elapsed_breakdown["selection"] = internal::ElapsedSeconds(selection_start);
 
         JsonType result;
@@ -55,6 +56,7 @@ RunAutoTune(const JsonType& request) {
         result["trial_count"] = evaluation_result.trial_results.size();
         result["build_count"] = evaluation_result.executed_build_count;
         result["build_group_count"] = evaluation_result.build_results.size();
+        result["evaluation_strategy"] = evaluation_result.strategy_report;
         result["failure"] = selection["failure"];
         if (options.include_trials) {
             result["builds"] = std::move(evaluation_result.build_results);

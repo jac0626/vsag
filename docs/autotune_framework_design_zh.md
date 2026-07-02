@@ -67,7 +67,7 @@ V1 不解决以下问题：
 
 - 不承诺比人工网格搜索更快。
 - 不实现机器学习候选生成。
-- 不实现 query sampling、successive halving、Hyperband 或 Bayesian optimization。
+- 不要求 query sampling、successive halving、Hyperband 或 Bayesian optimization 等成本优化。
 - 不实现自动选择索引类型。
 - 不把 `Index::Tune()` 作为核心路径。
 - 不实现跨请求完整 index artifact 复用。
@@ -235,7 +235,7 @@ AutoTuneRequest
 | Request | `tools/autotune/autotune_request.cpp` | 校验 request，解析 execution/output。 |
 | Planner | `tools/autotune/autotune_planner.cpp` | 展开候选，生成 build group 和 search trial。 |
 | Evaluation | `tools/autotune/autotune_evaluation.cpp` | 调用 eval，提取并合并指标，计算约束。 |
-| Strategy | `tools/autotune/autotune_strategy.cpp` | 执行 `EvaluationStrategy`，当前为 full grid。 |
+| Strategy | `tools/autotune/autotune_strategy.cpp` | 执行 `EvaluationStrategy`，当前支持 `full_grid` 和 `query_sampling`。 |
 | Result | `tools/autotune/autotune_result.cpp` | 选择推荐结果，写 JSON。 |
 | Policy registry | `tools/autotune/autotune_index_policy.cpp` | 管理 index policy 映射和通用默认补齐。 |
 | HGraph policy | `tools/autotune/policies/hgraph_policy.cpp` | HGraph 默认候选和基础校验。 |
@@ -255,6 +255,9 @@ AutoTuneRequest
 - `workspace_path`
 - `keep_intermediate`
 - `max_trials`
+- `evaluation_strategy`
+- `sample_query_count`
+- `finalist_count`
 - `include_trials`
 - `result_path`
 
@@ -445,7 +448,13 @@ create_params/index_param/ivf_train_type          -> "kmeans"
 
 `EvaluationStrategy` 决定一批 trial 如何被评估。
 
-当前唯一实现是 `FullGridEvaluationStrategy`：
+当前实现包含两个策略：
+
+- `FullGridEvaluationStrategy`：默认策略，也是准确性 baseline。
+- `QuerySamplingEvaluationStrategy`：V2 初始优化策略，先 sampled eval，再 full validate
+  finalists。
+
+`FullGridEvaluationStrategy`：
 
 ```text
 for each BuildSpec:
@@ -456,7 +465,19 @@ for each BuildSpec:
   cleanup build artifact when needed
 ```
 
-这个抽象是后续 query sampling、successive halving、ML 迭代搜索等能力的插入点。
+`QuerySamplingEvaluationStrategy`：
+
+```text
+for each BuildSpec:
+  run build once or mark existing index
+  run every TrialSpec(search) with sample_query_count
+select finalists from sampled trial results
+run finalists with full queries
+select final recommendation only from full validation results
+cleanup build artifact when needed
+```
+
+这个抽象是后续 successive halving、ML 迭代搜索等能力的插入点。
 
 ### 7.7 Evaluation runner
 
@@ -691,7 +712,6 @@ V1 的验收标准是“自动化闭环可用”，不是“调参成本已经�
 
 当前 V1 不要求：
 
-- query sampling。
 - successive halving。
 - 机器学习候选生成。
 - 自动剪枝。
@@ -702,28 +722,49 @@ V1 的验收标准是“自动化闭环可用”，不是“调参成本已经�
 
 ## 11. 当前状态与未决问题
 
-当前实现已经具备 V1 自动化闭环。后续进入 V2 前，应优先处理以下问题。
+当前实现已经具备 V1 自动化闭环，并实现了 V2 的第一种优化策略
+`query_sampling`。后续继续 V2 时，应优先处理以下问题。
 
-### 11.1 Strategy 选择入口
+### 11.1 与 baseline 的质量对比
 
-当前代码已经抽出 `EvaluationStrategy`，但只有 `FullGridEvaluationStrategy`。后续增加
-其他策略前，需要定义 request 中如何选择 strategy，以及默认值如何保持兼容。
+`full_grid` 是准确性 baseline。任何优化策略都必须报告：
+
+- 端到端耗时对比。
+- evaluation 阶段耗时对比。
+- 推荐 trial 是否一致。
+- full validation recall 与 baseline recall 的差异。
+- full validation latency 与 baseline latency 的差异。
+- 是否仍满足 baseline 中声明的硬约束。
 
 ### 11.2 多阶段结果结构
 
-query sampling 和 successive halving 会产生 sampled、round、full validation 等多阶段
-结果。需要设计 `trials` 中如何表达阶段、预算和最终验证关系。
+当前 `query_sampling` 已使用 `evaluation_stage = sampled/full_validation` 表达两阶段结果。
+后续 successive halving 还需要表达 round、budget、晋级关系和最终验证关系。
 
-### 11.3 eval query sampling 语义
+### 11.3 per-trial index 准备开销
 
-当前 eval 的 `search_query_count` 不能表达稳定 query sampling。后续需要明确：
+真实 SIFT 对比中，`query_sampling` 能减少 full query validation 的 trial 数量，并且最终
+recommendation 来自 full validation；但端到端 wall time 提升很小。原因是当前 search
+trial 的 wall time 主要消耗在每个 trial 的 index 准备/加载和 eval 固定开销上，真实
+query loop 只占较小部分。
 
-- eval 原生支持 query subset。
-- 或 AutoTune 生成临时 sampled dataset。
+因此 V2 下一步不应只继续调小 `sample_query_count`，而应优先做 search trial 级别的
+artifact/loaded-index 复用，让同一个 build group 下的多个 search 参数候选在一次 index
+加载后完成评估。否则 query sampling 对 wall time 的收益会被固定开销抵消。
 
-无论采用哪种方式，最终 recommendation 必须经过 full query validation。
+### 11.4 eval query sampling 语义
 
-### 11.4 index policy 合法性校验
+当前 AutoTune 通过 eval 内部 `query_limit_count` 支持 deterministic query prefix subset。
+后续如果需要更强采样语义，应继续明确：
+
+- 是否支持随机 query subset。
+- 是否支持 seed。
+- 是否支持分层采样。
+- 是否由 eval 原生支持，还是由 AutoTune 生成临时 sampled dataset。
+
+无论采用哪种方式，最终 recommendation 都必须经过 full query validation。
+
+### 11.5 index policy 合法性校验
 
 当前 HGraph 和 IVF policy 主要维护默认候选和基础 create 参数校验。后续应逐步补充
 明显非法组合过滤，但不能把 policy 变成用户显式候选的白名单。

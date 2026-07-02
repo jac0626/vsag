@@ -50,12 +50,26 @@ ParseExecutionOptions(const JsonType& request) {
     options.workspace_path = GetString(execution, "workspace_path", options.workspace_path);
     options.keep_intermediate = GetBool(execution, "keep_intermediate", options.keep_intermediate);
     options.max_trials = GetUInt64(execution, "max_trials", options.max_trials);
+    options.evaluation_strategy =
+        GetString(execution, "evaluation_strategy", options.evaluation_strategy);
+    options.sample_query_count =
+        GetUInt64(execution, "sample_query_count", options.sample_query_count);
+    options.finalist_count = GetUInt64(execution, "finalist_count", options.finalist_count);
 
     Require(options.top_k > 0, "execution.top_k must be positive");
     Require(options.num_threads_building > 0, "execution.num_threads_building must be positive");
     Require(options.num_threads_searching > 0, "execution.num_threads_searching must be positive");
     Require(options.search_mode == "knn",
             "execution.search_mode is unsupported: " + options.search_mode);
+    Require(options.evaluation_strategy == "full_grid" ||
+                options.evaluation_strategy == "query_sampling",
+            "execution.evaluation_strategy is unsupported: " + options.evaluation_strategy);
+    if (options.evaluation_strategy == "query_sampling") {
+        Require(options.sample_query_count > 0,
+                "execution.sample_query_count must be positive for query_sampling");
+        Require(options.finalist_count > 0,
+                "execution.finalist_count must be positive for query_sampling");
+    }
 
     const JsonType output = request.contains("output") ? request["output"] : JsonType::object();
     Require(output.is_object(), "output must be an object");

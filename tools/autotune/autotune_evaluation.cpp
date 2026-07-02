@@ -188,6 +188,7 @@ MakeEvalConfig(const std::string& action_type,
     config.search_mode = options.search_mode;
     config.top_k = options.top_k;
     config.search_query_count = options.search_query_count;
+    config.query_limit_count = options.query_limit_count;
     config.num_threads_building = options.num_threads_building;
     config.num_threads_searching = options.num_threads_searching;
     config.delete_index_after_search = false;
