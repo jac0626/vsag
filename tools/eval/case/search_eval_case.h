@@ -35,6 +35,9 @@ public:
     JsonType
     Run() override;
 
+    JsonType
+    RunWithSearchParam(const std::string& search_param);
+
 private:
     enum SearchType {
         KNN,
@@ -57,6 +60,15 @@ private:
 
     void
     deserialize(std::ifstream& infile);
+
+    void
+    load_index_once();
+
+    JsonType
+    run_search_once();
+
+    void
+    reset_run_state();
 
     void
     do_knn_search();
@@ -88,6 +100,11 @@ private:
     SearchType search_type_{SearchType::KNN};
 
     EvalConfig config_;
+
+    bool index_loaded_{false};
+    uint64_t index_deserialize_count_{0};
+    uint64_t search_run_ordinal_{0};
+    uint64_t memory_monitor_baseline_pages_{0};
 
     std::atomic<uint64_t> statistics_query_count_{0};
     std::atomic<uint64_t> statistics_dist_cmp_{0};

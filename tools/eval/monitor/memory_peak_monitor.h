@@ -28,7 +28,12 @@ class MemoryPeakMonitor : public Monitor {
 public:
     explicit MemoryPeakMonitor(const std::string& name);
 
+    MemoryPeakMonitor(const std::string& name, uint64_t init_memory_pages);
+
     ~MemoryPeakMonitor() override = default;
+
+    static uint64_t
+    GetCurrentResidentPages();
 
     void
     Start() override;

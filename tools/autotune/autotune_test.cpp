@@ -23,6 +23,7 @@
 #include <filesystem>
 #include <fstream>
 #include <map>
+#include <set>
 #include <vector>
 
 #include "autotune_index_policy.h"
@@ -732,6 +733,7 @@ TEST_CASE("AutoTune runs real eval build-search integration for hgraph and ivf")
     uint64_t search_count = 0;
     uint64_t failed_count = 0;
     std::map<std::string, uint64_t> trial_count_by_build_id;
+    std::map<std::string, std::set<uint64_t>> search_run_ordinals_by_build_id;
     for (const auto& trial : result["trials"]) {
         if (trial["index_name"] == "hgraph") {
             ++hgraph_count;
@@ -759,6 +761,10 @@ TEST_CASE("AutoTune runs real eval build-search integration for hgraph and ivf")
         ++trial_count_by_build_id[build_id];
         REQUIRE(trial["raw_eval_result"]["build"] == build["raw_eval_result"]);
         REQUIRE(trial["raw_eval_result"]["search"].is_object());
+        REQUIRE(trial["artifacts"]["search_index_reuse_scope"] == "build_group");
+        REQUIRE(trial["raw_eval_result"]["search"]["index_deserialize_count"] == 1);
+        search_run_ordinals_by_build_id[build_id].emplace(
+            trial["raw_eval_result"]["search"]["search_run_ordinal"].get<uint64_t>());
         REQUIRE(trial["metrics"]["build_seconds"] == build["metrics"]["build_seconds"]);
         REQUIRE(trial["metrics"]["index_size_mb"] == build["metrics"]["index_size_mb"]);
         REQUIRE(trial["metrics"]["memory_peak_mb"].get<double>() >=
@@ -771,6 +777,10 @@ TEST_CASE("AutoTune runs real eval build-search integration for hgraph and ivf")
     REQUIRE(trial_count_by_build_id.size() == 8);
     for (const auto& item : trial_count_by_build_id) {
         REQUIRE(item.second == 3);
+    }
+    REQUIRE(search_run_ordinals_by_build_id.size() == 8);
+    for (const auto& item : search_run_ordinals_by_build_id) {
+        REQUIRE(item.second == std::set<uint64_t>{1, 2, 3});
     }
 
     const auto existing_index_path =
@@ -829,13 +839,18 @@ TEST_CASE("AutoTune runs real eval build-search integration for hgraph and ivf")
     REQUIRE(existing_result["builds"][0]["metrics"].contains("index_size_mb"));
     REQUIRE_FALSE(existing_result["builds"][0]["metrics"].contains("build_seconds"));
     REQUIRE(existing_result["trials"].size() == 2);
+    std::set<uint64_t> existing_search_run_ordinals;
     for (const auto& trial : existing_result["trials"]) {
         REQUIRE(trial["status"] == "success");
         REQUIRE(trial["eval_type"] == "search");
         REQUIRE(trial["build_id"] == existing_result["builds"][0]["build_id"]);
         REQUIRE(trial["artifacts"]["index_path"] == existing_index_path);
+        REQUIRE(trial["artifacts"]["search_index_reuse_scope"] == "build_group");
         REQUIRE(trial["raw_eval_result"]["build"].is_null());
         REQUIRE(trial["raw_eval_result"]["search"].is_object());
+        REQUIRE(trial["raw_eval_result"]["search"]["index_deserialize_count"] == 1);
+        existing_search_run_ordinals.emplace(
+            trial["raw_eval_result"]["search"]["search_run_ordinal"].get<uint64_t>());
         REQUIRE(trial["metrics"].contains("recall_at_k"));
         REQUIRE(trial["metrics"].contains("latency_avg_ms"));
         REQUIRE(trial["metrics"].contains("memory_peak_mb"));
@@ -843,6 +858,7 @@ TEST_CASE("AutoTune runs real eval build-search integration for hgraph and ivf")
         REQUIRE_FALSE(trial["metrics"].contains("build_seconds"));
         REQUIRE(trial["satisfied_constraints"] == true);
     }
+    REQUIRE(existing_search_run_ordinals == std::set<uint64_t>{1, 2});
 
     existing_request["constraints"]["build_seconds"] = 1000.0;
     auto existing_build_seconds_result = vsag::autotune::RunAutoTune(existing_request);
@@ -927,6 +943,7 @@ TEST_CASE("AutoTune query sampling strategy validates finalists with full querie
     REQUIRE(result["evaluation_strategy"]["finalist_count"] == 2);
     REQUIRE(result["evaluation_strategy"]["sampled_trial_count"] == 6);
     REQUIRE(result["evaluation_strategy"]["full_validation_trial_count"] == 2);
+    REQUIRE(result["evaluation_strategy"]["search_index_reuse_scope"] == "build_group");
     REQUIRE(result["build_count"] == 2);
     REQUIRE(result["build_group_count"] == 2);
     REQUIRE(result["trial_count"] == 8);
@@ -936,14 +953,19 @@ TEST_CASE("AutoTune query sampling strategy validates finalists with full querie
 
     uint64_t sampled_count = 0;
     uint64_t full_validation_count = 0;
+    std::map<std::string, std::set<uint64_t>> sampled_search_run_ordinals_by_build_id;
     for (const auto& trial : result["trials"]) {
         REQUIRE(trial["status"] == "success");
         REQUIRE(trial.contains("evaluation_stage"));
+        REQUIRE(trial["artifacts"]["search_index_reuse_scope"] == "build_group");
+        REQUIRE(trial["raw_eval_result"]["search"]["index_deserialize_count"] == 1);
         if (trial["evaluation_stage"] == "sampled") {
             ++sampled_count;
             REQUIRE(trial["trial_id"].get<std::string>().find("-sampled") != std::string::npos);
             REQUIRE(trial["query_limit_count"] == 4);
             REQUIRE(trial["raw_eval_result"]["search"]["statistics_query_count"] == 4);
+            sampled_search_run_ordinals_by_build_id[trial["build_id"].get<std::string>()].emplace(
+                trial["raw_eval_result"]["search"]["search_run_ordinal"].get<uint64_t>());
         } else if (trial["evaluation_stage"] == "full_validation") {
             ++full_validation_count;
             REQUIRE_FALSE(trial["trial_id"].get<std::string>().find("-sampled") !=
@@ -953,6 +975,10 @@ TEST_CASE("AutoTune query sampling strategy validates finalists with full querie
     }
     REQUIRE(sampled_count == 6);
     REQUIRE(full_validation_count == 2);
+    REQUIRE(sampled_search_run_ordinals_by_build_id.size() == 2);
+    for (const auto& item : sampled_search_run_ordinals_by_build_id) {
+        REQUIRE(item.second == std::set<uint64_t>{1, 2, 3});
+    }
 
     std::filesystem::remove_all(workspace_path);
     std::remove(dataset_path.c_str());

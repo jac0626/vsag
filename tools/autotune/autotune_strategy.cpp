@@ -126,15 +126,18 @@ public:
                       << std::endl;
 
             const auto& group_trials = trials_by_build_id[build.build_id];
-            for (const auto& trial : group_trials) {
+            if (!group_trials.empty()) {
+                std::cerr << "[AutoTune] running " << group_trials.size()
+                          << " trials with reusable search index for build group " << build.build_id
+                          << std::endl;
+            }
+            auto trial_results = RunSearchTrials(
+                group_trials, build_result, request, request["constraints"], options);
+            for (auto& trial_result : trial_results) {
                 ++trial_ordinal;
-                std::cerr << "[AutoTune] running trial " << trial_ordinal << "/"
-                          << plan.trials.size() << " " << trial.trial_id
-                          << " index=" << trial.index_name << " eval_type=" << trial.eval_type
-                          << " build_id=" << trial.build_id << std::endl;
-                auto trial_result =
-                    RunSearchTrial(trial, build_result, request, request["constraints"], options);
-                std::cerr << "[AutoTune] finished trial " << trial.trial_id
+                std::cerr << "[AutoTune] finished trial " << trial_ordinal << "/"
+                          << plan.trials.size() << " "
+                          << trial_result["trial_id"].get<std::string>()
                           << " status=" << trial_result["status"].get<std::string>()
                           << " elapsed_seconds=" << trial_result["elapsed_seconds"].get<double>()
                           << std::endl;
@@ -146,7 +149,8 @@ public:
         }
 
         result.selection_trial_results = result.trial_results;
-        result.strategy_report = JsonType{{"name", "full_grid"}};
+        result.strategy_report =
+            JsonType{{"name", "full_grid"}, {"search_index_reuse_scope", "build_group"}};
         return result;
     }
 };
@@ -191,16 +195,19 @@ public:
             const auto& group_trials = trials_by_build_id[build.build_id];
             ExecutionOptions sampled_options = options;
             sampled_options.query_limit_count = options.sample_query_count;
-            for (const auto& trial : group_trials) {
+            if (!group_trials.empty()) {
+                std::cerr << "[AutoTune] running " << group_trials.size()
+                          << " sampled trials with reusable search index for build group "
+                          << build.build_id << " sample_query_count=" << options.sample_query_count
+                          << std::endl;
+            }
+            auto trial_results = RunSearchTrials(
+                group_trials, build_result, request, request["constraints"], sampled_options);
+            for (auto& trial_result : trial_results) {
                 ++trial_ordinal;
-                std::cerr << "[AutoTune] running sampled trial " << trial_ordinal << "/"
-                          << plan.trials.size() << " " << trial.trial_id
-                          << " index=" << trial.index_name << " build_id=" << trial.build_id
-                          << " sample_query_count=" << options.sample_query_count << std::endl;
-                auto trial_result = RunSearchTrial(
-                    trial, build_result, request, request["constraints"], sampled_options);
-                trial_result["candidate_trial_id"] = trial.trial_id;
-                trial_result["trial_id"] = trial.trial_id + "-sampled";
+                const auto candidate_trial_id = trial_result["trial_id"].get<std::string>();
+                trial_result["candidate_trial_id"] = candidate_trial_id;
+                trial_result["trial_id"] = candidate_trial_id + "-sampled";
                 trial_result["evaluation_stage"] = "sampled";
                 trial_result["query_limit_count"] = options.sample_query_count;
                 std::cerr << "[AutoTune] finished sampled trial "
@@ -219,7 +226,8 @@ public:
 
         auto finalists = SelectSampledFinalists(sampled_results, options.finalist_count);
         std::set<std::string> validated_trial_ids;
-        uint64_t finalist_ordinal = 0;
+        std::map<std::string, std::vector<TrialSpec>> validation_trials_by_build_id;
+        std::map<std::string, std::string> sampled_trial_id_by_candidate_id;
         for (const auto& sampled_finalist : finalists) {
             const auto candidate_trial_id =
                 sampled_finalist["candidate_trial_id"].get<std::string>();
@@ -229,24 +237,36 @@ public:
             validated_trial_ids.emplace(candidate_trial_id);
 
             const auto& trial = trials_by_trial_id.at(candidate_trial_id);
-            const auto& build_result = build_results_by_id.at(trial.build_id);
-            ++finalist_ordinal;
-            std::cerr << "[AutoTune] running full validation trial " << finalist_ordinal << "/"
-                      << finalists.size() << " " << trial.trial_id << " index=" << trial.index_name
-                      << " build_id=" << trial.build_id << std::endl;
-            ExecutionOptions full_options = options;
-            full_options.query_limit_count = 0;
-            auto trial_result =
-                RunSearchTrial(trial, build_result, request, request["constraints"], full_options);
-            trial_result["evaluation_stage"] = "full_validation";
-            trial_result["selected_by_sampled_trial_id"] = sampled_finalist["trial_id"];
-            std::cerr << "[AutoTune] finished full validation trial " << trial.trial_id
-                      << " status=" << trial_result["status"].get<std::string>()
-                      << " elapsed_seconds=" << trial_result["elapsed_seconds"].get<double>()
-                      << std::endl;
+            validation_trials_by_build_id[trial.build_id].emplace_back(trial);
+            sampled_trial_id_by_candidate_id.emplace(
+                candidate_trial_id, sampled_finalist["trial_id"].get<std::string>());
+        }
 
-            result.selection_trial_results.emplace_back(trial_result);
-            result.trial_results.emplace_back(std::move(trial_result));
+        uint64_t finalist_ordinal = 0;
+        ExecutionOptions full_options = options;
+        full_options.query_limit_count = 0;
+        for (const auto& [build_id, validation_trials] : validation_trials_by_build_id) {
+            const auto& build_result = build_results_by_id.at(build_id);
+            std::cerr << "[AutoTune] running " << validation_trials.size()
+                      << " full validation trials with reusable search index for build group "
+                      << build_id << std::endl;
+            auto validation_results = RunSearchTrials(
+                validation_trials, build_result, request, request["constraints"], full_options);
+            for (auto& trial_result : validation_results) {
+                ++finalist_ordinal;
+                const auto candidate_trial_id = trial_result["trial_id"].get<std::string>();
+                trial_result["evaluation_stage"] = "full_validation";
+                trial_result["selected_by_sampled_trial_id"] =
+                    sampled_trial_id_by_candidate_id.at(candidate_trial_id);
+                std::cerr << "[AutoTune] finished full validation trial " << finalist_ordinal << "/"
+                          << validated_trial_ids.size() << " " << candidate_trial_id
+                          << " status=" << trial_result["status"].get<std::string>()
+                          << " elapsed_seconds=" << trial_result["elapsed_seconds"].get<double>()
+                          << std::endl;
+
+                result.selection_trial_results.emplace_back(trial_result);
+                result.trial_results.emplace_back(std::move(trial_result));
+            }
         }
 
         for (const auto& build : plan.builds) {
@@ -258,7 +278,8 @@ public:
                      {"sample_query_count", options.sample_query_count},
                      {"finalist_count", options.finalist_count},
                      {"sampled_trial_count", sampled_results.size()},
-                     {"full_validation_trial_count", result.selection_trial_results.size()}};
+                     {"full_validation_trial_count", result.selection_trial_results.size()},
+                     {"search_index_reuse_scope", "build_group"}};
         return result;
     }
 };

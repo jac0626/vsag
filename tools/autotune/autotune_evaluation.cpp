@@ -20,6 +20,7 @@
 
 #include "autotune_internal.h"
 #include "case/eval_case.h"
+#include "case/search_eval_case.h"
 #include "eval_config.h"
 #include "vsag/options.h"
 
@@ -210,6 +211,53 @@ IsSuccessfulBuild(const JsonType& build_result) {
            build_result["status"] == "success";
 }
 
+JsonType
+MakeTrialResultShell(const TrialSpec& trial) {
+    JsonType trial_result;
+    trial_result["trial_id"] = trial.trial_id;
+    trial_result["build_id"] = trial.build_id;
+    trial_result["index_name"] = trial.index_name;
+    trial_result["eval_type"] = trial.eval_type;
+    trial_result["create_params"] = trial.create_params;
+    trial_result["search_params"] = trial.search_params;
+    trial_result["artifacts"] =
+        JsonType{{"index_path", trial.index_path}, {"search_index_reuse_scope", "build_group"}};
+    return trial_result;
+}
+
+void
+FillFailedTrialResult(JsonType& trial_result,
+                      const JsonType& build_result,
+                      const std::string& message,
+                      const Clock::time_point& start) {
+    trial_result["status"] = "failed";
+    trial_result["metrics"] = BuildMetricsFromResult(build_result);
+    trial_result["raw_eval_result"] = JsonType{
+        {"build", build_result.value("raw_eval_result", JsonType(nullptr))}, {"search", nullptr}};
+    trial_result["satisfied_constraints"] = false;
+    trial_result["violated_constraints"] = JsonType::array();
+    trial_result["failure"] = message;
+    trial_result["elapsed_seconds"] = ElapsedSeconds(start);
+}
+
+void
+RequireSameBuildGroup(const std::vector<TrialSpec>& trials) {
+    if (trials.empty()) {
+        return;
+    }
+    const auto& first = trials.front();
+    for (const auto& trial : trials) {
+        Require(trial.build_id == first.build_id,
+                "RunSearchTrials requires trials from the same build group");
+        Require(trial.index_name == first.index_name,
+                "RunSearchTrials requires trials from the same index");
+        Require(trial.index_path == first.index_path,
+                "RunSearchTrials requires trials from the same index artifact");
+        Require(trial.create_params == first.create_params,
+                "RunSearchTrials requires trials with the same create_params");
+    }
+}
+
 }  // namespace
 
 JsonType
@@ -269,67 +317,87 @@ RunSearchTrial(const TrialSpec& trial,
                const JsonType& request,
                const JsonType& constraints,
                const ExecutionOptions& options) {
-    JsonType trial_result;
-    trial_result["trial_id"] = trial.trial_id;
-    trial_result["build_id"] = trial.build_id;
-    trial_result["index_name"] = trial.index_name;
-    trial_result["eval_type"] = trial.eval_type;
-    trial_result["create_params"] = trial.create_params;
-    trial_result["search_params"] = trial.search_params;
-    trial_result["artifacts"] = JsonType{{"index_path", trial.index_path}};
+    auto results =
+        RunSearchTrials(std::vector<TrialSpec>{trial}, build_result, request, constraints, options);
+    return std::move(results.front());
+}
 
-    const auto start = Clock::now();
-    try {
-        const auto build_metrics = BuildMetricsFromResult(build_result);
-        if (!IsSuccessfulBuild(build_result)) {
-            trial_result["status"] = "failed";
-            trial_result["metrics"] = build_metrics;
-            trial_result["raw_eval_result"] =
-                JsonType{{"build", build_result.value("raw_eval_result", JsonType(nullptr))},
-                         {"search", nullptr}};
-            trial_result["satisfied_constraints"] = false;
-            trial_result["violated_constraints"] = JsonType::array();
-            trial_result["failure"] =
-                "build failed: " + build_result.value("failure", std::string("unknown error"));
-            trial_result["elapsed_seconds"] = ElapsedSeconds(start);
-            return trial_result;
+std::vector<JsonType>
+RunSearchTrials(const std::vector<TrialSpec>& trials,
+                const JsonType& build_result,
+                const JsonType& request,
+                const JsonType& constraints,
+                const ExecutionOptions& options) {
+    std::vector<JsonType> results;
+    results.reserve(trials.size());
+    if (trials.empty()) {
+        return results;
+    }
+    RequireSameBuildGroup(trials);
+
+    const auto build_metrics = BuildMetricsFromResult(build_result);
+    if (!IsSuccessfulBuild(build_result)) {
+        const auto message =
+            "build failed: " + build_result.value("failure", std::string("unknown error"));
+        for (const auto& trial : trials) {
+            const auto start = Clock::now();
+            auto trial_result = MakeTrialResultShell(trial);
+            FillFailedTrialResult(trial_result, build_result, message, start);
+            results.emplace_back(std::move(trial_result));
         }
+        return results;
+    }
 
+    std::shared_ptr<eval::SearchEvalCase> search_eval_case;
+    try {
+        const auto& first_trial = trials.front();
         auto config = MakeEvalConfig("search",
-                                     trial.index_name,
-                                     trial.create_params,
-                                     trial.index_path,
-                                     trial.search_params,
+                                     first_trial.index_name,
+                                     first_trial.create_params,
+                                     first_trial.index_path,
+                                     JsonType::object(),
                                      request,
                                      options);
         vsag::Options::Instance().logger()->SetLevel(vsag::Logger::kOFF);
         vsag::Options::Instance().set_num_threads_building(config.num_threads_building);
         auto eval_case = eval::EvalCase::MakeInstance(config);
-        Require(eval_case != nullptr, "failed to create search eval case");
-        auto raw_eval_result = eval_case->Run();
-        auto metrics = MergeMetrics(build_metrics, ExtractSearchMetrics(raw_eval_result));
-        auto constraint_result = EvaluateConstraints(constraints, metrics);
-
-        trial_result["status"] = "success";
-        trial_result["metrics"] = metrics;
-        trial_result["raw_eval_result"] =
-            JsonType{{"build", build_result.value("raw_eval_result", JsonType(nullptr))},
-                     {"search", raw_eval_result}};
-        trial_result["satisfied_constraints"] = constraint_result["satisfied_constraints"];
-        trial_result["violated_constraints"] = constraint_result["violated_constraints"];
-        trial_result["failure"] = nullptr;
+        search_eval_case = std::dynamic_pointer_cast<eval::SearchEvalCase>(eval_case);
+        Require(search_eval_case != nullptr, "failed to create reusable search eval case");
     } catch (const std::exception& e) {
-        trial_result["status"] = "failed";
-        trial_result["metrics"] = BuildMetricsFromResult(build_result);
-        trial_result["raw_eval_result"] =
-            JsonType{{"build", build_result.value("raw_eval_result", JsonType(nullptr))},
-                     {"search", nullptr}};
-        trial_result["satisfied_constraints"] = false;
-        trial_result["violated_constraints"] = JsonType::array();
-        trial_result["failure"] = e.what();
+        for (const auto& trial : trials) {
+            const auto start = Clock::now();
+            auto trial_result = MakeTrialResultShell(trial);
+            FillFailedTrialResult(trial_result, build_result, e.what(), start);
+            results.emplace_back(std::move(trial_result));
+        }
+        return results;
     }
-    trial_result["elapsed_seconds"] = ElapsedSeconds(start);
-    return trial_result;
+
+    for (const auto& trial : trials) {
+        auto trial_result = MakeTrialResultShell(trial);
+        const auto start = Clock::now();
+        try {
+            auto raw_eval_result = search_eval_case->RunWithSearchParam(trial.search_params.dump());
+            auto metrics = MergeMetrics(build_metrics, ExtractSearchMetrics(raw_eval_result));
+            auto constraint_result = EvaluateConstraints(constraints, metrics);
+
+            trial_result["status"] = "success";
+            trial_result["metrics"] = metrics;
+            trial_result["raw_eval_result"] =
+                JsonType{{"build", build_result.value("raw_eval_result", JsonType(nullptr))},
+                         {"search", raw_eval_result}};
+            trial_result["satisfied_constraints"] = constraint_result["satisfied_constraints"];
+            trial_result["violated_constraints"] = constraint_result["violated_constraints"];
+            trial_result["failure"] = nullptr;
+        } catch (const std::exception& e) {
+            FillFailedTrialResult(trial_result, build_result, e.what(), start);
+            results.emplace_back(std::move(trial_result));
+            continue;
+        }
+        trial_result["elapsed_seconds"] = ElapsedSeconds(start);
+        results.emplace_back(std::move(trial_result));
+    }
+    return results;
 }
 
 void

@@ -57,6 +57,7 @@ V1 的核心判断标准是：
 - 支持索引 policy 为缺失参数补齐默认候选。
 - 支持 HGraph 和 IVF 的基础候选空间。
 - 支持按唯一 build candidate 复用同一个 build artifact。
+- 支持同一 build group 内 search trial 级 loaded-index 复用。
 - 支持已有索引上的 search-only 调优。
 - 支持按硬约束筛选，并输出 `recommendation` 或 `best_effort`。
 - 支持完整 build/trial 报告和结构化失败结果。
@@ -67,7 +68,7 @@ V1 不解决以下问题：
 
 - 不承诺比人工网格搜索更快。
 - 不实现机器学习候选生成。
-- 不要求 query sampling、successive halving、Hyperband 或 Bayesian optimization 等成本优化。
+- 不要求 successive halving、Hyperband 或 Bayesian optimization 等更高级成本优化。
 - 不实现自动选择索引类型。
 - 不把 `Index::Tune()` 作为核心路径。
 - 不实现跨请求完整 index artifact 复用。
@@ -122,6 +123,7 @@ V2 可以加入确定性的成本优化：
 - successive halving。
 - build-side pruning。
 - search-side pruning。
+- 同一 build group 内的 loaded-index search trial 复用。
 - 完整 index artifact 复用。
 - 预算控制，例如最多 trial 数、最多 build 数、最大耗时。
 - 失败候选快速跳过。
@@ -442,7 +444,9 @@ create_params/index_param/ivf_train_type          -> "kmeans"
 - 没有 `index_path` 时，临时 index path 写入 `workspace_path/trials/`。
 - 有 `index_path` 时，要求展开后只有一个 build candidate。
 
-这样可以保证同一请求内多个 search 参数候选复用同一个构建产物。
+这样可以保证同一请求内多个 search 参数候选复用同一个构建产物。当前 evaluation runner
+还会在同一 build group 内复用已加载的 index 对象，避免每个 search trial 都重复
+deserialize 同一个 index artifact。
 
 ### 7.6 Evaluation strategy
 
@@ -459,6 +463,7 @@ create_params/index_param/ivf_train_type          -> "kmeans"
 ```text
 for each BuildSpec:
   run build once or mark existing index
+  load search index once for all TrialSpec attached to this build
   for each TrialSpec attached to this build:
     run search
     merge build metrics into search trial result
@@ -470,9 +475,9 @@ for each BuildSpec:
 ```text
 for each BuildSpec:
   run build once or mark existing index
-  run every TrialSpec(search) with sample_query_count
+  load search index once and run every TrialSpec(search) with sample_query_count
 select finalists from sampled trial results
-run finalists with full queries
+run finalists with full queries, grouped by build_id when possible
 select final recommendation only from full validation results
 cleanup build artifact when needed
 ```
@@ -497,13 +502,17 @@ BuildSpec
 Search path：
 
 ```text
-TrialSpec
+TrialSpec[] with same build_id
   -> eval::EvalConfig(action_type = "search")
-  -> eval::EvalCase::MakeInstance()
-  -> EvalCase::Run()
-  -> raw search eval json
-  -> search metrics
-  -> merge(build metrics, search metrics)
+  -> eval::SearchEvalCase
+  -> deserialize index once
+  -> for each TrialSpec:
+       reset per-run monitors and statistics
+       set search_params
+       run search
+       raw search eval json
+       search metrics
+       merge(build metrics, search metrics)
 ```
 
 已有索引 path：
@@ -722,8 +731,13 @@ V1 的验收标准是“自动化闭环可用”，不是“调参成本已经�
 
 ## 11. 当前状态与未决问题
 
-当前实现已经具备 V1 自动化闭环，并实现了 V2 的第一种优化策略
-`query_sampling`。后续继续 V2 时，应优先处理以下问题。
+当前实现已经具备 V1 自动化闭环，并实现了 V2 的两种确定性成本优化：
+
+- `query_sampling`：sampled eval 只用于选择 finalist，最终推荐来自 full validation。
+- build group 内 loaded-index search trial 复用：同一个 build artifact 只 deserialize 一次，
+  然后连续评估多个 search 参数。
+
+后续继续 V2 时，应优先处理以下问题。
 
 ### 11.1 与 baseline 的质量对比
 
@@ -741,16 +755,16 @@ V1 的验收标准是“自动化闭环可用”，不是“调参成本已经�
 当前 `query_sampling` 已使用 `evaluation_stage = sampled/full_validation` 表达两阶段结果。
 后续 successive halving 还需要表达 round、budget、晋级关系和最终验证关系。
 
-### 11.3 per-trial index 准备开销
+### 11.3 search trial 复用的边界
 
 真实 SIFT 对比中，`query_sampling` 能减少 full query validation 的 trial 数量，并且最终
-recommendation 来自 full validation；但端到端 wall time 提升很小。原因是当前 search
-trial 的 wall time 主要消耗在每个 trial 的 index 准备/加载和 eval 固定开销上，真实
-query loop 只占较小部分。
+recommendation 来自 full validation；但仅做 query sampling 时，端到端 wall time 提升很小。
+原因是当时 search trial 的 wall time 主要消耗在每个 trial 的 index 准备/加载和 eval 固定
+开销上，真实 query loop 只占较小部分。
 
-因此 V2 下一步不应只继续调小 `sample_query_count`，而应优先做 search trial 级别的
-artifact/loaded-index 复用，让同一个 build group 下的多个 search 参数候选在一次 index
-加载后完成评估。否则 query sampling 对 wall time 的收益会被固定开销抵消。
+当前实现已经接入 build group 内 loaded-index 复用。它解决的是单次请求、同一 build
+artifact 下多个 search 参数候选重复 deserialize 的问题；它不解决跨请求 artifact cache、
+跨进程复用、分布式执行和 build 阶段本身的成本问题。
 
 ### 11.4 eval query sampling 语义
 

@@ -141,6 +141,13 @@ RunSearchTrial(const TrialSpec& trial,
                const JsonType& constraints,
                const ExecutionOptions& options);
 
+std::vector<JsonType>
+RunSearchTrials(const std::vector<TrialSpec>& trials,
+                const JsonType& build_result,
+                const JsonType& request,
+                const JsonType& constraints,
+                const ExecutionOptions& options);
+
 void
 CleanupBuildArtifact(const BuildSpec& build, const ExecutionOptions& options);
 

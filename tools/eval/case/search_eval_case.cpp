@@ -72,6 +72,9 @@ SearchEvalCase::SearchEvalCase(const std::string& dataset_path,
                                vsag::IndexPtr index,
                                EvalConfig config)
     : EvalCase(dataset_path, index_path, index), config_(std::move(config)) {
+    if (config_.enable_memory) {
+        memory_monitor_baseline_pages_ = MemoryPeakMonitor::GetCurrentResidentPages();
+    }
     auto search_mode = config_.search_mode;
     if (search_mode == "knn") {
         this->search_type_ = SearchType::KNN;
@@ -128,15 +131,42 @@ SearchEvalCase::init_recall_monitor() {
 void
 SearchEvalCase::init_memory_monitor() {
     if (config_.enable_memory) {
-        auto memory_peak_monitor = std::make_shared<MemoryPeakMonitor>("search");
+        auto memory_peak_monitor =
+            std::make_shared<MemoryPeakMonitor>("search", memory_monitor_baseline_pages_);
         this->monitors_.emplace_back(std::move(memory_peak_monitor));
     }
 }
 
 JsonType
 SearchEvalCase::Run() {
+    return this->run_search_once();
+}
+
+JsonType
+SearchEvalCase::RunWithSearchParam(const std::string& search_param) {
+    config_.search_param = search_param;
+    return this->run_search_once();
+}
+
+void
+SearchEvalCase::load_index_once() {
+    if (index_loaded_) {
+        return;
+    }
     std::ifstream infile(this->index_path_, std::ios::binary);
+    if (!infile.good()) {
+        throw std::runtime_error("failed to open index path: " + this->index_path_);
+    }
     this->deserialize(infile);
+    index_loaded_ = true;
+    ++index_deserialize_count_;
+}
+
+JsonType
+SearchEvalCase::run_search_once() {
+    this->reset_run_state();
+    this->load_index_once();
+    ++search_run_ordinal_;
     switch (this->search_type_) {
         case KNN:
             this->do_knn_search();
@@ -156,6 +186,24 @@ SearchEvalCase::Run() {
         std::remove(this->index_path_.c_str());
     }
     return result;
+}
+
+void
+SearchEvalCase::reset_run_state() {
+    this->monitors_.clear();
+    this->init_monitor();
+    statistics_query_count_.store(0);
+    statistics_dist_cmp_.store(0);
+    statistics_hops_.store(0);
+    statistics_io_cnt_.store(0);
+    statistics_io_time_ms_.store(0);
+    statistics_reorder_distance_count_.store(0);
+    statistics_reorder_lower_bound_probe_count_.store(0);
+    statistics_rabitq_filter_count_.store(0);
+    statistics_rabitq_full_count_.store(0);
+    statistics_rabitq_filter_fallback_full_count_.store(0);
+    statistics_rabitq_reorder_hint_full_count_.store(0);
+    statistics_rabitq_reorder_fallback_full_count_.store(0);
 }
 
 void
@@ -284,6 +332,8 @@ SearchEvalCase::process_result() {
         logger_->Error(e.what());
     }
     EvalCase::MergeJsonType(this->basic_info_, result);
+    result["index_deserialize_count"] = index_deserialize_count_;
+    result["search_run_ordinal"] = search_run_ordinal_;
     result["statistics_query_count"] = this->statistics_query_count_.load();
     result["statistics_total"] = this->statistics_total_json();
     result["statistics_avg_per_query"] = this->statistics_avg_json();

@@ -29,11 +29,22 @@ MemoryPeakMonitor::MemoryPeakMonitor(const std::string& name)
     : Monitor("memory_peak_monitor"), process_name_(name) {
     this->pid_ = getpid();
     this->infile_.open(GetProcFileName(pid_));
-    uint64_t val1, val2;
-    this->infile_ >> val1 >> val2;
-    this->infile_.clear();
-    this->infile_.seekg(0, std::ios::beg);
-    init_memory_ = val2;
+    init_memory_ = GetCurrentResidentPages();
+}
+
+MemoryPeakMonitor::MemoryPeakMonitor(const std::string& name, uint64_t init_memory_pages)
+    : Monitor("memory_peak_monitor"), init_memory_(init_memory_pages), process_name_(name) {
+    this->pid_ = getpid();
+    this->infile_.open(GetProcFileName(pid_));
+}
+
+uint64_t
+MemoryPeakMonitor::GetCurrentResidentPages() {
+    std::ifstream infile(GetProcFileName(getpid()));
+    uint64_t total_pages = 0;
+    uint64_t resident_pages = 0;
+    infile >> total_pages >> resident_pages;
+    return resident_pages;
 }
 
 void

@@ -28,7 +28,7 @@ AutoTune 的第一阶段定位是：在现有 `eval_performance` 能力之上增
 - 不实现复杂优化器、学习型搜索、自动剪枝策略。
 - 不把 `Index::Tune()` 作为核心路径。
 - 不让系统在用户未指定索引集合时自动选择索引类型。
-- 不要求 query sampling、successive halving、分布式执行等成本优化策略。
+- 不要求 successive halving、分布式执行等更高级成本优化策略。
 - 不支持自动调用 `Index::Tune()` 热修改已有索引。
 
 当前已实现能力：
@@ -36,6 +36,7 @@ AutoTune 的第一阶段定位是：在现有 `eval_performance` 能力之上增
 - 支持 JSON request。
 - 支持 `hgraph` 和 `ivf` 两类索引候选。
 - 支持按 build group 只构建一次，再对同一构建产物执行多个 search trial。
+- 支持同一 build group 内 search trial 级 loaded-index 复用。
 - 支持已有索引上的 search-only 调优。
 - 支持数组候选、`$range` 候选和 `$value` 数组转义。
 - 支持系统默认补齐 HGraph / IVF 的基础候选空间。
@@ -358,6 +359,9 @@ index policy 不是“允许调参字段白名单”。它只说明用户缺失�
 - sampled 结果只用于选择 finalist。
 - 最终 `recommendation` 只从 full validation trial 中选择。
 - 输出的 `trials[]` 会同时包含 sampled trial 和 full validation trial。
+
+无论使用 `full_grid` 还是 `query_sampling`，当前实现都会在同一 build group 内复用已加载
+index：同一个 build artifact 只 deserialize 一次，然后连续评估多个 search 参数。
 - sampled trial 的 `evaluation_stage` 为 `sampled`。
 - full validation trial 的 `evaluation_stage` 为 `full_validation`。
 - `recommendation.evaluation_stage` 必须是 `full_validation`。
@@ -402,6 +406,10 @@ AutoTune 默认不暴露 `objective` 字段。
     "candidate_generation": 0.01,
     "evaluation": 128.35,
     "selection": 0.03
+  },
+  "evaluation_strategy": {
+    "name": "full_grid",
+    "search_index_reuse_scope": "build_group"
   },
   "recommendation": {
     "trial_id": "hgraph-000002",
@@ -509,7 +517,8 @@ AutoTune 默认不暴露 `objective` 字段。
       ],
       "elapsed_seconds": 15.4,
       "artifacts": {
-        "index_path": "/tmp/vsag_autotune/trials/hgraph-build-000001.index"
+        "index_path": "/tmp/vsag_autotune/trials/hgraph-build-000001.index",
+        "search_index_reuse_scope": "build_group"
       },
       "failure": null
     },
@@ -547,7 +556,8 @@ AutoTune 默认不暴露 `objective` 字段。
       "violated_constraints": [],
       "elapsed_seconds": 15.9,
       "artifacts": {
-        "index_path": "/tmp/vsag_autotune/trials/hgraph-build-000001.index"
+        "index_path": "/tmp/vsag_autotune/trials/hgraph-build-000001.index",
+        "search_index_reuse_scope": "build_group"
       },
       "failure": null
     }
@@ -603,8 +613,9 @@ validation 失败时，`trial_count = 0`，`build_count = 0`，`build_group_coun
 - 无 `index_path` 时，`build_count == build_group_count`。
 - 有 `index_path` 且输入合法时，`build_group_count = 1`，`build_count = 0`。
 
-这两个字段用于解释 AutoTune 的执行成本。`trial_count` 仍然表示 search trial 数量，也就是
-最终参与约束过滤和结果选择的候选数量。
+这两个字段用于解释 AutoTune 的执行成本。`trial_count` 表示实际执行并输出的 search eval
+记录数量。`full_grid` 下它等于候选数量；`query_sampling` 下它包含 sampled trial 和
+full validation trial。
 
 ### 11.5 `builds`
 
@@ -643,6 +654,8 @@ validation 失败时，`trial_count = 0`，`build_count = 0`，`build_group_coun
 - trial 耗时。
 - 失败原因。
 - 可选产物路径。
+- `artifacts.search_index_reuse_scope`。当前为 `build_group`，表示同一 build group 下多个
+  search trial 会复用同一个已加载 index。
 
 trial 的 `metrics` 是 build metrics 和 search metrics 的合并结果：
 
