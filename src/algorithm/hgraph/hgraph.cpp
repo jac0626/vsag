@@ -637,7 +637,9 @@ HGraph::UpdateVector(int64_t id, const DatasetPtr& new_base, bool force_update) 
         return false;
     }
     if (was_duplicate_member) {
-        this->bottom_graph_->RemoveDuplicateId(inner_id);
+        if (not this->bottom_graph_->RemoveDuplicateId(inner_id)) {
+            return false;
+        }
         std::shared_lock rlock(this->global_mutex_);
         this->graph_add_one(new_base_vec, -1, inner_id);
     }

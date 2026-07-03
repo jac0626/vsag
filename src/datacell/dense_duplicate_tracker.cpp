@@ -55,8 +55,13 @@ DenseDuplicateTracker::RemoveDuplicateId(InnerIdType duplicate_id) {
     }
 
     auto previous_id = duplicate_id;
+    uint64_t count = 0;
+    const auto max_count = duplicate_ids_.size();
     while (duplicate_ids_[previous_id] != duplicate_id) {
         previous_id = duplicate_ids_[previous_id];
+        if (++count > max_count) {
+            return false;
+        }
     }
 
     const auto next_id = duplicate_ids_[duplicate_id];
