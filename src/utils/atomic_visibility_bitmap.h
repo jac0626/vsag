@@ -99,8 +99,23 @@ public:
      */
     void
     MarkRange(uint64_t count) {
-        for (uint64_t pos = 0; pos < count; ++pos) {
-            data_[pos / BITS_PER_WORD].fetch_or(bit_mask(pos), std::memory_order_release);
+        if (count == 0) {
+            return;
+        }
+
+        const auto full_words = count / BITS_PER_WORD;
+        for (uint64_t word = 0; word < full_words; ++word) {
+            data_[word].store(0xFFFFFFFFFFFFFFFFULL, std::memory_order_release);
+        }
+
+        const auto remaining_bits = count % BITS_PER_WORD;
+        if (remaining_bits != 0) {
+            const auto remainder_word = count / BITS_PER_WORD;
+            data_[remainder_word].fetch_or((static_cast<uint64_t>(1) << remaining_bits) - 1,
+                                          std::memory_order_release);
+        } else {
+            const auto last_word = (count - 1) / BITS_PER_WORD;
+            data_[last_word].fetch_or(0xFFFFFFFFFFFFFFFFULL, std::memory_order_release);
         }
     }
 
