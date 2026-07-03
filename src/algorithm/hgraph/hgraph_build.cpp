@@ -71,6 +71,9 @@ static void
 wait_all_futures(std::vector<std::future<void>>& futures) {
     std::exception_ptr first_exception = nullptr;
     for (auto& future : futures) {
+        if (not future.valid()) {
+            continue;
+        }
         try {
             future.get();
         } catch (...) {
