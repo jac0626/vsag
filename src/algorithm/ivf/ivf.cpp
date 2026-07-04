@@ -1654,7 +1654,6 @@ IVF::EstimateMemory(uint64_t num_elements) const {
                                      ? param->bucket_param->io_parameter
                                      : nullptr;
 
-    memory = saturated_add(memory, this->bucket_->GetMemoryUsage());
     memory = saturated_add(
         memory,
         estimate_bucket_io_memory(
@@ -1671,7 +1670,6 @@ IVF::EstimateMemory(uint64_t num_elements) const {
         const auto precise_io_param = (param != nullptr and param->precise_codes_param != nullptr)
                                           ? param->precise_codes_param->io_parameter
                                           : nullptr;
-        memory = saturated_add(memory, this->reorder_codes_->GetMemoryUsage());
         memory = saturated_add(
             memory,
             estimate_flatten_io_memory(

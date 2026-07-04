@@ -22,6 +22,29 @@
 #include "storage/serialization_template_test.h"
 #include "storage/streaming_serialization_test_utils.h"
 #include "test_index.h"
+
+class BlockSizeLimitGuard {
+public:
+    explicit BlockSizeLimitGuard(uint64_t block_size_limit)
+        : origin_size_(vsag::Options::Instance().block_size_limit()) {
+        vsag::Options::Instance().set_block_size_limit(block_size_limit);
+    }
+
+    BlockSizeLimitGuard(const BlockSizeLimitGuard&) = delete;
+    BlockSizeLimitGuard&
+    operator=(const BlockSizeLimitGuard&) = delete;
+    BlockSizeLimitGuard(BlockSizeLimitGuard&&) = delete;
+    BlockSizeLimitGuard&
+    operator=(BlockSizeLimitGuard&&) = delete;
+
+    ~BlockSizeLimitGuard() {
+        vsag::Options::Instance().set_block_size_limit(origin_size_);
+    }
+
+private:
+    uint64_t origin_size_;
+};
+
 namespace fixtures {
 
 class IVFTestResource {
@@ -1435,8 +1458,7 @@ TEST_CASE("(PR) IVF Estimate Memory And Get Memory Usage", "[ft][memory][ivf][pr
 }
 
 TEST_CASE("(PR) IVF Estimate Memory IO Type Monotonic", "[ft][memory][ivf][pr]") {
-    const auto origin_size = vsag::Options::Instance().block_size_limit();
-    vsag::Options::Instance().set_block_size_limit(1024 * 1024 * 2);
+    BlockSizeLimitGuard block_size_limit_guard(1024 * 1024 * 2);
 
     const std::vector<std::string> base_io_types{"memory_io", "block_memory_io"};
     for (const auto& base_io_type : base_io_types) {
@@ -1451,8 +1473,6 @@ TEST_CASE("(PR) IVF Estimate Memory IO Type Monotonic", "[ft][memory][ivf][pr]")
         REQUIRE(small_memory > 0);
         REQUIRE(large_memory >= small_memory);
     }
-
-    vsag::Options::Instance().set_block_size_limit(origin_size);
 }
 
 TEST_CASE("(Daily) IVF Estimate Memory", "[ft][memory][ivf][daily]") {
