@@ -16,8 +16,8 @@
 #include "hnsw.h"
 
 #include <array>
-#include <cstdlib>
 #include <cstdint>
+#include <cstdlib>
 #include <memory>
 #include <new>
 #include <nlohmann/json.hpp>
