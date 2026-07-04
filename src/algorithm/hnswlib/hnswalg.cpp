@@ -1381,16 +1381,16 @@ HierarchicalNSW::dealNoInEdge(InnerIdType id, int level, int m_curmax, int skip_
     int alone_size = getListCount(alone_data);
     auto& in_edges = getEdges(id, level);
     for (int j = 0; j < alone_size; ++j) {
-        auto alone_link = getLinkAt(alone_data, j + 1);
-        if (alone_link == skip_c) {
+        auto neighbor_id = getLinkAt(alone_data, j + 1);
+        if (neighbor_id == skip_c) {
             continue;
         }
-        auto to_edge_data_cur = getLinklistAtLevel(alone_link, level);
+        auto to_edge_data_cur = getLinklistAtLevel(neighbor_id, level);
         int to_edge_size_cur = getListCount(to_edge_data_cur);
         if (to_edge_size_cur < m_curmax) {
             setLinkAt(to_edge_data_cur, to_edge_size_cur + 1, id);
             setListCount(to_edge_data_cur, to_edge_size_cur + 1);
-            in_edges.insert(alone_link);
+            in_edges.insert(neighbor_id);
         }
     }
 }
