@@ -2054,7 +2054,7 @@ TEST_CASE("HGraph UpdateVector refreshes duplicate member state",
     constexpr float kNearRadius = 0.01F;
     const std::string search_param = R"({"hgraph":{"ef_search":32}})";
 
-    auto make_updated_index = [&]() -> TestIndex::IndexPtr {
+    auto make_duplicate_index = [&]() -> TestIndex::IndexPtr {
         HGraphTestIndex::HGraphBuildParam build_param("l2", kDim, "fp32");
         build_param.support_duplicate = true;
         build_param.thread_count = 1;
@@ -2086,6 +2086,11 @@ TEST_CASE("HGraph UpdateVector refreshes duplicate member state",
         REQUIRE(index->Add(duplicate).has_value());
         REQUIRE(index->CheckIdExist(kDuplicateId));
 
+        return index;
+    };
+
+    auto make_updated_index = [&]() -> TestIndex::IndexPtr {
+        auto index = make_duplicate_index();
         float moved_vector[kDim] = {0.0F, 1.0F};
         auto moved = vsag::Dataset::Make();
         moved->NumElements(1)->Dim(kDim)->Float32Vectors(moved_vector);
@@ -2127,6 +2132,28 @@ TEST_CASE("HGraph UpdateVector refreshes duplicate member state",
         REQUIRE(result.value()->GetDim() == 1);
         REQUIRE(result.value()->GetIds()[0] == kDuplicateId);
         REQUIRE(std::abs(result.value()->GetDistances()[0]) < 1e-5F);
+    }
+
+    SECTION("updated duplicate representative detaches remaining members") {
+        auto index = make_duplicate_index();
+        float moved_vector[kDim] = {0.0F, 1.0F};
+        auto moved = vsag::Dataset::Make();
+        moved->NumElements(1)->Dim(kDim)->Float32Vectors(moved_vector);
+        moved->Owner(false);
+        auto update = index->UpdateVector(kRepresentativeId, moved, true);
+        REQUIRE(update.has_value());
+        REQUIRE(update.value());
+
+        float duplicate_query_vector[kDim] = {1.0F, 0.0F};
+        auto duplicate_query = vsag::Dataset::Make();
+        duplicate_query->NumElements(1)->Dim(kDim)->Float32Vectors(duplicate_query_vector);
+        duplicate_query->Owner(false);
+
+        auto duplicate_result = index->RangeSearch(duplicate_query, kNearRadius, search_param, 1);
+        REQUIRE(duplicate_result.has_value());
+        REQUIRE(duplicate_result.value()->GetDim() == 1);
+        REQUIRE(duplicate_result.value()->GetIds()[0] == kDuplicateId);
+        REQUIRE(std::abs(duplicate_result.value()->GetDistances()[0]) < 1e-5F);
     }
 }
 

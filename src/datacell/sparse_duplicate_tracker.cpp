@@ -130,8 +130,15 @@ SparseDuplicateTracker::RemoveDuplicateId(InnerIdType duplicate_id) {
     auto previous_id = duplicate_id;
     uint64_t count = 0;
     const auto max_count = next_ids_.size();
-    while (next_ids_[previous_id] != duplicate_id) {
-        previous_id = next_ids_.at(previous_id);
+    while (true) {
+        const auto previous_iter = next_ids_.find(previous_id);
+        if (previous_iter == next_ids_.end()) {
+            return false;
+        }
+        if (previous_iter->second == duplicate_id) {
+            break;
+        }
+        previous_id = previous_iter->second;
         if (++count > max_count) {
             return false;
         }
