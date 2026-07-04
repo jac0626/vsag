@@ -122,7 +122,7 @@ TEST_CASE("AtomicVisibilityBitmap Concurrent Mark And Read",
     bitmap.Resize(slot_count);
 
     std::atomic<bool> start{false};
-    std::atomic<uint64_t> false_positive{0};
+    std::atomic<uint64_t> missing_ready_count{0};
 
     constexpr uint32_t marker_threads = 4;
     std::vector<std::thread> markers;
@@ -162,8 +162,8 @@ TEST_CASE("AtomicVisibilityBitmap Concurrent Mark And Read",
     // After all markers joined, every slot must be ready.
     for (uint64_t i = 0; i < slot_count; ++i) {
         if (not bitmap.IsReady(i)) {
-            false_positive.fetch_add(1, std::memory_order_relaxed);
+            missing_ready_count.fetch_add(1, std::memory_order_relaxed);
         }
     }
-    REQUIRE(false_positive.load() == 0);
+    REQUIRE(missing_ready_count.load() == 0);
 }
