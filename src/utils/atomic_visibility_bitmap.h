@@ -23,28 +23,26 @@
 
 namespace vsag {
 
-/**
- * @brief A grow-only, per-slot visibility flag map backed by atomic words.
- *
- * Each slot owns one bit. The intended use is a "publish after fully written"
- * pattern: a producer writes a slot's payload and then calls Mark(slot)
- * (release), while a consumer calls IsReady(slot) (acquire) before reading the
- * payload. The release/acquire pair establishes a happens-before edge so the
- * consumer that observes a set bit is guaranteed to see the fully written
- * payload.
- *
- * Bits are only ever set, never cleared (other than via Resize/the ctor), so
- * the consumer side is free of TOCTOU races: observing "ready" once means
- * ready forever.
- *
- * Concurrency contract:
- *   - Mark() and IsReady() are safe to call concurrently with each other.
- *   - Resize() reallocates the backing storage and is NOT safe to run
- *     concurrently with Mark()/IsReady(); the caller must serialise Resize()
- *     against all Mark()/IsReady() via an external lock. In HGraph,
- *     resize() takes global_mutex_ exclusively; add-side call sites coordinate
- *     resize and slot publication with their own synchronization.
- */
+// A grow-only, per-slot visibility flag map backed by atomic words.
+//
+// Each slot owns one bit. The intended use is a "publish after fully written"
+// pattern: a producer writes a slot's payload and then calls Mark(slot)
+// (release), while a consumer calls IsReady(slot) (acquire) before reading the
+// payload. The release/acquire pair establishes a happens-before edge so the
+// consumer that observes a set bit is guaranteed to see the fully written
+// payload.
+//
+// Bits are only ever set, never cleared (other than via Resize/the ctor), so
+// the consumer side is free of TOCTOU races: observing "ready" once means ready
+// forever.
+//
+// Concurrency contract:
+//   - Mark() and IsReady() are safe to call concurrently with each other.
+//   - Resize() reallocates the backing storage and is NOT safe to run
+//     concurrently with Mark()/IsReady(); the caller must serialise Resize()
+//     against all Mark()/IsReady() via an external lock. In HGraph, resize()
+//     takes global_mutex_ exclusively; add-side call sites coordinate resize
+//     and slot publication with their own synchronization.
 class AtomicVisibilityBitmap {
 public:
     AtomicVisibilityBitmap() = default;
