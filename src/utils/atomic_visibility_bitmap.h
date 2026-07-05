@@ -62,8 +62,8 @@ public:
         }
         auto new_data = std::make_unique<std::atomic<uint64_t>[]>(new_words);
         for (uint64_t i = 0; i < word_count_; ++i) {
-            const auto word = data_[i].load(std::memory_order_relaxed);
-            new_data[i].store(word, std::memory_order_relaxed);
+            const auto word = data_[i].load(std::memory_order_acquire);
+            new_data[i].store(word, std::memory_order_release);
         }
         for (uint64_t i = word_count_; i < new_words; ++i) {
             new_data[i].store(0, std::memory_order_relaxed);
