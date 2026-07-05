@@ -622,6 +622,8 @@ EvalDataset::Load(const std::string& filename) {
                     hsize_t dims[1];
                     space.getSimpleExtentDims(dims, NULL);
                     if (static_cast<int64_t>(dims[0]) != expected_count) {
+                        // Missing path datasets are optional, but present datasets must match
+                        // the base/query split they describe.
                         throw std::runtime_error("paths dataset size mismatch: expected " +
                                                  std::to_string(expected_count) + ", got " +
                                                  std::to_string(dims[0]));
@@ -642,6 +644,8 @@ EvalDataset::Load(const std::string& filename) {
 
             auto train_paths = read_string_dataset(h_group, "train", obj->number_of_base_);
             auto test_paths = read_string_dataset(h_group, "test", obj->number_of_query_);
+            auto train_count = train_paths.size();
+            auto test_count = test_paths.size();
 
             if (!train_paths.empty() || !test_paths.empty()) {
                 obj->hierarchy_names_.push_back(hname);
@@ -653,8 +657,8 @@ EvalDataset::Load(const std::string& filename) {
                 }
                 logger::debug("loaded paths hierarchy '{}': {} train, {} test",
                               hname,
-                              obj->train_paths_.count(hname) ? obj->train_paths_[hname].size() : 0,
-                              obj->test_paths_.count(hname) ? obj->test_paths_[hname].size() : 0);
+                              train_count,
+                              test_count);
             }
         }
     } catch (H5::Exception& e) {
@@ -974,33 +978,35 @@ EvalDataset::Save(const EvalDatasetPtr& dataset, const std::string& filename) {
     }
 
     // write Pyramid path hierarchies (if present)
-    if (!dataset->train_paths_.empty()) {
+    if (!dataset->train_paths_.empty() || !dataset->test_paths_.empty()) {
         H5::Group paths_group = file.createGroup("/paths");
         H5::StrType str_type(H5::PredType::C_S1, H5T_VARIABLE);
+        auto write_string_dataset = [&](H5::Group& group,
+                                        const std::string& dsname,
+                                        const std::vector<std::string>& values) {
+            hsize_t dims[1] = {static_cast<hsize_t>(values.size())};
+            H5::DataSpace dataspace(1, dims);
+            H5::DataSet ds = group.createDataSet(dsname, str_type, dataspace);
+            std::vector<const char*> ptrs(values.size());
+            for (uint64_t i = 0; i < values.size(); ++i) {
+                ptrs[i] = values[i].c_str();
+            }
+            ds.write(ptrs.data(), str_type);
+        };
         for (const auto& [hname, train_vec] : dataset->train_paths_) {
             H5::Group h_group = paths_group.createGroup(hname);
-            {
-                hsize_t dims[1] = {static_cast<hsize_t>(train_vec.size())};
-                H5::DataSpace dataspace(1, dims);
-                H5::DataSet ds = h_group.createDataSet("train", str_type, dataspace);
-                std::vector<const char*> ptrs(train_vec.size());
-                for (size_t i = 0; i < train_vec.size(); ++i) {
-                    ptrs[i] = train_vec[i].c_str();
-                }
-                ds.write(ptrs.data(), str_type);
-            }
+            write_string_dataset(h_group, "train", train_vec);
             auto test_it = dataset->test_paths_.find(hname);
             if (test_it != dataset->test_paths_.end()) {
-                const auto& test_vec = test_it->second;
-                hsize_t dims[1] = {static_cast<hsize_t>(test_vec.size())};
-                H5::DataSpace dataspace(1, dims);
-                H5::DataSet ds = h_group.createDataSet("test", str_type, dataspace);
-                std::vector<const char*> ptrs(test_vec.size());
-                for (size_t i = 0; i < test_vec.size(); ++i) {
-                    ptrs[i] = test_vec[i].c_str();
-                }
-                ds.write(ptrs.data(), str_type);
+                write_string_dataset(h_group, "test", test_it->second);
             }
+        }
+        for (const auto& [hname, test_vec] : dataset->test_paths_) {
+            if (dataset->train_paths_.count(hname) != 0) {
+                continue;
+            }
+            H5::Group h_group = paths_group.createGroup(hname);
+            write_string_dataset(h_group, "test", test_vec);
         }
     }
 
