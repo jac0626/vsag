@@ -451,15 +451,21 @@ TEST_CASE("SparseTermDatacell handles missing term lists", "[ut][SparseTermDatac
     InnerSearchParam inner_param{};
     inner_param.ef = 2;
 
-    SECTION("null term list is skipped") {
-        data_cell->term_ids_[1].reset();
-        data_cell->term_sizes_[1] = 1;
+    auto search = [&]() {
         auto computer = std::make_shared<SparseTermComputer>(query, search_params, allocator.get());
         std::vector<float> dists(1, -1.0F);
         MaxHeap heap(allocator.get());
 
         data_cell->InsertHeapByTermLists<KNN_SEARCH, PURE>(
             dists.data(), computer, heap, inner_param, 0);
+
+        return heap;
+    };
+
+    SECTION("null term list is skipped") {
+        data_cell->term_ids_[1].reset();
+        data_cell->term_sizes_[1] = 1;
+        auto heap = search();
 
         REQUIRE(heap.empty());
     }
@@ -468,12 +474,7 @@ TEST_CASE("SparseTermDatacell handles missing term lists", "[ut][SparseTermDatac
         data_cell->term_ids_[1] = std::make_unique<Vector<uint16_t>>(allocator.get());
         data_cell->term_ids_[1]->push_back(0);
         data_cell->term_sizes_[1] = 2;
-        auto computer = std::make_shared<SparseTermComputer>(query, search_params, allocator.get());
-        std::vector<float> dists(1, -1.0F);
-        MaxHeap heap(allocator.get());
-
-        data_cell->InsertHeapByTermLists<KNN_SEARCH, PURE>(
-            dists.data(), computer, heap, inner_param, 0);
+        auto heap = search();
 
         REQUIRE(heap.size() == 1);
         REQUIRE(heap.top().second == 0);
