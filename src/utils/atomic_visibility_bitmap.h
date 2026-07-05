@@ -41,10 +41,10 @@ namespace vsag {
  *   - Mark() and IsReady() are safe to call concurrently with each other.
  *   - Resize() reallocates the backing storage and is NOT safe to run
  *     concurrently with Mark()/IsReady(); the caller must serialise Resize()
- *     against all Mark()/IsReady() via an external lock. In HGraph this is the
- *     existing resize() exclusion (global_mutex_ + add_mutex_ both held
- *     exclusively during resize, while Mark/IsReady run under the shared side).
- */
+     *     against all Mark()/IsReady() via an external lock. In HGraph, resize()
+     *     takes global_mutex_ exclusively; Add() callers use add_mutex_ to keep
+     *     resize and slot publication ordered.
+     */
 class AtomicVisibilityBitmap {
 public:
     AtomicVisibilityBitmap() = default;
