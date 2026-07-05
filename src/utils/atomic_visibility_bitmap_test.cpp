@@ -123,6 +123,7 @@ TEST_CASE("AtomicVisibilityBitmap Concurrent Mark And Read",
 
     std::atomic<bool> start{false};
     std::atomic<uint64_t> missing_ready_count{0};
+    std::atomic<bool> reader_timed_out{false};
 
     constexpr uint32_t marker_threads = 4;
     std::vector<std::thread> markers;
@@ -145,15 +146,19 @@ TEST_CASE("AtomicVisibilityBitmap Concurrent Mark And Read",
             std::this_thread::yield();
         }
         uint64_t ready = 0;
-        while (ready < slot_count) {
+        constexpr uint64_t max_scan_attempts = 100000;
+        uint64_t scan_attempts = 0;
+        while (ready < slot_count && scan_attempts < max_scan_attempts) {
             ready = 0;
             for (uint64_t i = 0; i < slot_count; ++i) {
                 if (bitmap.IsReady(i)) {
                     ++ready;
                 }
             }
+            ++scan_attempts;
             std::this_thread::yield();
         }
+        reader_timed_out.store(ready < slot_count, std::memory_order_relaxed);
     });
 
     start.store(true, std::memory_order_release);
@@ -161,6 +166,7 @@ TEST_CASE("AtomicVisibilityBitmap Concurrent Mark And Read",
         th.join();
     }
     reader.join();
+    REQUIRE_FALSE(reader_timed_out.load(std::memory_order_relaxed));
 
     // After all markers joined, every slot must be ready.
     for (uint64_t i = 0; i < slot_count; ++i) {
