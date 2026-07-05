@@ -3483,7 +3483,7 @@ TEST_CASE("HGraph Concurrent Add vs Brute-Force Search Race",
                 add_failures.fetch_add(1, std::memory_order_relaxed);
             }
         }
-        adder_done.store(true, std::memory_order_relaxed);
+        adder_done.store(true, std::memory_order_release);
     });
 
     // Searcher threads hammering the brute-force path while the adder runs.
@@ -3495,7 +3495,7 @@ TEST_CASE("HGraph Concurrent Add vs Brute-Force Search Race",
         const int64_t self_id = ids[tid % seed_count];
         std::vector<float> query(vectors.begin() + (tid % seed_count) * dim,
                                  vectors.begin() + (tid % seed_count) * dim + dim);
-        while (not adder_done.load(std::memory_order_relaxed)) {
+        while (not adder_done.load(std::memory_order_acquire)) {
             auto q = vsag::Dataset::Make();
             q->NumElements(1)->Dim(dim)->Float32Vectors(query.data())->Owner(false);
             // No filter -> valid_ratio == 1.0 <= brute_force_threshold, so the
@@ -3507,7 +3507,7 @@ TEST_CASE("HGraph Concurrent Add vs Brute-Force Search Race",
             }
             const auto* result_ids = res.value()->GetIds();
             const auto* dists = res.value()->GetDistances();
-            const auto count = res.value()->GetDim();
+            const auto count = std::min<int64_t>(res.value()->GetDim(), topk);
             bool found_self = false;
             for (int64_t r = 0; r < count; ++r) {
                 if (not std::isfinite(dists[r])) {

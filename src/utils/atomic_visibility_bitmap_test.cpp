@@ -130,6 +130,7 @@ TEST_CASE("AtomicVisibilityBitmap Concurrent Mark And Read",
     for (uint32_t t = 0; t < marker_threads; ++t) {
         markers.emplace_back([&, t]() {
             while (not start.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
             }
             for (uint64_t i = t; i < slot_count; i += marker_threads) {
                 bitmap.Mark(i);
@@ -141,6 +142,7 @@ TEST_CASE("AtomicVisibilityBitmap Concurrent Mark And Read",
     // checked to stay ready (bits are never cleared).
     std::thread reader([&]() {
         while (not start.load(std::memory_order_acquire)) {
+            std::this_thread::yield();
         }
         uint64_t ready = 0;
         while (ready < slot_count) {
@@ -150,6 +152,7 @@ TEST_CASE("AtomicVisibilityBitmap Concurrent Mark And Read",
                     ++ready;
                 }
             }
+            std::this_thread::yield();
         }
     });
 

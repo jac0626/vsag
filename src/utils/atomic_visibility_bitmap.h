@@ -15,7 +15,9 @@
 
 #pragma once
 
+#include <algorithm>
 #include <atomic>
+#include <cassert>
 #include <cstdint>
 #include <memory>
 
@@ -57,6 +59,7 @@ public:
     Resize(uint64_t capacity) {
         uint64_t new_words = (capacity + BITS_PER_WORD - 1) / BITS_PER_WORD;
         if (new_words <= word_count_) {
+            capacity_ = std::max(capacity_, capacity);
             return;
         }
         auto new_data = std::make_unique<std::atomic<uint64_t>[]>(new_words);
@@ -68,6 +71,7 @@ public:
         }
         data_ = std::move(new_data);
         word_count_ = new_words;
+        capacity_ = capacity;
     }
 
     /**
@@ -77,6 +81,7 @@ public:
      */
     void
     Mark(uint64_t pos) {
+        assert(pos < capacity_);
         data_[pos / BITS_PER_WORD].fetch_or(bit_mask(pos), std::memory_order_release);
     }
 
@@ -88,6 +93,7 @@ public:
      */
     [[nodiscard]] bool
     IsReady(uint64_t pos) const {
+        assert(pos < capacity_);
         return (data_[pos / BITS_PER_WORD].load(std::memory_order_acquire) & bit_mask(pos)) != 0;
     }
 
@@ -99,6 +105,7 @@ public:
      */
     void
     MarkRange(uint64_t count) {
+        assert(count <= capacity_);
         if (count == 0) {
             return;
         }
@@ -129,6 +136,7 @@ private:
 
     std::unique_ptr<std::atomic<uint64_t>[]> data_{nullptr};
     uint64_t word_count_{0};
+    uint64_t capacity_{0};
 };
 
 }  // namespace vsag

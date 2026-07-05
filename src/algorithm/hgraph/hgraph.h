@@ -580,7 +580,7 @@ private:
     // durable; brute_force_search() skips slots that are not yet ready
     // (acquire). Grown alongside the code storage inside resize(), under the
     // same global_mutex_/add_mutex_ exclusion. See issue #2294.
-    mutable AtomicVisibilityBitmap codes_ready_;
+    AtomicVisibilityBitmap codes_ready_;
 
     std::shared_ptr<VisitedListPool> pool_{nullptr};  // pool of visited-lists for search
 
