@@ -41,9 +41,9 @@ namespace vsag {
  *   - Mark() and IsReady() are safe to call concurrently with each other.
  *   - Resize() reallocates the backing storage and is NOT safe to run
  *     concurrently with Mark()/IsReady(); the caller must serialise Resize()
-     *     against all Mark()/IsReady() via an external lock. In HGraph, resize()
-     *     takes global_mutex_ exclusively; Add() callers use add_mutex_ to keep
-     *     resize and slot publication ordered.
+     *     against all Mark()/IsReady() via an external lock. In HGraph,
+     *     resize() takes global_mutex_ exclusively; add-side call sites
+     *     coordinate resize and slot publication with their own synchronization.
      */
 class AtomicVisibilityBitmap {
 public:
@@ -64,7 +64,8 @@ public:
         }
         auto new_data = std::make_unique<std::atomic<uint64_t>[]>(new_words);
         for (uint64_t i = 0; i < word_count_; ++i) {
-            new_data[i].store(data_[i].load(std::memory_order_relaxed), std::memory_order_relaxed);
+            const auto word = data_[i].load(std::memory_order_relaxed);
+            new_data[i].store(word, std::memory_order_relaxed);
         }
         for (uint64_t i = word_count_; i < new_words; ++i) {
             new_data[i].store(0, std::memory_order_relaxed);
@@ -94,7 +95,8 @@ public:
     [[nodiscard]] bool
     IsReady(uint64_t pos) const {
         assert(pos < capacity_);
-        return (data_[pos / BITS_PER_WORD].load(std::memory_order_acquire) & bit_mask(pos)) != 0;
+        const auto word = data_[pos / BITS_PER_WORD].load(std::memory_order_acquire);
+        return (word & bit_mask(pos)) != 0;
     }
 
     /**
