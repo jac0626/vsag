@@ -298,6 +298,7 @@ private:
     search_impl(const DatasetPtr& query,
                 const SearchFunc& search_func,
                 InnerSearchParam& search_param,
+                QueryContext& ctx,
                 const std::string& hierarchy_name = "") const;
 
     /// Probabilistic check: should total_count trigger a new entry-point update?

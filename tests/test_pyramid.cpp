@@ -864,6 +864,30 @@ struct MultiHierarchyFixture {
             }
         })";
     }
+
+    static std::string
+    build_reorder_stats_param(const std::string& precise_file_path) {
+        return R"({
+            "dtype": "float32", "metric_type": "l2", "dim": 4,
+            "index_param": {
+                "max_degree": 32, "alpha": 1.2,
+                "graph_type": "nsw",
+                "graph_iter_turn": 15, "neighbor_sample_rate": 0.2,
+                "base_quantization_type": "rabitq",
+                "base_io_type": "memory_io",
+                "use_reorder": true,
+                "precise_quantization_type": "fp32",
+                "precise_io_type": "buffer_io",
+                "precise_file_path": ")" +
+               precise_file_path + R"(",
+                "index_min_size": 0, "support_duplicate": false,
+                "hierarchies": [
+                    {"name": "site", "no_build_levels": [0]},
+                    {"name": "cat", "no_build_levels": [0, 1]}
+                ]
+            }
+        })";
+    }
 };
 
 }  // namespace
@@ -1393,6 +1417,36 @@ TEST_CASE("Multi-Hierarchy: Reorder with multi-hierarchy", "[ft][pyramid][multi_
     auto cat_tech = f.search_ids(index.value(), "cat", "tech");
     REQUIRE(cat_tech.count(100) == 1);
     REQUIRE(cat_tech.count(101) == 1);
+}
+
+TEST_CASE("Multi-Hierarchy: Reorder statistics include precise IO",
+          "[ft][pyramid][multi_hierarchy]") {
+    MultiHierarchyFixture f;
+    fixtures::TempDir temp_dir("pyramid_reorder_stats");
+    auto index = vsag::Factory::CreateIndex(
+        "pyramid", f.build_reorder_stats_param(temp_dir.GenerateRandomFile(false)));
+    REQUIRE(index.has_value());
+    REQUIRE(index.value()->Build(f.make_base()).has_value());
+
+    auto* qv = new float[4]{1.0f, 0.0f, 0.0f, 0.0f};
+    auto* qp = new std::string[1]{"www/news"};
+    auto query = vsag::Dataset::Make();
+    query->NumElements(1)->Dim(4)->Float32Vectors(qv)->Paths("site", qp)->Owner(true);
+
+    std::string sp = R"({"pyramid": {"ef_search": 100, "hierarchies": ["site"]}})";
+    auto knn_result = index.value()->KnnSearch(query, 2, sp);
+    REQUIRE(knn_result.has_value());
+    auto knn_stats = knn_result.value()->GetStatistics({"io_cnt", "reorder_distance_count"});
+    REQUIRE(knn_stats.size() == 2);
+    REQUIRE(std::stoul(knn_stats[0]) > 0);
+    REQUIRE(std::stoul(knn_stats[1]) > 0);
+
+    auto range_result = index.value()->RangeSearch(query, 2.0f, sp);
+    REQUIRE(range_result.has_value());
+    auto range_stats = range_result.value()->GetStatistics({"io_cnt", "reorder_distance_count"});
+    REQUIRE(range_stats.size() == 2);
+    REQUIRE(std::stoul(range_stats[0]) > 0);
+    REQUIRE(std::stoul(range_stats[1]) > 0);
 }
 
 TEST_CASE("Multi-Hierarchy: Single hierarchy in hierarchies config",

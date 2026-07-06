@@ -286,7 +286,7 @@ Pyramid::KnnSearch(const DatasetPtr& query,
 
     std::string hierarchy_name =
         parsed_param.hierarchies.empty() ? "" : parsed_param.hierarchies[0];
-    auto result = this->search_impl(query, search_func, search_param, hierarchy_name);
+    auto result = this->search_impl(query, search_func, search_param, ctx, hierarchy_name);
     result->Statistics(stats.Dump());
     return result;
 }
@@ -329,7 +329,7 @@ Pyramid::RangeSearch(const DatasetPtr& query,
 
     std::string hierarchy_name =
         parsed_param.hierarchies.empty() ? "" : parsed_param.hierarchies[0];
-    auto result = this->search_impl(query, search_func, search_param, hierarchy_name);
+    auto result = this->search_impl(query, search_func, search_param, ctx, hierarchy_name);
     result->Statistics(stats.Dump());
     return result;
 }
@@ -338,10 +338,8 @@ DatasetPtr
 Pyramid::search_impl(const DatasetPtr& query,
                      const SearchFunc& search_func,
                      InnerSearchParam& search_param,
+                     QueryContext& ctx,
                      const std::string& hierarchy_name) const {
-    SearchStatistics stats;
-    QueryContext ctx{.stats = &stats};
-
     auto h_iter = hierarchies_.find(hierarchy_name);
     CHECK_ARGUMENT(h_iter != hierarchies_.end(),
                    fmt::format("unknown hierarchy name: '{}'", hierarchy_name));
@@ -1003,7 +1001,7 @@ Pyramid::search_node(const IndexNode* node,
 
         Vector<float> dists(id_count, allocator_);
         auto computer = codes->FactoryComputer(query->GetFloat32Vectors());
-        codes->Query(dists.data(), computer, ids_ptr, id_count);
+        codes->Query(dists.data(), computer, ids_ptr, id_count, &ctx);
 
         for (int i = 0; i < id_count; ++i) {
             results->Push(dists[i], ids_ptr[i]);
