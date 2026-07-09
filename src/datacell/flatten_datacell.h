@@ -349,6 +349,11 @@ FlattenDataCell<QuantTmpl, IOTmpl>::query(float* result_dists,
             computer->ScanBatchDists(id_count, codes.data, result_dists);
             return;
         }
+
+        if (ctx != nullptr and ctx->stats != nullptr and id_count > 0) {
+            ctx->stats->io_cnt.fetch_add(static_cast<uint32_t>(id_count),
+                                         std::memory_order_relaxed);
+        }
     }
 
     memset(result_dists, 0, sizeof(float) * id_count);
