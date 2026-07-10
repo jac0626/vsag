@@ -436,6 +436,10 @@ HGraphCodeSlotMap::CompactPhysicalSlotsAfter(InnerIdType removed_slot) {
         removed_slot < physical_count,
         fmt::format(
             "removed_slot({}) must be less than physical_count({})", removed_slot, physical_count));
+    if (removed_slot == physical_count - 1) {
+        physical_count_.store(physical_count - 1, std::memory_order_release);
+        return;
+    }
     for (InnerIdType inner_id = 0; inner_id < logical_capacity_; ++inner_id) {
         auto slot = inner_to_slot_[inner_id].load(std::memory_order_acquire);
         if (slot != INVALID_CODE_SLOT && slot > removed_slot) {

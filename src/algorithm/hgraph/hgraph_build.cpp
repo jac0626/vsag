@@ -26,6 +26,7 @@
 #include "datacell/flatten_datacell_parameter.h"
 #include "dataset_impl.h"
 #include "hgraph.h"  // IWYU pragma: keep
+#include "hgraph_code_slot.h"
 #include "impl/heap/standard_heap.h"
 #include "impl/logger/logger.h"
 #include "impl/odescent/odescent_graph_builder.h"

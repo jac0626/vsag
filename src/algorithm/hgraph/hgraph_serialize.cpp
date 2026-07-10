@@ -21,6 +21,7 @@
 #include "common.h"
 #include "datacell/sparse_graph_datacell.h"
 #include "hgraph.h"  // IWYU pragma: keep
+#include "hgraph_code_slot.h"
 #include "impl/heap/standard_heap.h"
 #include "impl/odescent/odescent_graph_builder.h"
 #include "impl/pruning_strategy.h"

@@ -47,6 +47,8 @@ public:
     void
     RemoveLogical(InnerIdType inner_id);
 
+    // Replace the existing `to` binding with `from`, then unpublish `from`.
+    // Both ids must be bound; this is only for HGraph's logical swap-remove path.
     void
     MoveLogical(InnerIdType from, InnerIdType to);
 

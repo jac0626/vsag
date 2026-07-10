@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include "hgraph.h"  // IWYU pragma: keep
+#include "hgraph_code_slot.h"
 #include "impl/pruning_strategy.h"
 #include "utils/util_functions.h"
 

@@ -197,6 +197,28 @@ TEST_CASE("HGraphCodeSlotMap binds logical ids to physical slots", "[ut][hgraph]
     REQUIRE(mapping.Resolve(3) == slot3);
 }
 
+TEST_CASE("HGraphCodeSlotMap compacts physical slots", "[ut][hgraph][code_slot_map]") {
+    auto allocator = vsag::SafeAllocator::FactoryDefaultAllocator();
+    vsag::HGraphCodeSlotMap mapping(allocator.get());
+
+    mapping.ReserveLogicalSize(3);
+    for (vsag::InnerIdType id = 0; id < 3; ++id) {
+        auto slot = mapping.AllocateSlot();
+        mapping.PublishSlot(id, slot);
+    }
+
+    mapping.RemoveLogical(2);
+    mapping.CompactPhysicalSlotsAfter(2);
+    REQUIRE(mapping.PhysicalCount() == 2);
+    REQUIRE(mapping.Resolve(0) == 0);
+    REQUIRE(mapping.Resolve(1) == 1);
+
+    mapping.RemoveLogical(0);
+    mapping.CompactPhysicalSlotsAfter(0);
+    REQUIRE(mapping.PhysicalCount() == 1);
+    REQUIRE(mapping.Resolve(1) == 0);
+}
+
 TEST_CASE("HGraphCodeSlotMap rejects invalid mappings", "[ut][hgraph][code_slot_map]") {
     auto allocator = vsag::SafeAllocator::FactoryDefaultAllocator();
     vsag::HGraphCodeSlotMap mapping(allocator.get());

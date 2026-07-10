@@ -40,9 +40,9 @@ public:
     GetGroupId(InnerIdType id) const -> InnerIdType = 0;
 
     [[nodiscard]] virtual auto
-    GetGroupSize(InnerIdType id) const -> size_t {
+    GetGroupSize(InnerIdType id) const -> uint64_t {
         auto group_id = this->GetGroupId(id);
-        return this->GetDuplicateIds(group_id).size() + 1;
+        return static_cast<uint64_t>(this->GetDuplicateIds(group_id).size()) + 1;
     }
 
     virtual void

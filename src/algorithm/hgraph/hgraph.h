@@ -30,7 +30,6 @@
 #include "datacell/graph_interface.h"
 #include "datacell/sparse_graph_datacell_parameter.h"
 #include "hgraph_cache.h"
-#include "hgraph_code_slot.h"
 #include "hgraph_parameter.h"
 #include "impl/basic_optimizer.h"
 #include "impl/heap/distance_heap.h"
@@ -51,6 +50,7 @@
 
 namespace vsag {
 class IteratorFilterContext;
+class HGraphCodeSlotMap;
 
 /**
  * @brief HGraph: hierarchical navigable graph index.
