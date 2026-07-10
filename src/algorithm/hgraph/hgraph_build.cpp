@@ -803,12 +803,12 @@ HGraph::ensure_physical_code_capacity_unlocked(InnerIdType required_capacity) {
     }
 
     auto new_capacity = this->align_physical_code_capacity(required_capacity);
-    this->basic_flatten_codes_->Resize(new_capacity);
+    GetHGraphPhysicalFlatten(this->basic_flatten_codes_)->Resize(new_capacity);
     if (has_precise_reorder()) {
-        this->high_precise_codes_->Resize(new_capacity);
+        GetHGraphPhysicalFlatten(this->high_precise_codes_)->Resize(new_capacity);
     }
     if (create_new_raw_vector_) {
-        this->raw_vector_->Resize(new_capacity);
+        GetHGraphPhysicalFlatten(this->raw_vector_)->Resize(new_capacity);
     }
     this->physical_code_capacity_.store(new_capacity, std::memory_order_release);
     this->cal_memory_usage();
@@ -850,12 +850,12 @@ HGraph::compact_physical_code_capacity_if_needed() {
         return;
     }
 
-    this->basic_flatten_codes_->ShrinkToFit(target_capacity);
+    GetHGraphPhysicalFlatten(this->basic_flatten_codes_)->ShrinkToFit(target_capacity);
     if (has_precise_reorder()) {
-        this->high_precise_codes_->ShrinkToFit(target_capacity);
+        GetHGraphPhysicalFlatten(this->high_precise_codes_)->ShrinkToFit(target_capacity);
     }
     if (create_new_raw_vector_) {
-        this->raw_vector_->ShrinkToFit(target_capacity);
+        GetHGraphPhysicalFlatten(this->raw_vector_)->ShrinkToFit(target_capacity);
     }
     this->physical_code_capacity_.store(target_capacity, std::memory_order_release);
     this->cal_memory_usage();

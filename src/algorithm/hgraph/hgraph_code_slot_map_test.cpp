@@ -270,6 +270,42 @@ TEST_CASE("HGraphCodeSlotMap supports concurrent independent binds",
     }
 }
 
+TEST_CASE("HGraphCodeSlotMap rebind never exposes an invalid slot", "[ut][hgraph][code_slot_map]") {
+    auto allocator = vsag::SafeAllocator::FactoryDefaultAllocator();
+    vsag::HGraphCodeSlotMap mapping(allocator.get());
+
+    mapping.ReserveLogicalSize(2);
+    auto slot0 = mapping.AllocateSlot();
+    auto slot1 = mapping.AllocateSlot();
+    mapping.PublishSlot(0, slot0);
+
+    constexpr uint64_t rebind_count = 100000;
+    std::promise<void> started;
+    auto started_future = started.get_future();
+    std::atomic<bool> stop{false};
+    auto reader = std::async(std::launch::async, [&mapping, &started, &stop, slot0, slot1]() {
+        auto slot = mapping.Resolve(0);
+        started.set_value();
+        if (slot != slot0 && slot != slot1) {
+            return false;
+        }
+        while (not stop.load(std::memory_order_acquire)) {
+            slot = mapping.Resolve(0);
+            if (slot != slot0 && slot != slot1) {
+                return false;
+            }
+        }
+        return true;
+    });
+
+    started_future.wait();
+    for (uint64_t i = 0; i < rebind_count; ++i) {
+        mapping.RebindSlot(0, i % 2 == 0 ? slot1 : slot0);
+    }
+    stop.store(true, std::memory_order_release);
+    REQUIRE(reader.get());
+}
+
 TEST_CASE("HGraphCodeSlotAdapter maps logical ids before calling flatten",
           "[ut][hgraph][code_slot_map]") {
     auto allocator = vsag::SafeAllocator::FactoryDefaultAllocator();
@@ -286,7 +322,16 @@ TEST_CASE("HGraphCodeSlotAdapter maps logical ids before calling flatten",
     auto adapter = vsag::MakeHGraphCodeSlotAdapter(
         physical_codes, mapping, allocator.get(), &logical_total_count);
 
+    REQUIRE(mapping->PhysicalCount() == 3);
     REQUIRE(adapter->TotalCount() == 4);
+    REQUIRE(vsag::GetHGraphPhysicalFlatten(adapter) == physical_codes);
+    REQUIRE(vsag::GetHGraphPhysicalFlatten(physical_codes) == physical_codes);
+    REQUIRE_THROWS(adapter->Resize(8));
+    REQUIRE_THROWS(adapter->Move(0, 1));
+    REQUIRE_THROWS(adapter->MergeOther(adapter, 0));
+    REQUIRE_THROWS(adapter->ShrinkToFit(2));
+    vsag::GetHGraphPhysicalFlatten(adapter)->Resize(8);
+    REQUIRE(physical_codes->max_capacity_ == 8);
 
     vsag::InnerIdType logical_ids[] = {0, 2, 3};
     float result_dists[] = {0.0F, 0.0F, 0.0F};

@@ -169,8 +169,8 @@ public:
 
     void
     Resize(InnerIdType capacity) override {
-        base_->Resize(capacity);
-        this->refresh_metadata();
+        (void)capacity;
+        this->reject_physical_operation("Resize");
     }
 
     void
@@ -189,8 +189,10 @@ public:
         this->refresh_metadata();
     }
 
-    int64_t
+    uint64_t
     GetMemoryUsage() const override {
+        // The adapter does not own the slot map. HGraph accounts for it once, separately from
+        // every physical flatten that shares the same map.
         return base_->GetMemoryUsage();
     }
 
@@ -233,6 +235,7 @@ public:
 
     InnerIdType
     TotalCount() const override {
+        // Callers of the adapter operate in HGraph's logical inner-id space.
         return static_cast<InnerIdType>(logical_total_count_->load(std::memory_order_acquire));
     }
 
@@ -259,33 +262,40 @@ public:
 
     void
     MergeOther(const FlattenInterfacePtr& other, InnerIdType bias) override {
-        auto other_adapter = std::dynamic_pointer_cast<HGraphCodeSlotAdapter>(other);
-        if (other_adapter == nullptr) {
-            throw VsagException(ErrorType::INTERNAL_ERROR,
-                                "HGraph code-slot adapter can only merge with same adapter");
-        }
-        base_->MergeOther(other_adapter->base_, bias);
-        this->refresh_metadata();
+        (void)other;
+        (void)bias;
+        this->reject_physical_operation("MergeOther");
     }
 
     void
     Move(InnerIdType from, InnerIdType to) override {
-        base_->Move(from, to);
-        this->refresh_metadata();
+        (void)from;
+        (void)to;
+        this->reject_physical_operation("Move");
     }
 
     void
     ShrinkToFit(InnerIdType capacity) override {
-        base_->ShrinkToFit(capacity);
-        this->refresh_metadata();
+        (void)capacity;
+        this->reject_physical_operation("ShrinkToFit");
+    }
+
+    [[nodiscard]] FlattenInterfacePtr
+    PhysicalFlatten() const {
+        return this->base_;
     }
 
 private:
+    [[noreturn]] void
+    reject_physical_operation(const char* operation) const {
+        throw VsagException(
+            ErrorType::INTERNAL_ERROR,
+            fmt::format("{} requires an explicit physical HGraph flatten", operation));
+    }
+
     void
     refresh_metadata() {
         this->code_size_ = base_->code_size_;
-        this->max_capacity_ = base_->max_capacity_;
-        this->total_count_ = base_->total_count_;
         this->prefetch_stride_code_ = base_->prefetch_stride_code_;
         this->prefetch_depth_code_ = base_->prefetch_depth_code_;
     }
@@ -334,6 +344,12 @@ MakeHGraphCodeSlotAdapter(FlattenInterfacePtr base,
                           const std::atomic<uint64_t>* logical_total_count) {
     return std::make_shared<HGraphCodeSlotAdapter>(
         std::move(base), std::move(mapping), allocator, logical_total_count);
+}
+
+FlattenInterfacePtr
+GetHGraphPhysicalFlatten(const FlattenInterfacePtr& flatten) {
+    auto adapter = std::dynamic_pointer_cast<HGraphCodeSlotAdapter>(flatten);
+    return adapter == nullptr ? flatten : adapter->PhysicalFlatten();
 }
 
 void
@@ -396,10 +412,13 @@ HGraphCodeSlotMap::RebindSlot(InnerIdType inner_id, InnerIdType code_slot_id) {
         throw VsagException(ErrorType::INVALID_ARGUMENT,
                             fmt::format("inner_id({}) has no reserved code slot", inner_id));
     }
-    auto old_slot = inner_to_slot_[inner_id].exchange(INVALID_CODE_SLOT, std::memory_order_acq_rel);
+    auto old_slot = inner_to_slot_[inner_id].load(std::memory_order_acquire);
+    while (old_slot != INVALID_CODE_SLOT &&
+           not inner_to_slot_[inner_id].compare_exchange_weak(
+               old_slot, code_slot_id, std::memory_order_release, std::memory_order_acquire)) {
+    }
     CHECK_ARGUMENT(old_slot != INVALID_CODE_SLOT,
                    fmt::format("inner_id({}) has no bound code slot", inner_id));
-    inner_to_slot_[inner_id].store(code_slot_id, std::memory_order_release);
 }
 
 void
@@ -613,12 +632,12 @@ HGraphCodeSlotMap::Deserialize(StreamReader& reader) {
     published_logical_count_.store(published_logical_count, std::memory_order_release);
 }
 
-int64_t
+uint64_t
 HGraphCodeSlotMap::GetMemoryUsage() const {
     std::shared_lock lock(mutex_);
     auto memory = static_cast<uint64_t>(sizeof(*this));
     memory += static_cast<uint64_t>(logical_capacity_) * sizeof(std::atomic<InnerIdType>);
-    return static_cast<int64_t>(memory);
+    return memory;
 }
 
 void
@@ -959,19 +978,17 @@ HGraph::generate_one_route_graph() {
 
 float
 HGraph::CalcDistanceById(const float* query, int64_t id, bool calculate_precise_distance) const {
+    std::shared_lock<std::shared_mutex> lock;
+    if (!this->immutable_.load(std::memory_order_acquire)) {
+        lock = std::shared_lock<std::shared_mutex>(this->global_mutex_);
+    }
     FlattenInterfacePtr flat;
-    {
-        std::shared_lock<std::shared_mutex> lock;
-        if (!this->immutable_.load(std::memory_order_acquire)) {
-            lock = std::shared_lock<std::shared_mutex>(this->global_mutex_);
-        }
-        flat = this->basic_flatten_codes_;
-        if (has_precise_reorder() && calculate_precise_distance) {
-            flat = this->high_precise_codes_;
-        }
-        if (create_new_raw_vector_ && calculate_precise_distance) {
-            flat = this->raw_vector_;
-        }
+    flat = this->basic_flatten_codes_;
+    if (has_precise_reorder() && calculate_precise_distance) {
+        flat = this->high_precise_codes_;
+    }
+    if (create_new_raw_vector_ && calculate_precise_distance) {
+        flat = this->raw_vector_;
     }
     return InnerIndexInterface::calc_distance_by_id(query, id, flat);
 }
@@ -981,19 +998,17 @@ HGraph::CalDistanceById(const float* query,
                         const int64_t* ids,
                         int64_t count,
                         bool calculate_precise_distance) const {
+    std::shared_lock<std::shared_mutex> lock;
+    if (!this->immutable_.load(std::memory_order_acquire)) {
+        lock = std::shared_lock<std::shared_mutex>(this->global_mutex_);
+    }
     FlattenInterfacePtr flat;
-    {
-        std::shared_lock<std::shared_mutex> lock;
-        if (!this->immutable_.load(std::memory_order_acquire)) {
-            lock = std::shared_lock<std::shared_mutex>(this->global_mutex_);
-        }
-        flat = this->basic_flatten_codes_;
-        if (has_precise_reorder() && calculate_precise_distance) {
-            flat = this->high_precise_codes_;
-        }
-        if (create_new_raw_vector_ && calculate_precise_distance) {
-            flat = this->raw_vector_;
-        }
+    flat = this->basic_flatten_codes_;
+    if (has_precise_reorder() && calculate_precise_distance) {
+        flat = this->high_precise_codes_;
+    }
+    if (create_new_raw_vector_ && calculate_precise_distance) {
+        flat = this->raw_vector_;
     }
     return InnerIndexInterface::cal_distance_by_id(query, ids, count, flat);
 }
@@ -1028,6 +1043,10 @@ HGraph::ExportModel(const IndexCommonParam& param) const {
 }
 void
 HGraph::GetCodeByInnerId(InnerIdType inner_id, uint8_t* data) const {
+    std::shared_lock<std::shared_mutex> lock;
+    if (!this->immutable_.load(std::memory_order_acquire)) {
+        lock = std::shared_lock<std::shared_mutex>(this->global_mutex_);
+    }
     if (raw_vector_ != nullptr) {
         raw_vector_->GetCodesById(inner_id, data);
         return;
@@ -1076,14 +1095,19 @@ HGraph::Merge(const std::vector<MergeUnit>& merge_units) {
         if (total_count_ == 0) {
             this->entry_point_id_ = other_index->entry_point_id_;
         }
-        basic_flatten_codes_->MergeOther(other_index->basic_flatten_codes_, physical_bias);
+        GetHGraphPhysicalFlatten(basic_flatten_codes_)
+            ->MergeOther(GetHGraphPhysicalFlatten(other_index->basic_flatten_codes_),
+                         physical_bias);
         label_table_->MergeOther(other_index->label_table_, merge_unit.id_map_func);
         if (has_precise_reorder()) {
-            high_precise_codes_->MergeOther(other_index->high_precise_codes_, physical_bias);
+            GetHGraphPhysicalFlatten(high_precise_codes_)
+                ->MergeOther(GetHGraphPhysicalFlatten(other_index->high_precise_codes_),
+                             physical_bias);
         }
         if (this->using_dedup_storage()) {
             if (create_new_raw_vector_) {
-                raw_vector_->MergeOther(other_index->raw_vector_, physical_bias);
+                GetHGraphPhysicalFlatten(raw_vector_)
+                    ->MergeOther(GetHGraphPhysicalFlatten(other_index->raw_vector_), physical_bias);
             }
             this->code_slot_map_->MergeOther(
                 *other_index->code_slot_map_, logical_bias, physical_bias);
@@ -1134,6 +1158,10 @@ HGraph::Merge(const std::vector<MergeUnit>& merge_units) {
 
 void
 HGraph::GetVectorByInnerId(InnerIdType inner_id, float* data) const {
+    std::shared_lock<std::shared_mutex> lock;
+    if (!this->immutable_.load(std::memory_order_acquire)) {
+        lock = std::shared_lock<std::shared_mutex>(this->global_mutex_);
+    }
     auto codes = (has_precise_reorder()) ? high_precise_codes_ : basic_flatten_codes_;
     codes = (create_new_raw_vector_) ? raw_vector_ : codes;
     bool release;
@@ -1336,6 +1364,7 @@ HGraph::UpdateVector(int64_t id, const DatasetPtr& new_base, bool force_update) 
         if (duplicate_tracker->GetGroupSize(inner_id) > 1) {
             auto code_slot_id = this->code_slot_map_->AllocateSlot();
             this->ensure_physical_code_capacity(code_slot_id + 1);
+            std::shared_lock global_lock(this->global_mutex_);
             this->insert_persistent_codes_to_slot(new_base_vec, code_slot_id);
             this->code_slot_map_->RebindSlot(inner_id, code_slot_id);
             duplicate_tracker->DetachDuplicateId(inner_id);
@@ -1345,6 +1374,7 @@ HGraph::UpdateVector(int64_t id, const DatasetPtr& new_base, bool force_update) 
 
     // note that only modify vector need to obtain unique lock
     // and the lock has been obtained inside datacell
+    std::shared_lock global_lock(this->global_mutex_);
     bool update_status = basic_flatten_codes_->UpdateVector(new_base_vec, inner_id);
     if (has_precise_reorder()) {
         update_status = update_status && high_precise_codes_->UpdateVector(new_base_vec, inner_id);
@@ -1376,6 +1406,9 @@ HGraph::cal_memory_usage() {
     memory += this->pool_->GetMemoryUsage();
     memory += this->label_table_->GetMemoryUsage();
     memory += this->basic_flatten_codes_->GetMemoryUsage();
+    if (this->code_slot_map_ != nullptr) {
+        memory += this->code_slot_map_->GetMemoryUsage();
+    }
     memory += this->bottom_graph_->GetMemoryUsage();
     for (auto& graph : this->route_graphs_) {
         memory += graph->GetMemoryUsage();

@@ -32,6 +32,7 @@ HGraph::Remove(const std::vector<int64_t>& ids, RemoveMode mode) {
         CHECK_ARGUMENT(this->support_force_remove(),
                        "force remove requires index_param.support_force_remove to be true");
         std::unique_lock<std::shared_mutex> wlock(this->force_remove_mutex_);
+        std::unique_lock<std::shared_mutex> global_lock(this->global_mutex_);
         for (const auto& id : ids) {
             delete_count += this->force_remove_one(id);
         }
@@ -164,12 +165,12 @@ void
 HGraph::compact_physical_codes_after(InnerIdType removed_slot) {
     auto old_physical_count = this->code_slot_map_->PhysicalCount();
     for (InnerIdType slot = removed_slot + 1; slot < old_physical_count; ++slot) {
-        basic_flatten_codes_->Move(slot, slot - 1);
+        GetHGraphPhysicalFlatten(basic_flatten_codes_)->Move(slot, slot - 1);
         if (high_precise_codes_) {
-            high_precise_codes_->Move(slot, slot - 1);
+            GetHGraphPhysicalFlatten(high_precise_codes_)->Move(slot, slot - 1);
         }
         if (create_new_raw_vector_) {
-            raw_vector_->Move(slot, slot - 1);
+            GetHGraphPhysicalFlatten(raw_vector_)->Move(slot, slot - 1);
         }
     }
     this->code_slot_map_->CompactPhysicalSlotsAfter(removed_slot);
@@ -240,12 +241,12 @@ HGraph::shrink_to_fit() {
 
     if (this->using_dedup_storage()) {
         auto physical_count = this->code_slot_map_->PhysicalCount();
-        basic_flatten_codes_->ShrinkToFit(physical_count);
+        GetHGraphPhysicalFlatten(basic_flatten_codes_)->ShrinkToFit(physical_count);
         if (high_precise_codes_) {
-            high_precise_codes_->ShrinkToFit(physical_count);
+            GetHGraphPhysicalFlatten(high_precise_codes_)->ShrinkToFit(physical_count);
         }
         if (create_new_raw_vector_) {
-            raw_vector_->ShrinkToFit(physical_count);
+            GetHGraphPhysicalFlatten(raw_vector_)->ShrinkToFit(physical_count);
         }
         this->physical_code_capacity_.store(physical_count, std::memory_order_release);
     } else {

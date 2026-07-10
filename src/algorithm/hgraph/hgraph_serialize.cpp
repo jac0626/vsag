@@ -793,7 +793,8 @@ HGraph::Deserialize(StreamReader& reader) {
             this->high_precise_codes_->Deserialize(reader);
         }
         this->physical_code_capacity_.store(
-            static_cast<InnerIdType>(this->basic_flatten_codes_->max_capacity_),
+            static_cast<InnerIdType>(
+                GetHGraphPhysicalFlatten(this->basic_flatten_codes_)->max_capacity_),
             std::memory_order_release);
 
         for (auto& route_graph : this->route_graphs_) {
@@ -851,7 +852,8 @@ HGraph::Deserialize(StreamReader& reader) {
             this->high_precise_codes_->Deserialize(buffer_reader);
         }
         this->physical_code_capacity_.store(
-            static_cast<InnerIdType>(this->basic_flatten_codes_->max_capacity_),
+            static_cast<InnerIdType>(
+                GetHGraphPhysicalFlatten(this->basic_flatten_codes_)->max_capacity_),
             std::memory_order_release);
 
         for (auto& route_graph : this->route_graphs_) {
@@ -898,6 +900,9 @@ HGraph::GetMemoryUsageDetail() const {
     memory_usage["pool"] = this->pool_->GetMemoryUsage();
     memory_usage["label_table"] = this->label_table_->GetMemoryUsage();
     memory_usage["basic_flatten_codes"] = this->basic_flatten_codes_->GetMemoryUsage();
+    if (this->code_slot_map_ != nullptr) {
+        memory_usage["code_slot_map"] = this->code_slot_map_->GetMemoryUsage();
+    }
     memory_usage["bottom_graph"] = this->bottom_graph_->GetMemoryUsage();
     uint64_t route_graph_memory = 0;
     for (const auto& route_graph : this->route_graphs_) {

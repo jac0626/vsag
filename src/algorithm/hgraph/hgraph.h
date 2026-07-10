@@ -109,7 +109,7 @@ struct HGraphCodeSlotMap {
     void
     Deserialize(StreamReader& reader);
 
-    [[nodiscard]] int64_t
+    [[nodiscard]] uint64_t
     GetMemoryUsage() const;
 
 private:
@@ -132,6 +132,10 @@ MakeHGraphCodeSlotAdapter(FlattenInterfacePtr base,
                           std::shared_ptr<const HGraphCodeSlotMap> mapping,
                           Allocator* allocator,
                           const std::atomic<uint64_t>* logical_total_count);
+
+// Capacity, movement, and compaction use physical slot ids and must bypass the logical-id adapter.
+FlattenInterfacePtr
+GetHGraphPhysicalFlatten(const FlattenInterfacePtr& flatten);
 
 void
 InsertVectorToHGraphCodeSlot(const FlattenInterfacePtr& flatten,

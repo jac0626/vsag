@@ -372,12 +372,11 @@ TEST_CASE("HGraph deduplicate_storage keeps physical flatten capacity slot-based
     REQUIRE(old_storage_build.has_value());
     REQUIRE(old_storage_build.value().empty());
 
-    auto dedup_memory = vsag::JsonType::Parse(dedup_index->GetMemoryUsageDetail());
-    auto old_storage_memory = vsag::JsonType::Parse(old_storage_index->GetMemoryUsageDetail());
-    REQUIRE(dedup_memory["basic_flatten_codes"].GetInt() <
-            old_storage_memory["basic_flatten_codes"].GetInt());
-    REQUIRE(dedup_memory["__total_size__"].GetInt() <
-            old_storage_memory["__total_size__"].GetInt());
+    auto dedup_memory = dedup_index->GetMemoryUsageDetail();
+    auto old_storage_memory = old_storage_index->GetMemoryUsageDetail();
+    REQUIRE(dedup_memory["basic_flatten_codes"] < old_storage_memory["basic_flatten_codes"]);
+    REQUIRE(dedup_memory["code_slot_map"] > 0);
+    REQUIRE(dedup_index->GetMemoryUsage() < old_storage_index->GetMemoryUsage());
 }
 
 TEST_CASE("HGraph support_duplicate without deduplicate_storage keeps old storage semantics",
