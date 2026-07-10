@@ -20,7 +20,7 @@
 #include <sstream>
 #include <vector>
 
-#include "hgraph.h"
+#include "hgraph_code_slot.h"
 #include "impl/allocator/safe_allocator.h"
 #include "storage/stream_reader.h"
 #include "storage/stream_writer.h"

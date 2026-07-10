@@ -358,7 +358,7 @@ HGraph::Serialize(StreamWriter& writer) const {
 
     // FIXME(wxyu): this option is used for special purposes, like compatibility testing
     if (this->use_old_serial_format_) {
-        if (this->support_duplicate_ && this->deduplicate_storage_) {
+        if (this->using_dedup_storage()) {
             throw VsagException(ErrorType::INVALID_ARGUMENT,
                                 "HGraph duplicate code slot mapping does not support v0.14 "
                                 "serialization");
@@ -382,7 +382,7 @@ HGraph::Serialize(StreamWriter& writer) const {
     }
 
     this->serialize_label_info(writer);
-    if (this->support_duplicate_ && this->deduplicate_storage_) {
+    if (this->using_dedup_storage()) {
         this->code_slot_map_->Serialize(writer);
     }
     this->basic_flatten_codes_->Serialize(writer);
@@ -781,7 +781,7 @@ HGraph::Deserialize(StreamReader& reader) {
         logger::debug("parse with v0.14 version format");
 
         this->deserialize_basic_info_v0_14(reader);
-        if (this->support_duplicate_ && this->deduplicate_storage_) {
+        if (this->using_dedup_storage()) {
             throw VsagException(ErrorType::INVALID_ARGUMENT,
                                 "HGraph duplicate code slot mapping does not support v0.14 "
                                 "serialization");
@@ -802,7 +802,7 @@ HGraph::Deserialize(StreamReader& reader) {
         }
         auto new_size = max_capacity_.load();
         this->neighbors_mutex_->Resize(new_size);
-        if (this->support_duplicate_ && this->deduplicate_storage_) {
+        if (this->using_dedup_storage()) {
             this->code_slot_map_->ReserveLogicalSize(static_cast<InnerIdType>(new_size));
         }
 
@@ -840,7 +840,7 @@ HGraph::Deserialize(StreamReader& reader) {
         this->label_table_->is_legacy_duplicate_format_ = (dup_version == 0);
 
         this->deserialize_label_info(buffer_reader);
-        if (this->support_duplicate_ && this->deduplicate_storage_) {
+        if (this->using_dedup_storage()) {
             this->code_slot_map_->Deserialize(buffer_reader);
             this->total_count_.store(this->code_slot_map_->PublishedLogicalCount(),
                                      std::memory_order_release);
@@ -861,7 +861,7 @@ HGraph::Deserialize(StreamReader& reader) {
         }
         auto new_size = max_capacity_.load();
         this->neighbors_mutex_->Resize(new_size);
-        if (this->support_duplicate_ && this->deduplicate_storage_) {
+        if (this->using_dedup_storage()) {
             this->code_slot_map_->ReserveLogicalSize(static_cast<InnerIdType>(new_size));
         }
 
@@ -870,7 +870,7 @@ HGraph::Deserialize(StreamReader& reader) {
         if (this->extra_info_size_ > 0 && this->extra_infos_ != nullptr) {
             this->extra_infos_->Deserialize(buffer_reader);
         }
-        if (not(this->support_duplicate_ && this->deduplicate_storage_)) {
+        if (not this->using_dedup_storage()) {
             this->total_count_ = this->basic_flatten_codes_->TotalCount();
         }
 
