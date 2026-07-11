@@ -157,50 +157,6 @@ SparseDuplicateTracker::GetGroupId(InnerIdType id) const -> InnerIdType {
 }
 
 void
-SparseDuplicateTracker::DetachDuplicateId(InnerIdType id) {
-    std::scoped_lock lock(mutex_);
-
-    auto iter = next_ids_.find(id);
-    if (iter == next_ids_.end()) {
-        return;
-    }
-
-    auto previous_id = id;
-    while (next_ids_.at(previous_id) != id) {
-        previous_id = next_ids_.at(previous_id);
-    }
-
-    auto next_id = iter->second;
-    next_ids_.erase(id);
-    if (previous_id == next_id) {
-        next_ids_.erase(previous_id);
-        duplicate_count_--;
-        return;
-    }
-    next_ids_[previous_id] = next_id;
-}
-
-void
-SparseDuplicateTracker::MoveId(InnerIdType from, InnerIdType to) {
-    std::scoped_lock lock(mutex_);
-
-    auto iter = next_ids_.find(from);
-    if (from == to || iter == next_ids_.end()) {
-        return;
-    }
-
-    auto previous_id = from;
-    while (next_ids_.at(previous_id) != from) {
-        previous_id = next_ids_.at(previous_id);
-    }
-
-    auto next_id = iter->second;
-    next_ids_.erase(from);
-    next_ids_[to] = next_id;
-    next_ids_[previous_id] = to;
-}
-
-void
 SparseDuplicateTracker::Serialize(StreamWriter& writer) const {
     std::shared_lock lock(mutex_);
 

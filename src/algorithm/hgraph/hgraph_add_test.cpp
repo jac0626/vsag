@@ -25,6 +25,8 @@
 #include "impl/thread_pool/safe_thread_pool.h"
 #include "index/index_impl.h"
 #include "index_common_param.h"
+#include "simd/bf16_simd.h"
+#include "simd/fp16_simd.h"
 #include "unittest.h"
 #include "vsag/options.h"
 
@@ -156,6 +158,131 @@ const std::string kBruteForceSearchParams =
     R"({"hgraph": {"ef_search": 32, "brute_force_threshold": 1.0}})";
 
 }  // namespace
+
+TEST_CASE("HGraph exact duplicate fallback supports every dense data type",
+          "[ut][hgraph][duplicate][data_type]") {
+    constexpr int64_t dim = 8;
+    auto hgraph_json = MakeFp32HGraphJson();
+    std::vector<int64_t> base_ids = {10, 20};
+    std::vector<int64_t> duplicate_id = {30};
+
+    SECTION("int8") {
+        auto common_param = MakeCommonParam(dim);
+        common_param.data_type_ = vsag::DataTypes::DATA_TYPE_INT8;
+        hgraph_json["base_quantization_type"].SetString("int8");
+        auto index = MakeHGraphIndex(hgraph_json, common_param);
+        std::vector<int8_t> base_vectors = {0, 0, 0, 0, 0, 0, 0, 0, 1, 2, 3, 4, 5, 6, 7, 8};
+        auto base = vsag::Dataset::Make();
+        base->NumElements(2)
+            ->Dim(dim)
+            ->Ids(base_ids.data())
+            ->Int8Vectors(base_vectors.data())
+            ->Owner(false);
+        REQUIRE(index->Build(base).has_value());
+
+        auto duplicate = vsag::Dataset::Make();
+        duplicate->NumElements(1)
+            ->Dim(dim)
+            ->Ids(duplicate_id.data())
+            ->Int8Vectors(base_vectors.data() + dim)
+            ->Owner(false);
+        REQUIRE(index->Add(duplicate).has_value());
+        RequireRangeContains(index, duplicate, {20, 30}, 2);
+    }
+
+    SECTION("fp16") {
+        auto common_param = MakeCommonParam(dim);
+        common_param.data_type_ = vsag::DataTypes::DATA_TYPE_FP16;
+        hgraph_json["base_quantization_type"].SetString("fp16");
+        auto index = MakeHGraphIndex(hgraph_json, common_param);
+        std::vector<uint16_t> base_vectors(static_cast<uint64_t>(dim * 2));
+        for (int64_t i = 0; i < dim; ++i) {
+            base_vectors[dim + i] = vsag::generic::FloatToFP16(static_cast<float>(i + 1));
+        }
+        auto base = vsag::Dataset::Make();
+        base->NumElements(2)
+            ->Dim(dim)
+            ->Ids(base_ids.data())
+            ->Float16Vectors(base_vectors.data())
+            ->Owner(false);
+        REQUIRE(index->Build(base).has_value());
+
+        auto duplicate = vsag::Dataset::Make();
+        duplicate->NumElements(1)
+            ->Dim(dim)
+            ->Ids(duplicate_id.data())
+            ->Float16Vectors(base_vectors.data() + dim)
+            ->Owner(false);
+        REQUIRE(index->Add(duplicate).has_value());
+        RequireRangeContains(index, duplicate, {20, 30}, 2);
+    }
+
+    SECTION("bf16") {
+        auto common_param = MakeCommonParam(dim);
+        common_param.data_type_ = vsag::DataTypes::DATA_TYPE_BF16;
+        hgraph_json["base_quantization_type"].SetString("bf16");
+        auto index = MakeHGraphIndex(hgraph_json, common_param);
+        std::vector<uint16_t> base_vectors(static_cast<uint64_t>(dim * 2));
+        for (int64_t i = 0; i < dim; ++i) {
+            base_vectors[dim + i] = vsag::generic::FloatToBF16(static_cast<float>(i + 1));
+        }
+        auto base = vsag::Dataset::Make();
+        base->NumElements(2)
+            ->Dim(dim)
+            ->Ids(base_ids.data())
+            ->Float16Vectors(base_vectors.data())
+            ->Owner(false);
+        REQUIRE(index->Build(base).has_value());
+
+        auto duplicate = vsag::Dataset::Make();
+        duplicate->NumElements(1)
+            ->Dim(dim)
+            ->Ids(duplicate_id.data())
+            ->Float16Vectors(base_vectors.data() + dim)
+            ->Owner(false);
+        REQUIRE(index->Add(duplicate).has_value());
+        RequireRangeContains(index, duplicate, {20, 30}, 2);
+    }
+}
+
+TEST_CASE("HGraph exact duplicate fallback supports sparse vectors",
+          "[ut][hgraph][duplicate][data_type][sparse]") {
+    constexpr int64_t dim = 16;
+    auto common_param = MakeCommonParam(dim);
+    common_param.data_type_ = vsag::DataTypes::DATA_TYPE_SPARSE;
+    common_param.repr_ = vsag::RecordRepr::SPARSE;
+    common_param.metric_ = vsag::MetricType::METRIC_TYPE_IP;
+    auto hgraph_json = MakeFp32HGraphJson();
+    hgraph_json["base_quantization_type"].SetString("sparse");
+    auto index = MakeHGraphIndex(hgraph_json, common_param);
+
+    std::vector<uint32_t> ids0 = {1, 3};
+    std::vector<float> vals0 = {1.0F, 2.0F};
+    std::vector<uint32_t> ids1 = {2, 5};
+    std::vector<float> vals1 = {3.0F, 4.0F};
+    std::vector<vsag::SparseVector> base_vectors = {
+        {2, ids0.data(), vals0.data()},
+        {2, ids1.data(), vals1.data()},
+    };
+    std::vector<int64_t> base_ids = {10, 20};
+    auto base = vsag::Dataset::Make();
+    base->NumElements(2)
+        ->Dim(dim)
+        ->Ids(base_ids.data())
+        ->SparseVectors(base_vectors.data())
+        ->Owner(false);
+    REQUIRE(index->Build(base).has_value());
+
+    std::vector<int64_t> duplicate_id = {30};
+    auto duplicate = vsag::Dataset::Make();
+    duplicate->NumElements(1)
+        ->Dim(dim)
+        ->Ids(duplicate_id.data())
+        ->SparseVectors(base_vectors.data() + 1)
+        ->Owner(false);
+    REQUIRE(index->Add(duplicate).has_value());
+    RequireRangeContains(index, duplicate, {20, 30}, -1, 1000.0F);
+}
 
 TEST_CASE("HGraph Add exact duplicate keeps duplicate label searchable",
           "[ut][hgraph][duplicate][add]") {
@@ -366,6 +493,10 @@ TEST_CASE("HGraph deduplicate_storage keeps physical flatten capacity slot-based
     auto dedup_build = dedup_index->Build(base);
     REQUIRE(dedup_build.has_value());
     REQUIRE(dedup_build.value().empty());
+    auto dedup_hgraph = std::dynamic_pointer_cast<vsag::HGraph>(dedup_index->GetInnerIndex());
+    REQUIRE(dedup_hgraph != nullptr);
+    REQUIRE(dedup_hgraph->GetCodeStorageCounts() ==
+            std::pair<vsag::InnerIdType, vsag::CodeSlotIdType>{count, 1});
 
     auto old_storage_index = MakeHGraphIndex(MakeFp32HGraphJson(false), common_param);
     auto old_storage_build = old_storage_index->Build(base);

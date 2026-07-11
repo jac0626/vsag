@@ -46,12 +46,6 @@ public:
     }
 
     virtual void
-    DetachDuplicateId(InnerIdType id) = 0;
-
-    virtual void
-    MoveId(InnerIdType from, InnerIdType to) = 0;
-
-    virtual void
     Serialize(StreamWriter& writer) const = 0;
 
     virtual void

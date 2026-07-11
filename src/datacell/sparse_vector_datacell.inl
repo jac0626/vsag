@@ -44,6 +44,37 @@ SparseVectorDataCell<QuantTmpl, IOTmpl>::query(float* result_dists,
     }
 }
 template <typename QuantTmpl, typename IOTmpl>
+bool
+SparseVectorDataCell<QuantTmpl, IOTmpl>::CompareRawVectorWithId(const void* vector,
+                                                                InnerIdType id) {
+    if (vector == nullptr) {
+        return false;
+    }
+    const auto* sparse_vector = static_cast<const SparseVector*>(vector);
+    const uint64_t encoded_size =
+        (static_cast<uint64_t>(sparse_vector->len_) * 2 + 1) * sizeof(uint32_t);
+    Vector<uint8_t> encoded(encoded_size, allocator_);
+    if (not quantizer_->EncodeOne(reinterpret_cast<const float*>(vector), encoded.data())) {
+        return false;
+    }
+
+    DocLocation location;
+    offset_io_->Read(sizeof(location),
+                     static_cast<uint64_t>(id) * sizeof(location),
+                     reinterpret_cast<uint8_t*>(&location));
+    if (location.size != encoded_size) {
+        return false;
+    }
+    bool need_release = false;
+    const auto* codes = io_->Read(location.size, location.offset, need_release);
+    const bool result = std::memcmp(encoded.data(), codes, encoded_size) == 0;
+    if (need_release) {
+        this->Release(codes);
+    }
+    return result;
+}
+
+template <typename QuantTmpl, typename IOTmpl>
 void
 SparseVectorDataCell<QuantTmpl, IOTmpl>::Deserialize(lvalue_or_rvalue<StreamReader> reader) {
     FlattenInterface::Deserialize(reader);

@@ -539,8 +539,7 @@ HGraph::map_hgraph_param(const JsonType& hgraph_json) {
             "{GRAPH_PARAM_INIT_MAX_CAPACITY_KEY}": 100,
             "{GRAPH_SUPPORT_REMOVE}": false,
             "{REMOVE_FLAG_BIT}": 8,
-            "{SUPPORT_DUPLICATE}": false,
-            "{DEDUPLICATE_STORAGE}": false
+            "{SUPPORT_DUPLICATE}": false
         },
         "{BASE_CODES_KEY}": {
             "{IO_PARAMS_KEY}": {

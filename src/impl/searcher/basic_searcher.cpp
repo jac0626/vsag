@@ -15,7 +15,6 @@
 
 #include "basic_searcher.h"
 
-#include <array>
 #include <atomic>
 #include <chrono>
 #include <cstring>
@@ -542,16 +541,7 @@ BasicSearcher::search_impl(const GraphInterfacePtr& graph,
                 inner_search_param.duplicate_query_id < flatten->TotalCount() &&
                 flatten->CompareVectors(inner_search_param.duplicate_query_id, min_index);
             if (not is_duplicate) {
-                constexpr uint64_t stack_encoded_query_size = 256;
-                std::array<uint8_t, stack_encoded_query_size> stack_encoded_query{};
-                Vector<uint8_t> heap_encoded_query(alloc);
-                auto* encoded_query = stack_encoded_query.data();
-                if (flatten->code_size_ > stack_encoded_query.size()) {
-                    heap_encoded_query.resize(flatten->code_size_);
-                    encoded_query = heap_encoded_query.data();
-                }
-                is_duplicate = flatten->CompareVectorWithId(
-                    static_cast<const float*>(query), min_index, encoded_query);
+                is_duplicate = flatten->CompareRawVectorWithId(query, min_index);
             }
             if (is_duplicate) {
                 inner_search_param.duplicate_id = min_index;

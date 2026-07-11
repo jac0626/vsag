@@ -51,6 +51,8 @@
 namespace vsag {
 class IteratorFilterContext;
 
+using CodeSlotIdType = InnerIdType;
+
 struct HGraphCodeSlotMap {
     // HGraph protects slot-map lifetime and capacity changes with its outer locks. Slot bindings
     // are published and read with atomics so the search hot path does not take an extra map lock.
@@ -58,38 +60,39 @@ struct HGraphCodeSlotMap {
 
     ~HGraphCodeSlotMap();
 
-    InnerIdType
+    CodeSlotIdType
     AllocateSlot();
 
     void
-    PublishSlot(InnerIdType inner_id, InnerIdType code_slot_id);
+    PublishSlot(InnerIdType inner_id, CodeSlotIdType code_slot_id);
 
-    [[nodiscard]] InnerIdType
+    [[nodiscard]] CodeSlotIdType
     Resolve(InnerIdType inner_id) const;
 
     void
     ResolvePair(InnerIdType inner_id1,
                 InnerIdType inner_id2,
-                InnerIdType& code_slot_id1,
-                InnerIdType& code_slot_id2) const;
+                CodeSlotIdType& code_slot_id1,
+                CodeSlotIdType& code_slot_id2) const;
 
     void
-    ResolveBatch(const InnerIdType* inner_ids, InnerIdType count, InnerIdType* code_slot_ids) const;
+    ResolveBatch(const InnerIdType* inner_ids,
+                 InnerIdType count,
+                 CodeSlotIdType* code_slot_ids) const;
 
     void
     ReserveLogicalSize(InnerIdType new_size);
 
     void
-    MergeOther(const HGraphCodeSlotMap& other, InnerIdType logical_bias, InnerIdType physical_bias);
+    MergeOther(const HGraphCodeSlotMap& other,
+               InnerIdType logical_bias,
+               CodeSlotIdType physical_bias);
 
-    [[nodiscard]] InnerIdType
+    [[nodiscard]] CodeSlotIdType
     PhysicalCount() const;
 
     [[nodiscard]] InnerIdType
     PublishedLogicalCount() const;
-
-    void
-    Clear();
 
     void
     Serialize(StreamWriter& writer) const;
@@ -108,9 +111,9 @@ private:
     ReleaseSlots();
 
     Allocator* allocator_{nullptr};
-    std::atomic<InnerIdType>* inner_to_slot_{nullptr};
+    std::atomic<CodeSlotIdType>* inner_to_slot_{nullptr};
     InnerIdType logical_capacity_{0};
-    std::atomic<InnerIdType> physical_count_{0};
+    std::atomic<CodeSlotIdType> physical_count_{0};
     std::atomic<InnerIdType> published_logical_count_{0};
     mutable std::shared_mutex mutex_;
 };
@@ -121,14 +124,14 @@ MakeHGraphCodeSlotAdapter(FlattenInterfacePtr base,
                           Allocator* allocator,
                           const std::atomic<uint64_t>* logical_total_count);
 
-// Capacity, movement, and compaction use physical slot ids and must bypass the logical-id adapter.
+// Physical storage operations must bypass the logical-id adapter.
 FlattenInterfacePtr
 GetHGraphPhysicalFlatten(const FlattenInterfacePtr& flatten);
 
 void
 InsertVectorToHGraphCodeSlot(const FlattenInterfacePtr& flatten,
                              const void* vector,
-                             InnerIdType code_slot_id);
+                             CodeSlotIdType code_slot_id);
 
 /**
  * @brief HGraph: hierarchical navigable graph index.
@@ -210,6 +213,16 @@ public:
     int64_t
     GetNumberRemoved() const override {
         return delete_count_;
+    }
+
+    [[nodiscard]] std::pair<InnerIdType, CodeSlotIdType>
+    GetCodeStorageCounts() const {
+        if (this->code_slot_map_ == nullptr) {
+            auto count = static_cast<InnerIdType>(this->total_count_.load());
+            return {count, count};
+        }
+        return {this->code_slot_map_->PublishedLogicalCount(),
+                this->code_slot_map_->PhysicalCount()};
     }
 
     std::string
@@ -388,15 +401,15 @@ public:
 
     /// Write codes to a physical code slot when deduplicated storage is enabled.
     void
-    insert_persistent_codes_to_slot(const void* data, InnerIdType code_slot_id);
+    insert_persistent_codes_to_slot(const void* data, CodeSlotIdType code_slot_id);
 
     /// Ensure physical code storage can hold required_capacity physical slots.
     void
-    ensure_physical_code_capacity(InnerIdType required_capacity);
+    ensure_physical_code_capacity(CodeSlotIdType required_capacity);
 
     /// Ensure physical code storage while global_mutex_ unique lock is already held.
     void
-    ensure_physical_code_capacity_unlocked(InnerIdType required_capacity);
+    ensure_physical_code_capacity_unlocked(CodeSlotIdType required_capacity);
 
     /// Grow internal storage to at least new_size capacity.
     void
@@ -835,8 +848,8 @@ private:
     mutable std::shared_mutex add_mutex_;           // serializes Add() operations
     mutable std::shared_mutex force_remove_mutex_;  // serializes force-remove operations
 
-    std::atomic<InnerIdType> max_capacity_{0};            // allocated storage capacity
-    std::atomic<InnerIdType> physical_code_capacity_{0};  // physical flatten slot capacity
+    std::atomic<InnerIdType> max_capacity_{0};               // allocated storage capacity
+    std::atomic<CodeSlotIdType> physical_code_capacity_{0};  // physical flatten slot capacity
 
     uint64_t resize_increase_count_bit_{DEFAULT_RESIZE_BIT};  // log2(resize batch size)
 

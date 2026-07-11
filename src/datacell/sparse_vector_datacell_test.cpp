@@ -65,6 +65,9 @@ TEST_CASE("SparseDataCell Basic Test", "[ut][SparseDataCell] ") {
                                  half_count / 2,
                                  idx.data() + half_count + half_count / 2);
 
+    REQUIRE(data_cell->CompareRawVectorWithId(sparse_vectors.data(), idx[0]));
+    REQUIRE_FALSE(data_cell->CompareRawVectorWithId(sparse_vectors.data() + 1, idx[0]));
+
     for (int i = 0; i < base_count - 1; ++i) {
         fixtures::dist_t distance = data_cell->ComputePairVectors(idx[i], idx[i + 1]);
         REQUIRE(distance == fixtures::GetSparseDistance(sparse_vectors[i], sparse_vectors[i + 1]));

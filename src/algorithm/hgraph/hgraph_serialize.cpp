@@ -200,6 +200,7 @@ HGraph::serialize_basic_info() const {
     // logger::debug("mult: {}", this->mult_);
     TO_JSON_BASE64(jsonify_basic_info, mult);
     jsonify_basic_info["max_capacity"].SetUint64(this->max_capacity_.load());
+    jsonify_basic_info["total_count"].SetUint64(this->total_count_.load());
     jsonify_basic_info["max_level"].SetUint64(this->route_graphs_.size());
     jsonify_basic_info[INDEX_PARAM].SetString(this->create_param_ptr_->ToString());
 
@@ -358,7 +359,7 @@ HGraph::Serialize(StreamWriter& writer) const {
 
     // FIXME(wxyu): this option is used for special purposes, like compatibility testing
     if (this->use_old_serial_format_) {
-        if (this->support_duplicate_ && this->deduplicate_storage_) {
+        if (this->using_dedup_storage()) {
             throw VsagException(ErrorType::INVALID_ARGUMENT,
                                 "HGraph duplicate code slot mapping does not support v0.14 "
                                 "serialization");
@@ -382,7 +383,7 @@ HGraph::Serialize(StreamWriter& writer) const {
     }
 
     this->serialize_label_info(writer);
-    if (this->support_duplicate_ && this->deduplicate_storage_) {
+    if (this->using_dedup_storage()) {
         this->code_slot_map_->Serialize(writer);
     }
     this->basic_flatten_codes_->Serialize(writer);
@@ -781,7 +782,7 @@ HGraph::Deserialize(StreamReader& reader) {
         logger::debug("parse with v0.14 version format");
 
         this->deserialize_basic_info_v0_14(reader);
-        if (this->support_duplicate_ && this->deduplicate_storage_) {
+        if (this->using_dedup_storage()) {
             throw VsagException(ErrorType::INVALID_ARGUMENT,
                                 "HGraph duplicate code slot mapping does not support v0.14 "
                                 "serialization");
@@ -802,7 +803,7 @@ HGraph::Deserialize(StreamReader& reader) {
         }
         auto new_size = max_capacity_.load();
         this->neighbors_mutex_->Resize(new_size);
-        if (this->support_duplicate_ && this->deduplicate_storage_) {
+        if (this->using_dedup_storage()) {
             this->code_slot_map_->ReserveLogicalSize(static_cast<InnerIdType>(new_size));
         }
 
@@ -826,11 +827,19 @@ HGraph::Deserialize(StreamReader& reader) {
         // metadata should NOT be nullptr if footer is not nullptr
         auto basic_info = metadata->Get(BASIC_INFO);
         auto has_serialized_index_param = basic_info.Contains(INDEX_PARAM);
+        auto has_serialized_total_count = basic_info.Contains("total_count");
+        uint64_t serialized_total_count = 0;
+        if (has_serialized_total_count) {
+            serialized_total_count = basic_info["total_count"].GetUint64();
+        }
         this->deserialize_basic_info(basic_info);
-        if (not has_serialized_index_param && this->support_duplicate_ &&
-            this->deduplicate_storage_) {
+        if (not has_serialized_index_param && this->using_dedup_storage()) {
             throw VsagException(ErrorType::INVALID_ARGUMENT,
                                 "HGraph deduplicate_storage requires serialized index parameter");
+        }
+        if (not has_serialized_total_count && this->using_dedup_storage()) {
+            throw VsagException(ErrorType::INVALID_ARGUMENT,
+                                "HGraph deduplicate_storage requires serialized total_count");
         }
 
         int64_t dup_version = 0;
@@ -840,10 +849,25 @@ HGraph::Deserialize(StreamReader& reader) {
         this->label_table_->is_legacy_duplicate_format_ = (dup_version == 0);
 
         this->deserialize_label_info(buffer_reader);
-        if (this->support_duplicate_ && this->deduplicate_storage_) {
+        if (this->using_dedup_storage()) {
             this->code_slot_map_->Deserialize(buffer_reader);
-            this->total_count_.store(this->code_slot_map_->PublishedLogicalCount(),
-                                     std::memory_order_release);
+            auto logical_count = this->code_slot_map_->PublishedLogicalCount();
+            if (logical_count != serialized_total_count) {
+                throw VsagException(
+                    ErrorType::INVALID_BINARY,
+                    fmt::format("deduplicated HGraph logical count mismatch: {} != {}",
+                                logical_count,
+                                serialized_total_count));
+            }
+            if (this->label_table_->label_table_.size() < logical_count) {
+                throw VsagException(
+                    ErrorType::INVALID_BINARY,
+                    fmt::format("deduplicated HGraph label table is smaller than logical count: "
+                                "{} < {}",
+                                this->label_table_->label_table_.size(),
+                                logical_count));
+            }
+            this->total_count_.store(logical_count, std::memory_order_release);
         }
 
         this->basic_flatten_codes_->Deserialize(buffer_reader);
@@ -861,7 +885,7 @@ HGraph::Deserialize(StreamReader& reader) {
         }
         auto new_size = max_capacity_.load();
         this->neighbors_mutex_->Resize(new_size);
-        if (this->support_duplicate_ && this->deduplicate_storage_) {
+        if (this->using_dedup_storage()) {
             this->code_slot_map_->ReserveLogicalSize(static_cast<InnerIdType>(new_size));
         }
 
@@ -870,7 +894,7 @@ HGraph::Deserialize(StreamReader& reader) {
         if (this->extra_info_size_ > 0 && this->extra_infos_ != nullptr) {
             this->extra_infos_->Deserialize(buffer_reader);
         }
-        if (not(this->support_duplicate_ && this->deduplicate_storage_)) {
+        if (not this->using_dedup_storage()) {
             this->total_count_ = this->basic_flatten_codes_->TotalCount();
         }
 
@@ -900,10 +924,6 @@ HGraph::Deserialize(StreamReader& reader) {
                                 physical_count));
             }
         };
-        if (logical_count != this->total_count_.load(std::memory_order_acquire)) {
-            throw VsagException(ErrorType::INVALID_BINARY,
-                                "deduplicated HGraph code-slot logical count is inconsistent");
-        }
         validate_physical_count(this->basic_flatten_codes_, "base codes");
         if (this->has_precise_reorder()) {
             validate_physical_count(this->high_precise_codes_, "precise codes");

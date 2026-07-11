@@ -143,7 +143,7 @@ HGraph::Build(const DatasetPtr& data) {
     this->build_cache_hit_nodes_ = 0;
     this->build_cache_missed_nodes_ = 0;
     if (this->has_loaded_cache()) {
-        if (this->support_duplicate_ && this->deduplicate_storage_) {
+        if (this->using_dedup_storage()) {
             throw VsagException(ErrorType::INVALID_ARGUMENT,
                                 "HGraph deduplicate_storage does not support build_with_cache");
         }
@@ -309,7 +309,7 @@ HGraph::validate_add_data(const DatasetPtr& data) const {
 HGraph::AddContext
 HGraph::prepare_add_context(const DatasetPtr& data) {
     AddContext context;
-    context.use_dedup_storage = this->support_duplicate_ && this->deduplicate_storage_;
+    context.use_dedup_storage = this->using_dedup_storage();
     context.need_temporary_sq8_build_data =
         need_temporary_sq8_build_data(this->basic_flatten_codes_, this->has_precise_reorder());
     context.use_parallel_add = this->thread_pool_ != nullptr;
@@ -396,6 +396,9 @@ HGraph::prepare_graph_read_codes(const DatasetPtr& data, AddContext& context) {
     } else if (has_precise_reorder() and not build_by_base_) {
         context.graph_read_codes = high_precise_codes_;
     } else if (context.use_dedup_storage and context.first_empty_add) {
+        // Keep a logical-id-indexed in-memory flatten during the first build. Using the
+        // persistent adapter here would add Resolve and mapped-id copying to the
+        // O(N * ef_construction) graph-construction hot path.
         auto hgraph_param = std::dynamic_pointer_cast<HGraphParameter>(this->create_param_ptr_);
         CHECK_ARGUMENT(hgraph_param != nullptr, "HGraphParameter is required for temporary codes");
         context.graph_read_codes =
@@ -491,7 +494,7 @@ HGraph::insert_persistent_codes_unlocked(const void* data, InnerIdType inner_id)
 }
 
 void
-HGraph::insert_persistent_codes_to_slot(const void* data, InnerIdType code_slot_id) {
+HGraph::insert_persistent_codes_to_slot(const void* data, CodeSlotIdType code_slot_id) {
     InsertVectorToHGraphCodeSlot(this->basic_flatten_codes_, data, code_slot_id);
     if (has_precise_reorder()) {
         InsertVectorToHGraphCodeSlot(this->high_precise_codes_, data, code_slot_id);
@@ -676,9 +679,8 @@ HGraph::probe_graph_for_add(const void* data,
     param.topk = static_cast<int64_t>(ef_construct_);
     if (this->support_duplicate_) {
         param.find_duplicate = true;
-        param.duplicate_query_id = this->support_duplicate_ && this->deduplicate_storage_
-                                       ? std::numeric_limits<InnerIdType>::max()
-                                       : inner_id;
+        param.duplicate_query_id =
+            this->using_dedup_storage() ? std::numeric_limits<InnerIdType>::max() : inner_id;
         param.duplicate_distance_threshold = this->duplicate_distance_threshold_;
     }
 
@@ -764,8 +766,8 @@ HGraph::publish_unique_to_route_graphs(const void* data,
 }
 
 void
-HGraph::ensure_physical_code_capacity(InnerIdType required_capacity) {
-    if (not(this->support_duplicate_ && this->deduplicate_storage_)) {
+HGraph::ensure_physical_code_capacity(CodeSlotIdType required_capacity) {
+    if (not this->using_dedup_storage()) {
         return;
     }
     if (this->physical_code_capacity_.load(std::memory_order_acquire) >= required_capacity) {
@@ -776,8 +778,8 @@ HGraph::ensure_physical_code_capacity(InnerIdType required_capacity) {
 }
 
 void
-HGraph::ensure_physical_code_capacity_unlocked(InnerIdType required_capacity) {
-    if (not(this->support_duplicate_ && this->deduplicate_storage_)) {
+HGraph::ensure_physical_code_capacity_unlocked(CodeSlotIdType required_capacity) {
+    if (not this->using_dedup_storage()) {
         return;
     }
     if (this->physical_code_capacity_.load(std::memory_order_acquire) >= required_capacity) {
@@ -818,10 +820,10 @@ HGraph::resize(uint64_t new_size) {
         pool_ = std::make_shared<VisitedListPool>(1, allocator_, new_size_power_2, allocator_);
         this->label_table_->Resize(new_size_power_2);
         bottom_graph_->Resize(new_size_power_2);
-        if (this->support_duplicate_ && this->deduplicate_storage_) {
+        if (this->using_dedup_storage()) {
             this->code_slot_map_->ReserveLogicalSize(static_cast<InnerIdType>(new_size_power_2));
         }
-        if (not(this->support_duplicate_ && this->deduplicate_storage_)) {
+        if (not this->using_dedup_storage()) {
             this->basic_flatten_codes_->Resize(new_size_power_2);
             if (has_precise_reorder()) {
                 this->high_precise_codes_->Resize(new_size_power_2);

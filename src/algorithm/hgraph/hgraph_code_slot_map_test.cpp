@@ -48,6 +48,38 @@ public:
         }
     }
 
+    void
+    QueryWithDistanceFilter(float* result_dists,
+                            const vsag::ComputerInterfacePtr& computer,
+                            const vsag::InnerIdType* idx,
+                            vsag::InnerIdType id_count,
+                            float threshold,
+                            vsag::QueryContext* ctx = nullptr) override {
+        filtered_ids.assign(idx, idx + id_count);
+        filter_threshold = threshold;
+    }
+
+    void
+    QueryWithDistanceLowerBound(float* result_dists,
+                                float* lower_bounds,
+                                const vsag::ComputerInterfacePtr& computer,
+                                const vsag::InnerIdType* idx,
+                                vsag::InnerIdType id_count,
+                                vsag::QueryContext* ctx = nullptr) override {
+        lower_bound_ids.assign(idx, idx + id_count);
+    }
+
+    void
+    QueryWithDistanceHint(float* result_dists,
+                          const float* hint_dists,
+                          const vsag::ComputerInterfacePtr& computer,
+                          const vsag::InnerIdType* idx,
+                          vsag::InnerIdType id_count,
+                          vsag::QueryContext* ctx = nullptr) override {
+        hinted_ids.assign(idx, idx + id_count);
+        received_hints.assign(hint_dists, hint_dists + id_count);
+    }
+
     vsag::ComputerInterfacePtr
     FactoryComputer(const void* query) override {
         return nullptr;
@@ -147,6 +179,10 @@ public:
     }
 
     std::vector<vsag::InnerIdType> queried_ids;
+    std::vector<vsag::InnerIdType> filtered_ids;
+    std::vector<vsag::InnerIdType> lower_bound_ids;
+    std::vector<vsag::InnerIdType> hinted_ids;
+    std::vector<float> received_hints;
     std::vector<vsag::InnerIdType> inserted_ids;
     std::vector<vsag::InnerIdType> updated_ids;
     std::vector<vsag::InnerIdType> batch_inserted_ids;
@@ -155,6 +191,7 @@ public:
     mutable std::vector<vsag::InnerIdType> copied_ids;
     mutable std::vector<vsag::FlattenInterfacePtr> exported_models;
     mutable uint32_t last_code{0};
+    float filter_threshold{0.0F};
     vsag::InnerIdType merged_bias{std::numeric_limits<vsag::InnerIdType>::max()};
 };
 
@@ -196,11 +233,6 @@ TEST_CASE("HGraphCodeSlotMap rejects invalid mappings", "[ut][hgraph][code_slot_
     mapping.PublishSlot(0, slot);
     REQUIRE_THROWS(mapping.PublishSlot(0, slot));
     REQUIRE_THROWS(mapping.PublishSlot(1, slot + 1));
-
-    mapping.Clear();
-    REQUIRE(mapping.PhysicalCount() == 0);
-    REQUIRE(mapping.PublishedLogicalCount() == 0);
-    REQUIRE_THROWS(mapping.Resolve(0));
 }
 
 TEST_CASE("HGraphCodeSlotMap serializes logical to physical slots", "[ut][hgraph][code_slot_map]") {
@@ -292,6 +324,19 @@ TEST_CASE("HGraphCodeSlotAdapter maps logical ids before calling flatten",
     REQUIRE(result_dists[1] == 1.0F);
     REQUIRE(result_dists[2] == 2.0F);
 
+    adapter->QueryWithDistanceFilter(result_dists, nullptr, logical_ids, 3, 1.5F);
+    REQUIRE(physical_codes->filtered_ids == std::vector<vsag::InnerIdType>{0, 1, 2});
+    REQUIRE(physical_codes->filter_threshold == 1.5F);
+
+    float lower_bounds[] = {0.0F, 0.0F, 0.0F};
+    adapter->QueryWithDistanceLowerBound(result_dists, lower_bounds, nullptr, logical_ids, 3);
+    REQUIRE(physical_codes->lower_bound_ids == std::vector<vsag::InnerIdType>{0, 1, 2});
+
+    float hints[] = {3.0F, 2.0F, 1.0F};
+    adapter->QueryWithDistanceHint(result_dists, hints, nullptr, logical_ids, 3);
+    REQUIRE(physical_codes->hinted_ids == std::vector<vsag::InnerIdType>{0, 1, 2});
+    REQUIRE(physical_codes->received_hints == std::vector<float>{3.0F, 2.0F, 1.0F});
+
     adapter->InsertVector(nullptr, 2);
     REQUIRE(physical_codes->inserted_ids == std::vector<vsag::InnerIdType>{1});
 
@@ -317,11 +362,10 @@ TEST_CASE("HGraphCodeSlotAdapter maps logical ids before calling flatten",
     REQUIRE(physical_codes->copied_ids.empty());
     adapter->Release(codes);
 
-    std::vector<uint8_t> encoded_query(adapter->code_size_);
     float duplicate_query = 1.0F;
-    REQUIRE(adapter->CompareVectorWithId(&duplicate_query, 2, encoded_query.data()));
+    REQUIRE(adapter->CompareRawVectorWithId(&duplicate_query, 2));
     float different_query = 2.0F;
-    REQUIRE_FALSE(adapter->CompareVectorWithId(&different_query, 2, encoded_query.data()));
+    REQUIRE_FALSE(adapter->CompareRawVectorWithId(&different_query, 2));
 
     physical_codes->total_count_ = 2;
     physical_codes->max_capacity_ = 8;

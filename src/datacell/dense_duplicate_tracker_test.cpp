@@ -67,48 +67,6 @@ TEST_CASE("DenseDuplicateTracker ignores duplicate reinsertion", "[ut][DenseDupl
     REQUIRE(tracker.GetDuplicateIds(0) == std::vector<InnerIdType>{1});
 }
 
-TEST_CASE("DenseDuplicateTracker detaches duplicate ids", "[ut][DenseDuplicateTracker]") {
-    auto allocator = std::make_shared<DefaultAllocator>();
-    DenseDuplicateTracker tracker(allocator.get());
-    tracker.Resize(6);
-
-    tracker.SetDuplicateId(0, 1);
-    tracker.SetDuplicateId(0, 2);
-    tracker.DetachDuplicateId(0);
-
-    REQUIRE(tracker.GetDuplicateIds(0).empty());
-    REQUIRE(sorted_duplicates(tracker.GetDuplicateIds(1)) == std::vector<InnerIdType>{2});
-    REQUIRE(sorted_duplicates(tracker.GetDuplicateIds(2)) == std::vector<InnerIdType>{1});
-    REQUIRE(tracker.GetGroupId(0) == 0);
-    REQUIRE(tracker.GetGroupId(1) == 1);
-    REQUIRE(tracker.GetGroupId(2) == 1);
-
-    tracker.DetachDuplicateId(1);
-    REQUIRE(tracker.GetDuplicateIds(1).empty());
-    REQUIRE(tracker.GetDuplicateIds(2).empty());
-    REQUIRE(tracker.GetGroupId(1) == 1);
-    REQUIRE(tracker.GetGroupId(2) == 2);
-}
-
-TEST_CASE("DenseDuplicateTracker moves ids inside duplicate groups",
-          "[ut][DenseDuplicateTracker]") {
-    auto allocator = std::make_shared<DefaultAllocator>();
-    DenseDuplicateTracker tracker(allocator.get());
-    tracker.Resize(6);
-
-    tracker.SetDuplicateId(0, 1);
-    tracker.SetDuplicateId(0, 2);
-    tracker.DetachDuplicateId(1);
-    tracker.MoveId(2, 1);
-
-    REQUIRE(tracker.GetDuplicateIds(2).empty());
-    REQUIRE(sorted_duplicates(tracker.GetDuplicateIds(0)) == std::vector<InnerIdType>{1});
-    REQUIRE(sorted_duplicates(tracker.GetDuplicateIds(1)) == std::vector<InnerIdType>{0});
-    REQUIRE(tracker.GetGroupId(0) == 0);
-    REQUIRE(tracker.GetGroupId(1) == 0);
-    REQUIRE(tracker.GetGroupId(2) == 2);
-}
-
 TEST_CASE("DenseDuplicateTracker serialize and deserialize", "[ut][DenseDuplicateTracker]") {
     auto allocator = std::make_shared<DefaultAllocator>();
     DenseDuplicateTracker tracker(allocator.get());
