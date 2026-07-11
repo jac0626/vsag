@@ -50,7 +50,85 @@
 
 namespace vsag {
 class IteratorFilterContext;
-class HGraphCodeSlotMap;
+
+struct HGraphCodeSlotMap {
+    // HGraph protects slot-map lifetime and capacity changes with its outer locks. Slot bindings
+    // are published and read with atomics so the search hot path does not take an extra map lock.
+    explicit HGraphCodeSlotMap(Allocator* allocator);
+
+    ~HGraphCodeSlotMap();
+
+    InnerIdType
+    AllocateSlot();
+
+    void
+    PublishSlot(InnerIdType inner_id, InnerIdType code_slot_id);
+
+    [[nodiscard]] InnerIdType
+    Resolve(InnerIdType inner_id) const;
+
+    void
+    ResolvePair(InnerIdType inner_id1,
+                InnerIdType inner_id2,
+                InnerIdType& code_slot_id1,
+                InnerIdType& code_slot_id2) const;
+
+    void
+    ResolveBatch(const InnerIdType* inner_ids, InnerIdType count, InnerIdType* code_slot_ids) const;
+
+    void
+    ReserveLogicalSize(InnerIdType new_size);
+
+    void
+    MergeOther(const HGraphCodeSlotMap& other, InnerIdType logical_bias, InnerIdType physical_bias);
+
+    [[nodiscard]] InnerIdType
+    PhysicalCount() const;
+
+    [[nodiscard]] InnerIdType
+    PublishedLogicalCount() const;
+
+    void
+    Clear();
+
+    void
+    Serialize(StreamWriter& writer) const;
+
+    void
+    Deserialize(StreamReader& reader);
+
+    [[nodiscard]] uint64_t
+    GetMemoryUsage() const;
+
+private:
+    void
+    EnsureLogicalSize(InnerIdType new_size);
+
+    void
+    ReleaseSlots();
+
+    Allocator* allocator_{nullptr};
+    std::atomic<InnerIdType>* inner_to_slot_{nullptr};
+    InnerIdType logical_capacity_{0};
+    std::atomic<InnerIdType> physical_count_{0};
+    std::atomic<InnerIdType> published_logical_count_{0};
+    mutable std::shared_mutex mutex_;
+};
+
+FlattenInterfacePtr
+MakeHGraphCodeSlotAdapter(FlattenInterfacePtr base,
+                          std::shared_ptr<const HGraphCodeSlotMap> mapping,
+                          Allocator* allocator,
+                          const std::atomic<uint64_t>* logical_total_count);
+
+// Capacity, movement, and compaction use physical slot ids and must bypass the logical-id adapter.
+FlattenInterfacePtr
+GetHGraphPhysicalFlatten(const FlattenInterfacePtr& flatten);
+
+void
+InsertVectorToHGraphCodeSlot(const FlattenInterfacePtr& flatten,
+                             const void* vector,
+                             InnerIdType code_slot_id);
 
 /**
  * @brief HGraph: hierarchical navigable graph index.
@@ -320,13 +398,6 @@ public:
     void
     ensure_physical_code_capacity_unlocked(InnerIdType required_capacity);
 
-    /// Compact physical code storage when the unused physical slots exceed one IO block.
-    void
-    compact_physical_code_capacity_if_needed();
-
-    [[nodiscard]] InnerIdType
-    align_physical_code_capacity(InnerIdType required_capacity) const;
-
     /// Grow internal storage to at least new_size capacity.
     void
     resize(uint64_t new_size);
@@ -434,9 +505,6 @@ private:
                                        const AddBatch& batch);
 
     void
-    reserve_storage_for_batch(const AddContext& context, const AddBatch& batch);
-
-    void
     insert_add_batch(const DatasetPtr& data, const AddContext& context, const AddBatch& batch);
 
     [[nodiscard]] bool
@@ -444,6 +512,19 @@ private:
 
     bool
     insert_one_logical_point(const void* data, const AddRow& row, const AddContext& context);
+
+    void
+    prepare_codes_before_probe_if_needed(const void* data,
+                                         InnerIdType inner_id,
+                                         const AddContext& context);
+
+    void
+    publish_duplicate_storage_if_needed(InnerIdType group_id,
+                                        InnerIdType duplicate_id,
+                                        const AddContext& context);
+
+    void
+    publish_duplicate_to_tracker(InnerIdType group_id, InnerIdType duplicate_id);
 
     void
     publish_unique_storage_if_needed(const void* data,
@@ -461,6 +542,15 @@ private:
 
     void
     ensure_route_graphs_for_level(int level);
+
+    void
+    publish_unique_under_shared_global_lock(const void* data,
+                                            int level,
+                                            InnerIdType inner_id,
+                                            InnerSearchParam& param,
+                                            const GraphAddProbeResult& probe,
+                                            const AddContext& context,
+                                            std::shared_lock<std::shared_mutex>& read_lock);
 
     void
     publish_unique_under_unique_global_lock(const void* data,
@@ -543,9 +633,6 @@ private:
     /// Move data at inner_id `from` to `to`, updating all references.
     void
     move_id(InnerIdType from, InnerIdType to);
-
-    void
-    compact_physical_codes_after(InnerIdType removed_slot);
 
     /// Compact internal storage after deletions.
     void

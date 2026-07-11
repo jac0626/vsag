@@ -20,7 +20,7 @@
 #include <sstream>
 #include <vector>
 
-#include "hgraph_code_slot.h"
+#include "hgraph.h"
 #include "impl/allocator/safe_allocator.h"
 #include "storage/stream_reader.h"
 #include "storage/stream_writer.h"
@@ -182,41 +182,6 @@ TEST_CASE("HGraphCodeSlotMap binds logical ids to physical slots", "[ut][hgraph]
     REQUIRE(mapping.Resolve(1) == 1);
     REQUIRE(mapping.Resolve(2) == 1);
     REQUIRE(mapping.Resolve(3) == 2);
-
-    mapping.RebindSlot(2, slot2);
-    REQUIRE(mapping.PhysicalCount() == 3);
-    REQUIRE(mapping.PublishedLogicalCount() == 4);
-    REQUIRE(mapping.Resolve(2) == 2);
-
-    mapping.MoveLogical(3, 1);
-    REQUIRE(mapping.PublishedLogicalCount() == 3);
-    REQUIRE(mapping.Resolve(1) == 2);
-    auto slot3 = mapping.AllocateSlot();
-    mapping.PublishSlot(3, slot3);
-    REQUIRE(mapping.PublishedLogicalCount() == 4);
-    REQUIRE(mapping.Resolve(3) == slot3);
-}
-
-TEST_CASE("HGraphCodeSlotMap compacts physical slots", "[ut][hgraph][code_slot_map]") {
-    auto allocator = vsag::SafeAllocator::FactoryDefaultAllocator();
-    vsag::HGraphCodeSlotMap mapping(allocator.get());
-
-    mapping.ReserveLogicalSize(3);
-    for (vsag::InnerIdType id = 0; id < 3; ++id) {
-        auto slot = mapping.AllocateSlot();
-        mapping.PublishSlot(id, slot);
-    }
-
-    mapping.RemoveLogical(2);
-    mapping.CompactPhysicalSlotsAfter(2);
-    REQUIRE(mapping.PhysicalCount() == 2);
-    REQUIRE(mapping.Resolve(0) == 0);
-    REQUIRE(mapping.Resolve(1) == 1);
-
-    mapping.RemoveLogical(0);
-    mapping.CompactPhysicalSlotsAfter(0);
-    REQUIRE(mapping.PhysicalCount() == 1);
-    REQUIRE(mapping.Resolve(1) == 0);
 }
 
 TEST_CASE("HGraphCodeSlotMap rejects invalid mappings", "[ut][hgraph][code_slot_map]") {
@@ -290,42 +255,6 @@ TEST_CASE("HGraphCodeSlotMap supports concurrent independent binds",
     for (vsag::InnerIdType id = 0; id < count; ++id) {
         REQUIRE(mapping.Resolve(id) < count);
     }
-}
-
-TEST_CASE("HGraphCodeSlotMap rebind never exposes an invalid slot", "[ut][hgraph][code_slot_map]") {
-    auto allocator = vsag::SafeAllocator::FactoryDefaultAllocator();
-    vsag::HGraphCodeSlotMap mapping(allocator.get());
-
-    mapping.ReserveLogicalSize(2);
-    auto slot0 = mapping.AllocateSlot();
-    auto slot1 = mapping.AllocateSlot();
-    mapping.PublishSlot(0, slot0);
-
-    constexpr uint64_t rebind_count = 100000;
-    std::promise<void> started;
-    auto started_future = started.get_future();
-    std::atomic<bool> stop{false};
-    auto reader = std::async(std::launch::async, [&mapping, &started, &stop, slot0, slot1]() {
-        auto slot = mapping.Resolve(0);
-        started.set_value();
-        if (slot != slot0 && slot != slot1) {
-            return false;
-        }
-        while (not stop.load(std::memory_order_acquire)) {
-            slot = mapping.Resolve(0);
-            if (slot != slot0 && slot != slot1) {
-                return false;
-            }
-        }
-        return true;
-    });
-
-    started_future.wait();
-    for (uint64_t i = 0; i < rebind_count; ++i) {
-        mapping.RebindSlot(0, i % 2 == 0 ? slot1 : slot0);
-    }
-    stop.store(true, std::memory_order_release);
-    REQUIRE(reader.get());
 }
 
 TEST_CASE("HGraphCodeSlotAdapter maps logical ids before calling flatten",

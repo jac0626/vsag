@@ -250,6 +250,29 @@ TEST_CASE("HGraph rejects deduplicate_storage without support_duplicate", "[ut][
     REQUIRE_THROWS(vsag::HGraph::CheckAndMappingExternalParam(param, common_param));
 }
 
+TEST_CASE("HGraph rejects deduplicate_storage with force remove", "[ut][HGraphParameter]") {
+    auto param = vsag::JsonType::Parse(R"({
+        "base_quantization_type": "fp32",
+        "base_io_type": "block_memory_io",
+        "precise_quantization_type": "fp32",
+        "precise_io_type": "block_memory_io",
+        "graph_io_type": "block_memory_io",
+        "graph_storage_type": "flat",
+        "graph_type": "nsw",
+        "max_degree": 32,
+        "ef_construction": 100,
+        "support_duplicate": true,
+        "deduplicate_storage": true,
+        "support_force_remove": true,
+        "use_reorder": true
+    })");
+
+    vsag::IndexCommonParam common_param;
+    common_param.dim_ = 128;
+    common_param.data_type_ = vsag::DataTypes::DATA_TYPE_FLOAT;
+    REQUIRE_THROWS(vsag::HGraph::CheckAndMappingExternalParam(param, common_param));
+}
+
 TEST_CASE("HGraph Search Parameters parse RaBitQ error rate", "[ut][HGraphParameter]") {
     auto params = vsag::HGraphSearchParameters::FromJson(R"({
         "hgraph": {

@@ -1,7 +1,6 @@
 set(HGRAPH_SRCS
     hgraph.cpp
     hgraph_build.cpp
-    hgraph_code_slot.cpp
     hgraph_modify.cpp
     hgraph_parameter.cpp
     hgraph_param_mapping.cpp

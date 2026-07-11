@@ -374,9 +374,17 @@ TEST_CASE("HGraph deduplicate_storage keeps physical flatten capacity slot-based
 
     auto dedup_memory = dedup_index->GetMemoryUsageDetail();
     auto old_storage_memory = old_storage_index->GetMemoryUsageDetail();
-    REQUIRE(dedup_memory["basic_flatten_codes"] < old_storage_memory["basic_flatten_codes"]);
-    REQUIRE(dedup_memory["code_slot_map"] > 0);
-    REQUIRE(dedup_index->GetMemoryUsage() < old_storage_index->GetMemoryUsage());
+    REQUIRE(dedup_memory.at("basic_flatten_codes") < old_storage_memory.at("basic_flatten_codes"));
+    REQUIRE(dedup_memory.count("code_slot_map") == 1);
+    uint64_t dedup_total = 0;
+    for (const auto& item : dedup_memory) {
+        dedup_total += item.second;
+    }
+    uint64_t old_storage_total = 0;
+    for (const auto& item : old_storage_memory) {
+        old_storage_total += item.second;
+    }
+    REQUIRE(dedup_total < old_storage_total);
 }
 
 TEST_CASE("HGraph support_duplicate without deduplicate_storage keeps old storage semantics",
@@ -839,7 +847,7 @@ TEST_CASE("HGraph deduplicate_storage ExportModel keeps an empty reusable model"
     REQUIRE(ResultContainsId(search_result.value(), 40));
 }
 
-TEST_CASE("HGraph deduplicate_storage UpdateVector does not pollute duplicate group",
+TEST_CASE("HGraph deduplicate_storage rejects UpdateVector for a shared duplicate group",
           "[ut][hgraph][duplicate][update]") {
     constexpr int64_t dim = 2;
     auto common_param = MakeCommonParam(dim);
@@ -862,8 +870,8 @@ TEST_CASE("HGraph deduplicate_storage UpdateVector does not pollute duplicate gr
     std::vector<int64_t> update_id = {30};
     auto update_data = MakeFloatDataset(updated_vector, update_id, dim, 1);
     auto update_result = index->UpdateVector(update_id[0], update_data, true);
-    REQUIRE(update_result.has_value());
-    REQUIRE(update_result.value());
+    REQUIRE_FALSE(update_result.has_value());
+    REQUIRE(update_result.error().type == vsag::ErrorType::UNSUPPORTED_INDEX_OPERATION);
 
     std::vector<float> original_duplicate_vector = {1.0F, 0.0F};
     auto representative_distance =
@@ -871,85 +879,20 @@ TEST_CASE("HGraph deduplicate_storage UpdateVector does not pollute duplicate gr
     REQUIRE(representative_distance.has_value());
     REQUIRE(representative_distance.value() == 0.0F);
 
-    auto updated_distance = index->CalcDistanceById(updated_vector.data(), update_id[0], false);
-    REQUIRE(updated_distance.has_value());
-    REQUIRE(updated_distance.value() == 0.0F);
-}
-
-TEST_CASE("HGraph deduplicate_storage FORCE_REMOVE keeps slot map valid",
-          "[ut][hgraph][duplicate][force_remove]") {
-    constexpr int64_t dim = 2;
-    auto common_param = MakeCommonParam(dim);
-    auto hgraph_json = MakeFp32HGraphJson();
-    hgraph_json["support_force_remove"].SetBool(true);
-    hgraph_json["support_remove"].SetBool(true);
-    hgraph_json["use_reverse_edges"].SetBool(true);
-    auto index = MakeHGraphIndex(hgraph_json, common_param);
-
-    std::vector<float> vectors = {
-        0.0F,
-        0.0F,
-        1.0F,
-        0.0F,
-        1.0F,
-        0.0F,
-        4.0F,
-        0.0F,
-    };
-    std::vector<int64_t> ids = {10, 20, 30, 40};
-    auto base = MakeFloatDataset(vectors, ids, dim, 4);
-    REQUIRE(index->Build(base).has_value());
-
-    auto remove_result = index->Remove({10}, vsag::RemoveMode::FORCE_REMOVE);
-    REQUIRE(remove_result.has_value());
-    REQUIRE(remove_result.value() == 1);
-
-    std::vector<float> duplicate_vector = {1.0F, 0.0F};
-    auto duplicate_distance = index->CalcDistanceById(duplicate_vector.data(), 20, false);
+    auto duplicate_distance = index->CalcDistanceById(original_duplicate_vector.data(), 30, false);
     REQUIRE(duplicate_distance.has_value());
     REQUIRE(duplicate_distance.value() == 0.0F);
 
-    std::vector<float> moved_vector = {4.0F, 0.0F};
-    auto moved_distance = index->CalcDistanceById(moved_vector.data(), 40, false);
-    REQUIRE(moved_distance.has_value());
-    REQUIRE(moved_distance.value() == 0.0F);
-
-    std::vector<float> new_vector = {8.0F, 0.0F};
-    std::vector<int64_t> new_id = {50};
-    auto new_data = MakeFloatDataset(new_vector, new_id, dim, 1);
-    REQUIRE(index->Add(new_data).has_value());
-
-    auto new_distance = index->CalcDistanceById(new_vector.data(), new_id[0], false);
-    REQUIRE(new_distance.has_value());
-    REQUIRE(new_distance.value() == 0.0F);
-}
-
-TEST_CASE("HGraph deduplicate_storage Add works with support_force_remove lock path",
-          "[ut][hgraph][duplicate][force_remove][add]") {
-    constexpr int64_t dim = 2;
-    auto common_param = MakeCommonParam(dim);
-    auto hgraph_json = MakeFp32HGraphJson();
-    hgraph_json["support_force_remove"].SetBool(true);
-    auto index = MakeHGraphIndex(hgraph_json, common_param);
-
-    std::vector<float> base_vectors = {
-        0.0F,
-        0.0F,
-        1.0F,
-        0.0F,
-    };
-    std::vector<int64_t> base_ids = {10, 20};
-    auto base = MakeFloatDataset(base_vectors, base_ids, dim, 2);
-    REQUIRE(index->Build(base).has_value());
-
-    std::vector<float> duplicate_vector = {1.0F, 0.0F};
-    std::vector<int64_t> duplicate_id = {30};
-    auto duplicate = MakeFloatDataset(duplicate_vector, duplicate_id, dim, 1);
-    REQUIRE(index->Add(duplicate).has_value());
-    REQUIRE(index->GetNumElements() == 3);
-
-    auto query = MakeFloatQuery(duplicate_vector, dim);
-    RequireRangeContains(index, query, {20, 30}, 2);
+    std::vector<float> unique_update_vector = {4.0F, 0.0F};
+    std::vector<int64_t> unique_update_id = {10};
+    auto unique_update_data = MakeFloatDataset(unique_update_vector, unique_update_id, dim, 1);
+    auto unique_update_result = index->UpdateVector(unique_update_id[0], unique_update_data, true);
+    REQUIRE(unique_update_result.has_value());
+    REQUIRE(unique_update_result.value());
+    auto unique_distance =
+        index->CalcDistanceById(unique_update_vector.data(), unique_update_id[0], false);
+    REQUIRE(unique_distance.has_value());
+    REQUIRE(unique_distance.value() == 0.0F);
 }
 
 TEST_CASE("HGraph deduplicate_storage batch Add supports internal parallel add",
