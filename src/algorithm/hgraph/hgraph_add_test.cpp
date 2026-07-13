@@ -13,10 +13,13 @@
 // limitations under the License.
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
 #include <future>
 #include <initializer_list>
 #include <sstream>
 #include <string>
+#include <thread>
 #include <tuple>
 #include <vector>
 
@@ -1090,6 +1093,88 @@ TEST_CASE("HGraph deduplicate_storage batch Add supports internal parallel add",
                                            add_vectors.begin() + dim * 5);
     auto unique_query = MakeFloatQuery(unique_query_vector, dim);
     RequireRangeContains(index, unique_query, {104}, 1);
+}
+
+TEST_CASE("HGraph deduplicate_storage physical growth is single-flight",
+          "[ut][hgraph][duplicate][parallel][resize]") {
+    constexpr int64_t dim = 128;
+    constexpr int64_t base_count = 500;
+    constexpr uint64_t search_threads = 8;
+    constexpr uint64_t resize_threads = 32;
+    constexpr vsag::InnerIdType required_capacity = 513;
+    BlockSizeLimitGuard block_size_limit_guard(256UL * 1024);
+
+    auto common_param = MakeCommonParam(dim);
+    auto hgraph_json = MakeFp32HGraphJson();
+    auto index = MakeHGraphIndex(hgraph_json, common_param);
+
+    std::vector<float> vectors(dim * base_count, 0.0F);
+    std::vector<int64_t> ids(base_count);
+    for (int64_t i = 0; i < base_count; ++i) {
+        vectors[i * dim] = static_cast<float>(i);
+        ids[i] = i;
+    }
+    auto base = MakeFloatDataset(vectors, ids, dim, base_count);
+    REQUIRE(index->Build(base).has_value());
+
+    auto hgraph = std::dynamic_pointer_cast<vsag::HGraph>(index->GetInnerIndex());
+    REQUIRE(hgraph != nullptr);
+
+    std::vector<float> query_vector(dim, 0.0F);
+    auto query = MakeFloatQuery(query_vector, dim);
+    std::atomic<bool> keep_searching{true};
+    std::atomic<uint64_t> searchers_started{0};
+    std::vector<std::future<bool>> searchers;
+    searchers.reserve(search_threads);
+    for (uint64_t i = 0; i < search_threads; ++i) {
+        searchers.emplace_back(std::async(std::launch::async, [&]() {
+            searchers_started.fetch_add(1, std::memory_order_release);
+            while (keep_searching.load(std::memory_order_acquire)) {
+                auto result = index->KnnSearch(query, 10, R"({"hgraph": {"ef_search": 128}})");
+                if (not result.has_value()) {
+                    return false;
+                }
+            }
+            return true;
+        }));
+    }
+    while (searchers_started.load(std::memory_order_acquire) < search_threads) {
+        std::this_thread::yield();
+    }
+
+    std::atomic<uint64_t> resizers_ready{0};
+    std::atomic<bool> start_resizing{false};
+    std::vector<std::future<void>> resizers;
+    resizers.reserve(resize_threads);
+    for (uint64_t i = 0; i < resize_threads; ++i) {
+        resizers.emplace_back(std::async(std::launch::async, [&]() {
+            resizers_ready.fetch_add(1, std::memory_order_release);
+            while (not start_resizing.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+            hgraph->ensure_physical_code_capacity(required_capacity);
+        }));
+    }
+    while (resizers_ready.load(std::memory_order_acquire) < resize_threads) {
+        std::this_thread::yield();
+    }
+    start_resizing.store(true, std::memory_order_release);
+
+    bool all_resizers_finished = true;
+    for (auto& resizer : resizers) {
+        if (resizer.wait_for(std::chrono::seconds(5)) != std::future_status::ready) {
+            all_resizers_finished = false;
+            break;
+        }
+    }
+    keep_searching.store(false, std::memory_order_release);
+    for (auto& searcher : searchers) {
+        REQUIRE(searcher.get());
+    }
+    for (auto& resizer : resizers) {
+        resizer.get();
+    }
+    REQUIRE(all_resizers_finished);
 }
 
 TEST_CASE("HGraph deduplicate_storage concurrent Add keeps visible duplicates searchable",

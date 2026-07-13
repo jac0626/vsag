@@ -17,6 +17,7 @@
 
 #include <atomic>
 #include <memory>
+#include <mutex>
 #include <random>
 #include <shared_mutex>
 #include <string>
@@ -444,6 +445,15 @@ public:
                      DistanceRecordVector* rabitq_lower_bound_candidates = nullptr) const;
 
 private:
+    [[nodiscard]] std::shared_lock<std::shared_mutex>
+    acquire_global_read_lock() const {
+        if (not this->physical_code_resize_pending_.load(std::memory_order_acquire)) {
+            return std::shared_lock<std::shared_mutex>(this->global_mutex_);
+        }
+        std::scoped_lock resize_lock(this->physical_code_resize_mutex_);
+        return std::shared_lock<std::shared_mutex>(this->global_mutex_);
+    }
+
     MetadataPtr
     collect_streaming_header() const override;
 
@@ -847,6 +857,9 @@ private:
     mutable MutexArrayPtr neighbors_mutex_;         // per-node locks for neighbor lists
     mutable std::shared_mutex add_mutex_;           // serializes Add() operations
     mutable std::shared_mutex force_remove_mutex_;  // serializes force-remove operations
+    // Single-flights physical code growth before taking the global writer lock.
+    mutable std::mutex physical_code_resize_mutex_;
+    std::atomic<bool> physical_code_resize_pending_{false};
 
     std::atomic<InnerIdType> max_capacity_{0};               // allocated storage capacity
     std::atomic<CodeSlotIdType> physical_code_capacity_{0};  // physical flatten slot capacity

@@ -525,7 +525,7 @@ HGraph::insert_one_logical_point(const void* data, const AddRow& row, const AddC
         add_lock.unlock();
     }
 
-    std::shared_lock rlock(this->global_mutex_);
+    auto rlock = this->acquire_global_read_lock();
 
     auto param = make_search_param();
     auto probe = this->probe_graph_for_add(data, level, inner_id, param, context.graph_read_codes);
@@ -773,6 +773,17 @@ HGraph::ensure_physical_code_capacity(CodeSlotIdType required_capacity) {
     if (this->physical_code_capacity_.load(std::memory_order_acquire) >= required_capacity) {
         return;
     }
+    std::scoped_lock resize_lock(this->physical_code_resize_mutex_);
+    if (this->physical_code_capacity_.load(std::memory_order_acquire) >= required_capacity) {
+        return;
+    }
+    this->physical_code_resize_pending_.store(true, std::memory_order_release);
+    struct PendingReset {
+        std::atomic<bool>& pending;
+        ~PendingReset() {
+            pending.store(false, std::memory_order_release);
+        }
+    } pending_reset{this->physical_code_resize_pending_};
     std::scoped_lock lock(this->global_mutex_);
     this->ensure_physical_code_capacity_unlocked(required_capacity);
 }

@@ -920,7 +920,7 @@ HGraph::CalcDistanceById(const float* query, int64_t id, bool calculate_precise_
     {
         std::shared_lock<std::shared_mutex> lock;
         if (!this->immutable_.load(std::memory_order_acquire)) {
-            lock = std::shared_lock<std::shared_mutex>(this->global_mutex_);
+            lock = this->acquire_global_read_lock();
         }
         flat = this->basic_flatten_codes_;
         if (has_precise_reorder() && calculate_precise_distance) {
@@ -942,7 +942,7 @@ HGraph::CalDistanceById(const float* query,
     {
         std::shared_lock<std::shared_mutex> lock;
         if (!this->immutable_.load(std::memory_order_acquire)) {
-            lock = std::shared_lock<std::shared_mutex>(this->global_mutex_);
+            lock = this->acquire_global_read_lock();
         }
         flat = this->basic_flatten_codes_;
         if (has_precise_reorder() && calculate_precise_distance) {
