@@ -86,9 +86,13 @@ private:
 
     using MutexBlockPtr = std::unique_ptr<MutexBlock, MutexBlockDeleter>;
 
+    std::shared_mutex&
+    GetMutex(uint32_t i) {
+        return mutex_blocks_[i / kMutexesPerBlock]->mutexes[i % kMutexesPerBlock];
+    }
+
     Allocator* const allocator_{nullptr};
     Vector<MutexBlockPtr> mutex_blocks_;
-    Vector<std::shared_mutex*> mutexes_;
     uint32_t element_num_{0};
 };
 

@@ -101,14 +101,14 @@ TEST_CASE("LockStrategy Basic", "[ut][LockStrategy]") {
         const auto element_count = PointsMutex::kMutexesPerBlock * 2;
         {
             PointsMutex mutex_array(element_count, &counting_allocator);
-            REQUIRE(counting_allocator.allocation_count_ == 4);
+            REQUIRE(counting_allocator.allocation_count_ == 3);
             REQUIRE(counting_allocator.LiveBytes() == mutex_array.GetMemoryUsage());
             REQUIRE(mutex_array.GetMemoryUsage() <
                     element_count *
                         (sizeof(std::shared_ptr<std::shared_mutex>) + sizeof(std::shared_mutex)));
         }
         REQUIRE(counting_allocator.LiveBytes() == 0);
-        REQUIRE(counting_allocator.deallocation_count_ == 4);
+        REQUIRE(counting_allocator.deallocation_count_ == 3);
     }
 
     SECTION("lock guards protect concurrent increment") {
