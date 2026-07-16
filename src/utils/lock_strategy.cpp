@@ -15,8 +15,6 @@
 
 #include "lock_strategy.h"
 
-#include <new>
-
 namespace vsag {
 
 PointsMutex::PointsMutex(uint32_t element_num, Allocator* allocator)
@@ -26,24 +24,7 @@ PointsMutex::PointsMutex(uint32_t element_num, Allocator* allocator)
 
 void
 PointsMutex::MutexBlockDeleter::operator()(MutexBlock* block) const {
-    block->~MutexBlock();
-    allocator->Deallocate(allocation);
-}
-
-PointsMutex::MutexBlockPtr
-PointsMutex::NewMutexBlock() {
-    constexpr auto alignment = alignof(MutexBlock);
-    constexpr auto allocation_size = sizeof(MutexBlock) + alignment - 1;
-    void* allocation = allocator_->Allocate(allocation_size);
-    const auto address = reinterpret_cast<uintptr_t>(allocation);
-    void* aligned = reinterpret_cast<void*>((address + alignment - 1) & ~(alignment - 1));
-    try {
-        auto* block = ::new (aligned) MutexBlock();
-        return MutexBlockPtr(block, MutexBlockDeleter{allocator_, allocation});
-    } catch (...) {
-        allocator_->Deallocate(allocation);
-        throw;
-    }
+    allocator->Delete(block);
 }
 
 void
@@ -74,14 +55,15 @@ PointsMutex::Resize(uint32_t new_element_num) {
         if (required_blocks > mutex_blocks_.size()) {
             mutex_blocks_.reserve(required_blocks);
             while (mutex_blocks_.size() < required_blocks) {
-                mutex_blocks_.emplace_back(this->NewMutexBlock());
+                mutex_blocks_.emplace_back(allocator_->New<MutexBlock>(),
+                                           MutexBlockDeleter{allocator_});
             }
         }
         mutexes_.resize(new_element_num);
         for (uint64_t i = element_num_; i < new_element_num; ++i) {
             const auto block_id = i / kMutexesPerBlock;
             const auto offset = i % kMutexesPerBlock;
-            mutexes_[i] = &mutex_blocks_[block_id]->mutexes[offset].mutex;
+            mutexes_[i] = &mutex_blocks_[block_id]->mutexes[offset];
         }
     } else if (new_element_num < element_num_) {
         mutexes_.resize(new_element_num);
@@ -94,7 +76,7 @@ PointsMutex::Resize(uint32_t new_element_num) {
 
 uint64_t
 PointsMutex::GetMemoryUsage() {
-    return mutex_blocks_.size() * (sizeof(MutexBlock) + alignof(MutexBlock) - 1) +
+    return mutex_blocks_.size() * sizeof(MutexBlock) +
            mutex_blocks_.capacity() * sizeof(MutexBlockPtr) +
            mutexes_.capacity() * sizeof(std::shared_mutex*);
 }
