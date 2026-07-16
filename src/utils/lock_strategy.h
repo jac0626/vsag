@@ -73,12 +73,21 @@ public:
     GetMemoryUsage() override;
 
 private:
+    static constexpr auto kMutexSlotAlignment =
+        sizeof(std::shared_mutex) <= 64 ? 64 : alignof(std::shared_mutex);
+
+    // Small mutex implementations get a dedicated cache line to avoid false sharing.
+    struct alignas(kMutexSlotAlignment) MutexSlot {
+        std::shared_mutex mutex;
+    };
+
     struct MutexBlock {
-        std::array<std::shared_mutex, kMutexesPerBlock> mutexes;
+        std::array<MutexSlot, kMutexesPerBlock> mutexes;
     };
 
     struct MutexBlockDeleter {
         Allocator* allocator{nullptr};
+        void* allocation{nullptr};
 
         void
         operator()(MutexBlock* block) const;
@@ -88,6 +97,9 @@ private:
 
     std::shared_mutex&
     GetMutex(uint32_t i);
+
+    MutexBlockPtr
+    NewMutexBlock();
 
     Allocator* const allocator_{nullptr};
     Vector<MutexBlockPtr> mutex_blocks_;

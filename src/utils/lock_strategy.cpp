@@ -15,6 +15,8 @@
 
 #include "lock_strategy.h"
 
+#include <new>
+
 namespace vsag {
 
 PointsMutex::PointsMutex(uint32_t element_num, Allocator* allocator)
@@ -24,14 +26,31 @@ PointsMutex::PointsMutex(uint32_t element_num, Allocator* allocator)
 
 void
 PointsMutex::MutexBlockDeleter::operator()(MutexBlock* block) const {
-    allocator->Delete(block);
+    block->~MutexBlock();
+    allocator->Deallocate(allocation);
+}
+
+PointsMutex::MutexBlockPtr
+PointsMutex::NewMutexBlock() {
+    constexpr auto alignment = alignof(MutexBlock);
+    constexpr auto allocation_size = sizeof(MutexBlock) + alignment - 1;
+    void* allocation = allocator_->Allocate(allocation_size);
+    const auto address = reinterpret_cast<uintptr_t>(allocation);
+    void* aligned = reinterpret_cast<void*>((address + alignment - 1) & ~(alignment - 1));
+    try {
+        auto* block = ::new (aligned) MutexBlock();
+        return MutexBlockPtr(block, MutexBlockDeleter{allocator_, allocation});
+    } catch (...) {
+        allocator_->Deallocate(allocation);
+        throw;
+    }
 }
 
 std::shared_mutex&
 PointsMutex::GetMutex(uint32_t i) {
     const auto block_id = static_cast<uint64_t>(i) / kMutexesPerBlock;
     const auto offset = static_cast<uint64_t>(i) % kMutexesPerBlock;
-    return mutex_blocks_[block_id]->mutexes[offset];
+    return mutex_blocks_[block_id]->mutexes[offset].mutex;
 }
 
 void
@@ -61,8 +80,7 @@ PointsMutex::Resize(uint32_t new_element_num) {
     if (required_blocks > mutex_blocks_.size()) {
         mutex_blocks_.reserve(required_blocks);
         while (mutex_blocks_.size() < required_blocks) {
-            mutex_blocks_.emplace_back(allocator_->New<MutexBlock>(),
-                                       MutexBlockDeleter{allocator_});
+            mutex_blocks_.emplace_back(this->NewMutexBlock());
         }
     } else {
         while (mutex_blocks_.size() > required_blocks) {
@@ -74,7 +92,7 @@ PointsMutex::Resize(uint32_t new_element_num) {
 
 uint64_t
 PointsMutex::GetMemoryUsage() {
-    return mutex_blocks_.size() * sizeof(MutexBlock) +
+    return mutex_blocks_.size() * (sizeof(MutexBlock) + alignof(MutexBlock) - 1) +
            mutex_blocks_.capacity() * sizeof(MutexBlockPtr);
 }
 
