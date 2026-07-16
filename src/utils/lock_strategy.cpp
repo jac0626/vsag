@@ -20,7 +20,7 @@
 namespace vsag {
 
 PointsMutex::PointsMutex(uint32_t element_num, Allocator* allocator)
-    : allocator_(allocator), mutex_blocks_(allocator) {
+    : allocator_(allocator), mutex_blocks_(allocator), mutexes_(allocator) {
     this->Resize(element_num);
 }
 
@@ -48,9 +48,7 @@ PointsMutex::NewMutexBlock() {
 
 std::shared_mutex&
 PointsMutex::GetMutex(uint32_t i) {
-    const auto block_id = static_cast<uint64_t>(i) / kMutexesPerBlock;
-    const auto offset = static_cast<uint64_t>(i) % kMutexesPerBlock;
-    return mutex_blocks_[block_id]->mutexes[offset].mutex;
+    return *mutexes_[i];
 }
 
 void
@@ -77,12 +75,21 @@ void
 PointsMutex::Resize(uint32_t new_element_num) {
     const auto required_blocks =
         (static_cast<uint64_t>(new_element_num) + kMutexesPerBlock - 1) / kMutexesPerBlock;
-    if (required_blocks > mutex_blocks_.size()) {
-        mutex_blocks_.reserve(required_blocks);
-        while (mutex_blocks_.size() < required_blocks) {
-            mutex_blocks_.emplace_back(this->NewMutexBlock());
+    if (new_element_num > element_num_) {
+        if (required_blocks > mutex_blocks_.size()) {
+            mutex_blocks_.reserve(required_blocks);
+            while (mutex_blocks_.size() < required_blocks) {
+                mutex_blocks_.emplace_back(this->NewMutexBlock());
+            }
         }
-    } else {
+        mutexes_.resize(new_element_num);
+        for (uint64_t i = element_num_; i < new_element_num; ++i) {
+            const auto block_id = i / kMutexesPerBlock;
+            const auto offset = i % kMutexesPerBlock;
+            mutexes_[i] = &mutex_blocks_[block_id]->mutexes[offset].mutex;
+        }
+    } else if (new_element_num < element_num_) {
+        mutexes_.resize(new_element_num);
         while (mutex_blocks_.size() > required_blocks) {
             mutex_blocks_.pop_back();
         }
@@ -93,7 +100,8 @@ PointsMutex::Resize(uint32_t new_element_num) {
 uint64_t
 PointsMutex::GetMemoryUsage() {
     return mutex_blocks_.size() * (sizeof(MutexBlock) + alignof(MutexBlock) - 1) +
-           mutex_blocks_.capacity() * sizeof(MutexBlockPtr);
+           mutex_blocks_.capacity() * sizeof(MutexBlockPtr) +
+           mutexes_.capacity() * sizeof(std::shared_mutex*);
 }
 
 }  // namespace vsag

@@ -103,6 +103,7 @@ private:
 
     Allocator* const allocator_{nullptr};
     Vector<MutexBlockPtr> mutex_blocks_;
+    Vector<std::shared_mutex*> mutexes_;
     uint32_t element_num_{0};
 };
 
