@@ -106,6 +106,9 @@ TEST_CASE("LockStrategy Basic", "[ut][LockStrategy]") {
             REQUIRE(mutex_array.GetMemoryUsage() <
                     element_count *
                         (sizeof(std::shared_ptr<std::shared_mutex>) + sizeof(std::shared_mutex)));
+#if defined(VSAG_USE_COMPACT_NODE_MUTEX) && defined(__linux__)
+            REQUIRE(mutex_array.GetMemoryUsage() < element_count * 8);
+#endif
         }
         REQUIRE(counting_allocator.LiveBytes() == 0);
         REQUIRE(counting_allocator.deallocation_count_ == 3);

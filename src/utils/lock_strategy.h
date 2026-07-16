@@ -20,6 +20,9 @@
 #include <shared_mutex>
 
 #include "typing.h"
+#if defined(VSAG_USE_COMPACT_NODE_MUTEX) && defined(__linux__)
+#include "utils/compact_shared_mutex.h"
+#endif
 #include "utils/pointer_define.h"
 
 namespace vsag {
@@ -73,8 +76,14 @@ public:
     GetMemoryUsage() override;
 
 private:
+#if defined(VSAG_USE_COMPACT_NODE_MUTEX) && defined(__linux__)
+    using NodeMutex = CompactSharedMutex;
+#else
+    using NodeMutex = std::shared_mutex;
+#endif
+
     struct MutexBlock {
-        std::array<std::shared_mutex, kMutexesPerBlock> mutexes;
+        std::array<NodeMutex, kMutexesPerBlock> mutexes;
     };
 
     struct MutexBlockDeleter {
@@ -86,7 +95,7 @@ private:
 
     using MutexBlockPtr = std::unique_ptr<MutexBlock, MutexBlockDeleter>;
 
-    std::shared_mutex&
+    NodeMutex&
     GetMutex(uint32_t i) {
         return mutex_blocks_[i / kMutexesPerBlock]->mutexes[i % kMutexesPerBlock];
     }

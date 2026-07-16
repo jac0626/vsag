@@ -13,6 +13,9 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+if (ENABLE_COMPACT_NODE_MUTEX AND CMAKE_SYSTEM_NAME STREQUAL "Linux")
+    add_compile_definitions (VSAG_USE_COMPACT_NODE_MUTEX)
+endif ()
 
 add_subdirectory (simd)
 add_subdirectory (io)

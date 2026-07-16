@@ -24,6 +24,7 @@ set (UTILS_SRC
         window_result_queue.cpp
         sparse_vector_transform.cpp
         prefetch.cpp
+        compact_shared_mutex.cpp
         lock_strategy.cpp
 )
 
