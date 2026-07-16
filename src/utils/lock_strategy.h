@@ -95,9 +95,6 @@ private:
 
     using MutexBlockPtr = std::unique_ptr<MutexBlock, MutexBlockDeleter>;
 
-    std::shared_mutex&
-    GetMutex(uint32_t i);
-
     MutexBlockPtr
     NewMutexBlock();
 

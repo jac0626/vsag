@@ -46,29 +46,24 @@ PointsMutex::NewMutexBlock() {
     }
 }
 
-std::shared_mutex&
-PointsMutex::GetMutex(uint32_t i) {
-    return *mutexes_[i];
-}
-
 void
 PointsMutex::SharedLock(uint32_t i) {
-    this->GetMutex(i).lock_shared();
+    mutexes_[i]->lock_shared();
 }
 
 void
 PointsMutex::SharedUnlock(uint32_t i) {
-    this->GetMutex(i).unlock_shared();
+    mutexes_[i]->unlock_shared();
 }
 
 void
 PointsMutex::Lock(uint32_t i) {
-    this->GetMutex(i).lock();
+    mutexes_[i]->lock();
 }
 
 void
 PointsMutex::Unlock(uint32_t i) {
-    this->GetMutex(i).unlock();
+    mutexes_[i]->unlock();
 }
 
 void
