@@ -262,6 +262,7 @@ SearchEvalCase::process_result() {
     result["index_info"] = JsonType::parse(config_.build_param);
     result["search_param"] = config_.search_param;
     result["index"] = config_.index_name;
+    result["index_memory(B)"] = this->index_->GetMemoryUsage();
     try {
         auto detail = this->index_->GetMemoryUsageDetail();
         for (const auto& [name, size] : detail) {

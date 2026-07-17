@@ -78,6 +78,7 @@
 - [Optimizer (Tune)](advanced/optimizer.md)
 - [Benchmarks](resources/performance.md)
 - [Evaluation Tool](resources/eval.md)
+- [AutoTune (Offline Parameter Tuning)](resources/autotune.md)
 - [HDF5 Dataset Format](resources/dataset_format.md)
 - [Index Analysis Tool](resources/analyze_index.md)
 - [Compatibility Check Tool](resources/check_compatibility.md)

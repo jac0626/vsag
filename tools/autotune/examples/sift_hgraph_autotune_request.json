@@ -1,0 +1,53 @@
+{
+  "version": 1,
+  "data_path": "/tmp/sift-128-euclidean.hdf5",
+  "indexes": [
+    {
+      "name": "hgraph",
+      "create_params": {
+        "index_param": {
+          "base_quantization_type": ["fp32","sq8"],
+          "build_thread_count": 48,
+          "max_degree": [
+            16,
+            32,
+            48
+          ],
+          "ef_construction": 400
+        }
+      },
+      "search_params": {
+        "hgraph": {
+          "ef_search": [
+            40,
+            60,
+            80
+          ]
+        }
+      }
+    }
+  ],
+  "workload": {
+    "top_k": 10,
+    "concurrency": 1
+  },
+  "constraints": {
+    "recall_at_k": 0.95,
+    "latency_p99_ms": 5.0,
+    "build_seconds": 3600.0,
+    "index_size_mb": 2048.0,
+    "index_memory_mb": 65536.0
+  },
+  "objective": {
+    "metric": "latency_avg_ms"
+  },
+  "tuning_config": {
+    "workspace_path": "/tmp/vsag_autotune_sift",
+    "keep_intermediate": true,
+    "max_trials": 1000
+  },
+  "output": {
+    "result_path": "/tmp/vsag_autotune_sift/report.json",
+    "include_raw_eval": false
+  }
+}

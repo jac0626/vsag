@@ -155,6 +155,16 @@ public:
         return number_of_query_;
     }
 
+    [[nodiscard]] uint64_t
+    GetGroundTruthK() const {
+        return neighbors_shape_.second > 0 ? static_cast<uint64_t>(neighbors_shape_.second) : 0;
+    }
+
+    [[nodiscard]] const std::string&
+    GetMetric() const {
+        return metric_;
+    }
+
     [[nodiscard]] int64_t
     GetDim() const {
         return dim_;
