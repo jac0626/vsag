@@ -16,8 +16,6 @@
 #pragma once
 
 #include <chrono>
-#include <thread>
-#include <unordered_map>
 
 #include "monitor.h"
 namespace vsag::eval {
@@ -33,6 +31,9 @@ public:
 
     void
     Stop() override;
+
+    void
+    Stop(double batch_duration_seconds);
 
     JsonType
     GetResult() override;
@@ -59,8 +60,9 @@ private:
 private:
     std::vector<double> latency_records_;
 
-    using Clock = std::chrono::high_resolution_clock;
-    std::unordered_map<std::thread::id, decltype(Clock::now())> cur_time_;
+    using Clock = std::chrono::steady_clock;
+    Clock::time_point batch_start_{};
+    double batch_duration_seconds_{0.0};
 
     std::vector<std::string> metrics_;
 };

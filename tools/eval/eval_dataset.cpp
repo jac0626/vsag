@@ -15,6 +15,10 @@
 
 #include "eval_dataset.h"
 
+#include <algorithm>
+#include <cmath>
+#include <limits>
+
 #include "impl/logger/logger.h"
 
 using namespace H5;
@@ -40,8 +44,9 @@ parse_sparse_vectors(const char* src_data,
             offsets_out->push_back(static_cast<uint64_t>(ptr - src_data));
         }
 
-        if (ptr + sizeof(uint32_t) > end)
+        if (ptr + sizeof(uint32_t) > end) {
             break;
+        }
         memcpy(&vec.len_, ptr, sizeof(uint32_t));
         ptr += sizeof(uint32_t);
 
@@ -54,8 +59,9 @@ parse_sparse_vectors(const char* src_data,
         const size_t keys_size = vec.len_ * sizeof(uint32_t);
         const size_t vals_size = vec.len_ * sizeof(float);
 
-        if (ptr + keys_size + vals_size > end)
+        if (ptr + keys_size + vals_size > end) {
             break;
+        }
 
         vec.ids_ = new uint32_t[vec.len_];
         vec.vals_ = new float[vec.len_];
@@ -67,7 +73,9 @@ parse_sparse_vectors(const char* src_data,
         ptr += vals_size;
 
         std::vector<uint32_t> indices(vec.len_);
-        for (uint32_t i = 0; i < vec.len_; ++i) indices[i] = i;
+        for (uint32_t i = 0; i < vec.len_; ++i) {
+            indices[i] = i;
+        }
 
         std::sort(indices.begin(), indices.end(), [&](uint32_t a, uint32_t b) {
             return vec.ids_[a] < vec.ids_[b];
@@ -185,12 +193,36 @@ validate_offsets(const std::vector<uint64_t>& offsets,
     }
 }
 
+int64_t
+checked_int64(uint64_t value, const std::string& field) {
+    if (value > static_cast<uint64_t>(std::numeric_limits<int64_t>::max())) {
+        throw std::runtime_error(field + " exceeds the supported range");
+    }
+    return static_cast<int64_t>(value);
+}
+
 }  // namespace
 
 float
+EvalDataset::GetValidRatio(int64_t label) const {
+    if (valid_ratio_ == nullptr) {
+        throw std::invalid_argument("dataset does not contain valid_ratios");
+    }
+    if (label < 0 || label >= number_of_label_) {
+        throw std::out_of_range("label is outside the valid_ratios range");
+    }
+    const auto ratio = valid_ratio_[label];
+    if (!std::isfinite(ratio) || ratio < 0.0F || ratio > 1.0F) {
+        throw std::invalid_argument("valid_ratios values must be finite and in [0, 1]");
+    }
+    return ratio;
+}
+
+float
 get_distance(const SparseVector* vector1, const SparseVector* vector2, const void* qty_ptr) {
-    float sum = 0.0f;
-    uint32_t i = 0, j = 0;
+    float sum = 0.0F;
+    uint32_t i = 0;
+    uint32_t j = 0;
     while (i < vector1->len_ && j < vector2->len_) {
         const uint32_t id1 = vector1->ids_[i];
         const uint32_t id2 = vector2->ids_[j];
@@ -219,17 +251,20 @@ EvalDataset::Load(const std::string& filename) {
     // check datasets exist
     {
         datasets = get_datasets(file);
-        has_multi_vectors =
-            datasets.count("train_multi_vectors") && datasets.count("test_multi_vectors") &&
-            datasets.count("train_vector_counts") && datasets.count("test_vector_counts");
+        has_multi_vectors = datasets.count("train_multi_vectors") != 0U &&
+                            datasets.count("test_multi_vectors") != 0U &&
+                            datasets.count("train_vector_counts") != 0U &&
+                            datasets.count("test_vector_counts") != 0U;
         if (not has_multi_vectors) {
-            assert(datasets.count("train"));
-            assert(datasets.count("test"));
+            if (datasets.count("train") == 0U || datasets.count("test") == 0U) {
+                throw std::runtime_error("dataset requires train and test arrays");
+            }
         }
-        assert(datasets.count("neighbors"));
-        assert(datasets.count("distances"));
-        has_labels = datasets.count("train_labels") && datasets.count("test_labels");
-        has_valid_ratio = datasets.count("valid_ratios") > 0;
+        if (datasets.count("neighbors") == 0U || datasets.count("distances") == 0U) {
+            throw std::runtime_error("dataset requires neighbors and distances arrays");
+        }
+        has_labels = datasets.count("train_labels") != 0U && datasets.count("test_labels") != 0U;
+        has_valid_ratio = datasets.count("valid_ratios") != 0U;
     }
 
     auto obj = std::make_shared<EvalDataset>();
@@ -270,6 +305,7 @@ EvalDataset::Load(const std::string& filename) {
     shape_t train_shape(0, 0);
     shape_t test_shape(0, 0);
     auto neighbors_shape = get_shape(file, "neighbors");
+    auto distances_shape = get_shape(file, "distances");
     logger::debug("neighbors.shape: {}", to_string(neighbors_shape));
 
     if (obj->vector_type_ == MULTI_VECTORS) {
@@ -283,7 +319,15 @@ EvalDataset::Load(const std::string& filename) {
         logger::debug("train.shape: {}", to_string(train_shape));
         test_shape = get_shape(file, "test");
         logger::debug("test.shape: {}", to_string(test_shape));
-        assert(train_shape.second == test_shape.second);
+        if (train_shape.second != test_shape.second) {
+            throw std::runtime_error("train and test dimensions do not match");
+        }
+    }
+    if (neighbors_shape != distances_shape) {
+        throw std::runtime_error("neighbors and distances shapes do not match");
+    }
+    if (neighbors_shape.second <= 0) {
+        throw std::runtime_error("ground truth must contain at least one neighbor per query");
     }
 
     obj->train_shape_ = train_shape;
@@ -340,6 +384,10 @@ EvalDataset::Load(const std::string& filename) {
                     new char[test_shape.first * test_shape.second * obj->test_data_size_]);
                 dataset.read(obj->test_.get(), type, dataspace);
             }
+
+            if (obj->train_data_type_ != obj->test_data_type_) {
+                throw std::runtime_error("train and test data types do not match");
+            }
         }
 
         // Load multi-vector data if present
@@ -360,8 +408,9 @@ EvalDataset::Load(const std::string& filename) {
                 H5::DataSet counts_ds = file.openDataSet("/train_vector_counts");
                 H5::DataSpace counts_space = counts_ds.getSpace();
                 hsize_t counts_dims[1];
-                counts_space.getSimpleExtentDims(counts_dims, NULL);
-                obj->number_of_base_ = counts_dims[0];
+                counts_space.getSimpleExtentDims(counts_dims, nullptr);
+                obj->number_of_base_ =
+                    checked_int64(static_cast<uint64_t>(counts_dims[0]), "base vector count");
                 obj->train_vector_counts_ =
                     std::shared_ptr<uint32_t[]>(new uint32_t[counts_dims[0]]);
                 counts_ds.read(obj->train_vector_counts_.get(), H5::PredType::NATIVE_UINT32);
@@ -370,7 +419,7 @@ EvalDataset::Load(const std::string& filename) {
                 H5::DataSet mv_ds = file.openDataSet("/train_multi_vectors");
                 H5::DataSpace mv_space = mv_ds.getSpace();
                 hsize_t mv_dims[2];
-                mv_space.getSimpleExtentDims(mv_dims, NULL);
+                mv_space.getSimpleExtentDims(mv_dims, nullptr);
                 auto total_train_vectors = mv_dims[0];
                 auto mv_dim = mv_dims[1];
                 if (mv_dim != obj->multi_vector_dim_) {
@@ -406,8 +455,9 @@ EvalDataset::Load(const std::string& filename) {
                 H5::DataSet counts_ds = file.openDataSet("/test_vector_counts");
                 H5::DataSpace counts_space = counts_ds.getSpace();
                 hsize_t counts_dims[1];
-                counts_space.getSimpleExtentDims(counts_dims, NULL);
-                obj->number_of_query_ = counts_dims[0];
+                counts_space.getSimpleExtentDims(counts_dims, nullptr);
+                obj->number_of_query_ =
+                    checked_int64(static_cast<uint64_t>(counts_dims[0]), "query vector count");
                 obj->test_vector_counts_ =
                     std::shared_ptr<uint32_t[]>(new uint32_t[counts_dims[0]]);
                 counts_ds.read(obj->test_vector_counts_.get(), H5::PredType::NATIVE_UINT32);
@@ -416,7 +466,7 @@ EvalDataset::Load(const std::string& filename) {
                 H5::DataSet mv_ds = file.openDataSet("/test_multi_vectors");
                 H5::DataSpace mv_space = mv_ds.getSpace();
                 hsize_t mv_dims[2];
-                mv_space.getSimpleExtentDims(mv_dims, NULL);
+                mv_space.getSimpleExtentDims(mv_dims, nullptr);
                 auto total_test_vectors = mv_dims[0];
                 auto mv_dim = mv_dims[1];
                 if (mv_dim != obj->multi_vector_dim_) {
@@ -460,7 +510,7 @@ EvalDataset::Load(const std::string& filename) {
             H5::DataSet dataset = file.openDataSet("/train");
             H5::DataSpace dataspace = dataset.getSpace();
             hsize_t dims_out[2];
-            dataspace.getSimpleExtentDims(dims_out, NULL);
+            dataspace.getSimpleExtentDims(dims_out, nullptr);
             obj->train_data_size_ = dims_out[0];
             obj->train_.reset(new char[obj->train_data_size_]);
             dataset.read(obj->train_.get(), type, dataspace);
@@ -470,14 +520,15 @@ EvalDataset::Load(const std::string& filename) {
                                  obj->dim_,
                                  &obj->sparse_train_offsets_);
             obj->train_.reset();
-            obj->number_of_base_ = obj->sparse_train_.size();
+            obj->number_of_base_ = checked_int64(static_cast<uint64_t>(obj->sparse_train_.size()),
+                                                 "sparse base vector count");
         }
         {
             H5::PredType type = H5::PredType::ALPHA_I8;
             H5::DataSet dataset = file.openDataSet("/test");
             H5::DataSpace dataspace = dataset.getSpace();
             hsize_t dims_out[2];
-            dataspace.getSimpleExtentDims(dims_out, NULL);
+            dataspace.getSimpleExtentDims(dims_out, nullptr);
             obj->test_data_size_ = dims_out[0];
             obj->test_.reset(new char[obj->test_data_size_]);
             dataset.read(obj->test_.get(), type, dataspace);
@@ -487,7 +538,8 @@ EvalDataset::Load(const std::string& filename) {
                                  obj->dim_,
                                  &obj->sparse_test_offsets_);
             obj->test_.reset();
-            obj->number_of_query_ = obj->sparse_test_.size();
+            obj->number_of_query_ = checked_int64(static_cast<uint64_t>(obj->sparse_test_.size()),
+                                                  "sparse query vector count");
         }
 
         // Optional: if the writer also stored the precomputed record-offset
@@ -496,13 +548,13 @@ EvalDataset::Load(const std::string& filename) {
         // indicate a corrupted file and abort the load.
         auto load_offsets = [&file, &datasets](const std::string& key) -> std::vector<uint64_t> {
             std::vector<uint64_t> out;
-            if (datasets.count(key) == 0) {
+            if (datasets.count(key) == 0U) {
                 return out;
             }
             H5::DataSet ds = file.openDataSet("/" + key);
             H5::DataSpace sp = ds.getSpace();
             hsize_t dims_out[1];
-            sp.getSimpleExtentDims(dims_out, NULL);
+            sp.getSimpleExtentDims(dims_out, nullptr);
             out.resize(dims_out[0]);
             ds.read(out.data(), H5::PredType::NATIVE_UINT64);
             return out;
@@ -546,8 +598,8 @@ EvalDataset::Load(const std::string& filename) {
         // companion *_token_sequences_offsets dataset MUST also be present.
         // A token_sequences-without-offsets file is considered malformed and
         // we abort the load to surface the problem early.
-        if (datasets.count("train_token_sequences")) {
-            if (datasets.count("train_token_sequences_offsets") == 0) {
+        if (datasets.count("train_token_sequences") != 0U) {
+            if (datasets.count("train_token_sequences_offsets") == 0U) {
                 throw std::runtime_error(
                     "train_token_sequences present but train_token_sequences_offsets is missing");
             }
@@ -555,7 +607,7 @@ EvalDataset::Load(const std::string& filename) {
             H5::DataSet dataset = file.openDataSet("/train_token_sequences");
             H5::DataSpace dataspace = dataset.getSpace();
             hsize_t dims_out[2];
-            dataspace.getSimpleExtentDims(dims_out, NULL);
+            dataspace.getSimpleExtentDims(dims_out, nullptr);
             uint64_t buffer_size = dims_out[0];
             std::shared_ptr<char[]> buffer(new char[buffer_size]);
             dataset.read(buffer.get(), type, dataspace);
@@ -567,12 +619,12 @@ EvalDataset::Load(const std::string& filename) {
                              buffer_size,
                              "train_token_sequences_offsets");
             cross_check(disk_off, obj->train_token_seq_offsets_, "train_token_sequences_offsets");
-        } else if (datasets.count("train_token_sequences_offsets")) {
+        } else if (datasets.count("train_token_sequences_offsets") != 0U) {
             throw std::runtime_error(
                 "train_token_sequences_offsets present but train_token_sequences is missing");
         }
-        if (datasets.count("test_token_sequences")) {
-            if (datasets.count("test_token_sequences_offsets") == 0) {
+        if (datasets.count("test_token_sequences") != 0U) {
+            if (datasets.count("test_token_sequences_offsets") == 0U) {
                 throw std::runtime_error(
                     "test_token_sequences present but test_token_sequences_offsets is missing");
             }
@@ -580,7 +632,7 @@ EvalDataset::Load(const std::string& filename) {
             H5::DataSet dataset = file.openDataSet("/test_token_sequences");
             H5::DataSpace dataspace = dataset.getSpace();
             hsize_t dims_out[2];
-            dataspace.getSimpleExtentDims(dims_out, NULL);
+            dataspace.getSimpleExtentDims(dims_out, nullptr);
             uint64_t buffer_size = dims_out[0];
             std::shared_ptr<char[]> buffer(new char[buffer_size]);
             dataset.read(buffer.get(), type, dataspace);
@@ -592,7 +644,7 @@ EvalDataset::Load(const std::string& filename) {
                              buffer_size,
                              "test_token_sequences_offsets");
             cross_check(disk_off, obj->test_token_seq_offsets_, "test_token_sequences_offsets");
-        } else if (datasets.count("test_token_sequences_offsets")) {
+        } else if (datasets.count("test_token_sequences_offsets") != 0U) {
             throw std::runtime_error(
                 "test_token_sequences_offsets present but test_token_sequences is missing");
         }
@@ -608,10 +660,17 @@ EvalDataset::Load(const std::string& filename) {
             if (metric == "euclidean") {
                 // the distance in the ground truth (provided by public datasets), is L2 distance,
                 // which cannot be compared with L2Sqr distance (from VSAG) directly
-                obj->distance_func_ =
-                    [](const void* query1, const void* query2, const void* qty_ptr) -> float {
-                    return sqrt(vsag::L2Sqr(query1, query2, qty_ptr));
-                };
+                if (obj->train_data_type_ == vsag::DATATYPE_FLOAT32) {
+                    obj->distance_func_ =
+                        [](const void* query1, const void* query2, const void* qty_ptr) -> float {
+                        return std::sqrt(vsag::L2Sqr(query1, query2, qty_ptr));
+                    };
+                } else if (obj->train_data_type_ == vsag::DATATYPE_INT8) {
+                    obj->distance_func_ =
+                        [](const void* query1, const void* query2, const void* qty_ptr) -> float {
+                        return std::sqrt(vsag::INT8L2Sqr(query1, query2, qty_ptr));
+                    };
+                }
             } else if (metric == "ip") {
                 if (obj->train_data_type_ == vsag::DATATYPE_FLOAT32) {
                     obj->distance_func_ = vsag::InnerProductDistance;
@@ -619,12 +678,24 @@ EvalDataset::Load(const std::string& filename) {
                     obj->distance_func_ = vsag::INT8InnerProductDistance;
                 }
             } else if (metric == "angular") {
-                obj->distance_func_ =
-                    [](const void* query1, const void* query2, const void* qty_ptr) -> float {
-                    return 1 - vsag::InnerProduct(query1, query2, qty_ptr) /
-                                   std::sqrt(vsag::InnerProduct(query1, query1, qty_ptr) *
-                                             vsag::InnerProduct(query2, query2, qty_ptr));
-                };
+                if (obj->train_data_type_ == vsag::DATATYPE_FLOAT32) {
+                    obj->distance_func_ =
+                        [](const void* query1, const void* query2, const void* qty_ptr) -> float {
+                        return 1 - vsag::InnerProduct(query1, query2, qty_ptr) /
+                                       std::sqrt(vsag::InnerProduct(query1, query1, qty_ptr) *
+                                                 vsag::InnerProduct(query2, query2, qty_ptr));
+                    };
+                } else if (obj->train_data_type_ == vsag::DATATYPE_INT8) {
+                    obj->distance_func_ =
+                        [](const void* query1, const void* query2, const void* qty_ptr) -> float {
+                        return 1 - vsag::INT8InnerProduct(query1, query2, qty_ptr) /
+                                       std::sqrt(vsag::INT8InnerProduct(query1, query1, qty_ptr) *
+                                                 vsag::INT8InnerProduct(query2, query2, qty_ptr));
+                    };
+                }
+            }
+            if (obj->distance_func_ == nullptr) {
+                throw std::runtime_error("unsupported dense data type and metric combination");
             }
         } else {
             if (metric == "ip") {
@@ -641,6 +712,10 @@ EvalDataset::Load(const std::string& filename) {
         }
     } catch (H5::Exception& err) {
         throw std::runtime_error("fail to read metric: there is no 'distance' in the dataset");
+    }
+
+    if (neighbors_shape.first != obj->number_of_query_) {
+        throw std::runtime_error("neighbors and test query counts do not match");
     }
 
     {
@@ -679,8 +754,12 @@ EvalDataset::Load(const std::string& filename) {
             H5::DataSet valid_ratio_dataset = file.openDataSet("/valid_ratios");
             H5::DataSpace valid_ratio_dataspace = valid_ratio_dataset.getSpace();
             hsize_t dims_out[1];
-            int ndims = valid_ratio_dataspace.getSimpleExtentDims(dims_out, NULL);
-            obj->number_of_label_ = dims_out[0];
+            const int dimensions = valid_ratio_dataspace.getSimpleExtentDims(dims_out, nullptr);
+            if (dimensions != 1) {
+                throw std::runtime_error("valid_ratios must be one-dimensional");
+            }
+            obj->number_of_label_ =
+                checked_int64(static_cast<uint64_t>(dims_out[0]), "label count");
             obj->valid_ratio_ = std::shared_ptr<float[]>(new float[obj->number_of_label_]);
             valid_ratio_dataset.read(
                 obj->valid_ratio_.get(), ratio_datatype, valid_ratio_dataspace);
@@ -730,12 +809,9 @@ serialize_sparse_vectors(const std::vector<SparseVector>& vectors,
 
 bool
 has_any_token_sequence(const std::vector<SparseVector>& vectors) {
-    for (const auto& vec : vectors) {
-        if (vec.token_seq_len_ > 0 && vec.token_sequence_ != nullptr) {
-            return true;
-        }
-    }
-    return false;
+    return std::any_of(vectors.begin(), vectors.end(), [](const SparseVector& vector) {
+        return vector.token_seq_len_ > 0 && vector.token_sequence_ != nullptr;
+    });
 }
 
 std::vector<char>
@@ -778,15 +854,11 @@ EvalDataset::Save(const EvalDatasetPtr& dataset, const std::string& filename) {
 
     // write vector type attribute
     {
-        std::string type_str;
-        if (dataset->vector_type_ == DENSE_VECTORS) {
-            type_str = "dense";
-        } else if (dataset->vector_type_ == SPARSE_VECTORS) {
+        std::string type_str = "dense";
+        if (dataset->vector_type_ == SPARSE_VECTORS) {
             type_str = "sparse";
         } else if (dataset->vector_type_ == MULTI_VECTORS) {
             type_str = "multi_vector";
-        } else {
-            type_str = "dense";
         }
         StrType str_type(PredType::C_S1, H5T_VARIABLE);
         auto attr = file.createAttribute("type", str_type, DataSpace(H5S_SCALAR));

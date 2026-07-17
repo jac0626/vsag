@@ -1,0 +1,755 @@
+{
+  "best_effort": null,
+  "build_count": 2,
+  "build_group_count": 2,
+  "builds": [
+    {
+      "artifacts": {
+        "cleaned": false,
+        "cleanup_planned": false,
+        "expected_to_exist_after_response": true,
+        "index_path": "/tmp/vsag_autotune_sift/runs/run-1784190130162801680-0/artifacts/hgraph-build-000001.index",
+        "use_existing_index": false
+      },
+      "build_id": "hgraph-build-000001",
+      "constraint_evaluation": {
+        "satisfied_constraints": true,
+        "violated_constraints": []
+      },
+      "create_params": {
+        "dim": 128,
+        "dtype": "float32",
+        "index_param": {
+          "base_quantization_type": "fp32",
+          "build_thread_count": 48,
+          "ef_construction": 300,
+          "max_degree": 32
+        },
+        "metric_type": "l2",
+        "repr": "dense"
+      },
+      "elapsed_seconds": 40.381209681,
+      "eval_type": "build",
+      "failure": null,
+      "index_name": "hgraph",
+      "metrics": {
+        "build_seconds": 39.318165479,
+        "index_memory_mb": 751.2297744750977,
+        "index_size_mb": 665.4894905090332
+      },
+      "status": "success"
+    },
+    {
+      "artifacts": {
+        "cleaned": false,
+        "cleanup_planned": false,
+        "expected_to_exist_after_response": true,
+        "index_path": "/tmp/vsag_autotune_sift/runs/run-1784190130162801680-0/artifacts/ivf-build-000002.index",
+        "use_existing_index": false
+      },
+      "build_id": "ivf-build-000002",
+      "constraint_evaluation": {
+        "satisfied_constraints": true,
+        "violated_constraints": []
+      },
+      "create_params": {
+        "dim": 128,
+        "dtype": "float32",
+        "index_param": {
+          "base_quantization_type": "sq8_uniform",
+          "buckets_count": 1024,
+          "ivf_train_type": "kmeans",
+          "partition_strategy_type": "ivf",
+          "thread_count": 48
+        },
+        "metric_type": "l2",
+        "repr": "dense"
+      },
+      "elapsed_seconds": 62.83965567800001,
+      "eval_type": "build",
+      "failure": null,
+      "index_name": "ivf",
+      "metrics": {
+        "build_seconds": 62.289962632000005,
+        "index_memory_mb": 385.25057220458984,
+        "index_size_mb": 336.1788158416748
+      },
+      "status": "success"
+    }
+  ],
+  "effective_request": {
+    "constraints": {
+      "build_seconds": 3600.0,
+      "index_memory_mb": 65536.0,
+      "index_size_mb": 2048.0
+    },
+    "data_path": "/root/data/sift-128-euclidean.hdf5",
+    "dataset_description": {
+      "base_count": 1000000,
+      "dim": 128,
+      "dtype": "float32",
+      "ground_truth_k": 100,
+      "metric_type": "l2",
+      "query_count": 10000,
+      "vector_type": "dense_vectors"
+    },
+    "indexes": [
+      {
+        "create_params": {
+          "dim": 128,
+          "dtype": "float32",
+          "index_param": {
+            "base_quantization_type": "fp32",
+            "build_thread_count": 48,
+            "ef_construction": 300,
+            "max_degree": 32
+          },
+          "metric_type": "l2",
+          "repr": "dense"
+        },
+        "name": "hgraph",
+        "search_params": {
+          "hgraph": {
+            "ef_search": [
+              40,
+              80
+            ]
+          }
+        }
+      },
+      {
+        "create_params": {
+          "dim": 128,
+          "dtype": "float32",
+          "index_param": {
+            "base_quantization_type": "sq8_uniform",
+            "buckets_count": 1024,
+            "ivf_train_type": "kmeans",
+            "partition_strategy_type": "ivf",
+            "thread_count": 48
+          },
+          "metric_type": "l2",
+          "repr": "dense"
+        },
+        "name": "ivf",
+        "search_params": {
+          "ivf": {
+            "scan_buckets_count": [
+              32,
+              64
+            ]
+          }
+        }
+      }
+    ],
+    "objective": {
+      "metric": "latency_avg_ms",
+      "workload": "online_latency"
+    },
+    "output": {
+      "include_raw_eval": false,
+      "result_path": "/tmp/vsag_autotune_sift/report.json"
+    },
+    "tuning_config": {
+      "keep_intermediate": true,
+      "max_trials": 1000,
+      "workspace_path": "/tmp/vsag_autotune_sift"
+    },
+    "version": 1,
+    "workload": {
+      "searches": [
+        {
+          "concurrency": 1,
+          "constraints": {
+            "latency_p99_ms": 5.0,
+            "recall_at_k": 0.95
+          },
+          "name": "online_latency",
+          "objective": {
+            "metric": "latency_avg_ms"
+          },
+          "top_k": 10
+        },
+        {
+          "concurrency": 48,
+          "constraints": {
+            "qps": 20000.0,
+            "recall_at_k": 0.94
+          },
+          "name": "batch_throughput",
+          "objective": {
+            "metric": "qps"
+          },
+          "top_k": 10
+        }
+      ]
+    }
+  },
+  "elapsed_breakdown_seconds": {
+    "candidate_generation": 0.000301198,
+    "evaluation": 164.28182096900002,
+    "planning": 0.00020684200000000002,
+    "selection": 0.000307528,
+    "validation": 0.395242024,
+    "workspace": 0.00025074900000000003
+  },
+  "elapsed_seconds": 164.678358419,
+  "environment": {
+    "architecture": "x86_64",
+    "cpu_model": "Intel Xeon Platinum 8163",
+    "cpuinfo_initialized": true,
+    "logical_cores": 96,
+    "os": "Linux",
+    "os_release": "5.10.112-005.ali5000.alios7.x86_64",
+    "physical_cores": 48,
+    "search_concurrency": {
+      "batch_throughput": 48,
+      "online_latency": 1
+    },
+    "simd": {
+      "amx": {
+        "compiled": true,
+        "effective": false,
+        "runtime": false
+      },
+      "amx_bf16": {
+        "compiled": true,
+        "effective": false,
+        "runtime": false
+      },
+      "avx": {
+        "compiled": true,
+        "effective": true,
+        "runtime": true
+      },
+      "avx2": {
+        "compiled": true,
+        "effective": true,
+        "runtime": true
+      },
+      "avx512": {
+        "compiled": true,
+        "effective": true,
+        "runtime": true
+      },
+      "avx512_vpopcntdq": {
+        "compiled": true,
+        "effective": false,
+        "runtime": false
+      },
+      "neon": {
+        "compiled": false,
+        "effective": false,
+        "runtime": false
+      },
+      "sse": {
+        "compiled": true,
+        "effective": true,
+        "runtime": true
+      },
+      "sve": {
+        "compiled": false,
+        "effective": false,
+        "runtime": false
+      }
+    },
+    "total_memory_bytes": 540134068224,
+    "vsag_version": "v1.0.0-15-gad1d80da-dirty"
+  },
+  "evaluation_strategy": {
+    "artifact_reuse": "build_file_only",
+    "index_instance_reuse": false,
+    "name": "full_grid",
+    "query_coverage": "full_dataset"
+  },
+  "failure": null,
+  "input_request": {
+    "constraints": {
+      "build_seconds": 3600.0,
+      "index_memory_mb": 65536.0,
+      "index_size_mb": 2048.0
+    },
+    "data_path": "/root/data/sift-128-euclidean.hdf5",
+    "indexes": [
+      {
+        "create_params": {
+          "index_param": {
+            "base_quantization_type": "fp32",
+            "build_thread_count": 48,
+            "ef_construction": 300,
+            "max_degree": 32
+          }
+        },
+        "name": "hgraph",
+        "search_params": {
+          "hgraph": {
+            "ef_search": [
+              40,
+              80
+            ]
+          }
+        }
+      },
+      {
+        "create_params": {
+          "index_param": {
+            "base_quantization_type": "sq8_uniform",
+            "buckets_count": 1024,
+            "ivf_train_type": "kmeans",
+            "partition_strategy_type": "ivf",
+            "thread_count": 48
+          }
+        },
+        "name": "ivf",
+        "search_params": {
+          "ivf": {
+            "scan_buckets_count": [
+              32,
+              64
+            ]
+          }
+        }
+      }
+    ],
+    "objective": {
+      "metric": "latency_avg_ms",
+      "workload": "online_latency"
+    },
+    "output": {
+      "include_raw_eval": false,
+      "result_path": "/tmp/vsag_autotune_sift/report.json"
+    },
+    "tuning_config": {
+      "keep_intermediate": true,
+      "max_trials": 1000,
+      "workspace_path": "/tmp/vsag_autotune_sift"
+    },
+    "version": 1,
+    "workload": {
+      "searches": [
+        {
+          "concurrency": 1,
+          "constraints": {
+            "latency_p99_ms": 5.0,
+            "recall_at_k": 0.95
+          },
+          "name": "online_latency",
+          "objective": {
+            "metric": "latency_avg_ms"
+          },
+          "top_k": 10
+        },
+        {
+          "concurrency": 48,
+          "constraints": {
+            "qps": 20000.0,
+            "recall_at_k": 0.94
+          },
+          "name": "batch_throughput",
+          "objective": {
+            "metric": "qps"
+          },
+          "top_k": 10
+        }
+      ]
+    }
+  },
+  "objective": {
+    "metric": "latency_avg_ms",
+    "workload": "online_latency"
+  },
+  "recommendation": {
+    "artifacts": {
+      "cleaned": false,
+      "cleanup_planned": false,
+      "expected_to_exist_after_response": true,
+      "index_path": "/tmp/vsag_autotune_sift/runs/run-1784190130162801680-0/artifacts/hgraph-build-000001.index",
+      "use_existing_index": false
+    },
+    "build_id": "hgraph-build-000001",
+    "constraint_evaluation": {
+      "shared": {
+        "satisfied_constraints": true,
+        "violated_constraints": []
+      }
+    },
+    "create_params": {
+      "dim": 128,
+      "dtype": "float32",
+      "index_param": {
+        "base_quantization_type": "fp32",
+        "build_thread_count": 48,
+        "ef_construction": 300,
+        "max_degree": 32
+      },
+      "metric_type": "l2",
+      "repr": "dense"
+    },
+    "evidence": {
+      "build_id": "hgraph-build-000001",
+      "trial_ids": [
+        "hgraph-trial-000002",
+        "hgraph-trial-000003"
+      ]
+    },
+    "index_name": "hgraph",
+    "searches": [
+      {
+        "concurrency": 1,
+        "constraint_evaluation": {
+          "satisfied_constraints": true,
+          "violated_constraints": []
+        },
+        "metrics": {
+          "build_and_search_seconds": 42.923802482,
+          "latency_avg_ms": 0.3602505369999998,
+          "latency_p99_ms": 0.45504600000000006,
+          "qps": 2773.435038435565,
+          "recall_at_k": 0.982380000000001,
+          "search_seconds": 3.605637003
+        },
+        "name": "online_latency",
+        "search_params": {
+          "hgraph": {
+            "ef_search": 80
+          }
+        },
+        "source_trial_id": "hgraph-trial-000002",
+        "top_k": 10
+      },
+      {
+        "concurrency": 48,
+        "constraint_evaluation": {
+          "satisfied_constraints": true,
+          "violated_constraints": []
+        },
+        "metrics": {
+          "build_and_search_seconds": 39.397673158,
+          "latency_avg_ms": 0.37290099049999936,
+          "latency_p99_ms": 0.6729630000000001,
+          "qps": 125774.01485962128,
+          "recall_at_k": 0.9415200000000062,
+          "search_seconds": 0.07950767900000001
+        },
+        "name": "batch_throughput",
+        "search_params": {
+          "hgraph": {
+            "ef_search": 40
+          }
+        },
+        "source_trial_id": "hgraph-trial-000003",
+        "top_k": 10
+      }
+    ],
+    "selection_reason": "all constraints satisfied; best top-level objective",
+    "shared_metrics": {
+      "build_seconds": 39.318165479,
+      "index_memory_mb": 751.2297744750977,
+      "index_size_mb": 665.4894905090332
+    }
+  },
+  "report_path": "/tmp/vsag_autotune_sift/report.json",
+  "run_id": "run-1784190130162801680-0",
+  "run_workspace_path": "/tmp/vsag_autotune_sift/runs/run-1784190130162801680-0",
+  "status": "success",
+  "trial_count": 8,
+  "trials": [
+    {
+      "build_id": "hgraph-build-000001",
+      "constraint_evaluation": {
+        "satisfied_constraints": false,
+        "violated_constraints": [
+          {
+            "actual": 0.9415200000000062,
+            "comparison": "at_least",
+            "expected": 0.95,
+            "name": "recall_at_k",
+            "reason": "threshold_not_met"
+          }
+        ]
+      },
+      "elapsed_seconds": 3.522446243,
+      "execution": {
+        "actual_concurrency": 1,
+        "index_deserialize_count": 1,
+        "index_instance_reuse": false,
+        "load_policy": "fresh_deserialize_per_trial",
+        "query_count": 10000,
+        "reload_succeeded": true,
+        "requested_concurrency": 1
+      },
+      "failure": null,
+      "metrics": {
+        "build_and_search_seconds": 41.413153011,
+        "latency_avg_ms": 0.2092799868999997,
+        "latency_p99_ms": 0.28322500000000006,
+        "qps": 4773.298097126813,
+        "recall_at_k": 0.9415200000000062,
+        "search_seconds": 2.094987532
+      },
+      "search_params": {
+        "hgraph": {
+          "ef_search": 40
+        }
+      },
+      "status": "success",
+      "top_k": 10,
+      "trial_id": "hgraph-trial-000001",
+      "workload_name": "online_latency"
+    },
+    {
+      "build_id": "hgraph-build-000001",
+      "constraint_evaluation": {
+        "satisfied_constraints": true,
+        "violated_constraints": []
+      },
+      "elapsed_seconds": 5.045786852,
+      "execution": {
+        "actual_concurrency": 1,
+        "index_deserialize_count": 1,
+        "index_instance_reuse": false,
+        "load_policy": "fresh_deserialize_per_trial",
+        "query_count": 10000,
+        "reload_succeeded": true,
+        "requested_concurrency": 1
+      },
+      "failure": null,
+      "metrics": {
+        "build_and_search_seconds": 42.923802482,
+        "latency_avg_ms": 0.3602505369999998,
+        "latency_p99_ms": 0.45504600000000006,
+        "qps": 2773.435038435565,
+        "recall_at_k": 0.982380000000001,
+        "search_seconds": 3.605637003
+      },
+      "search_params": {
+        "hgraph": {
+          "ef_search": 80
+        }
+      },
+      "status": "success",
+      "top_k": 10,
+      "trial_id": "hgraph-trial-000002",
+      "workload_name": "online_latency"
+    },
+    {
+      "build_id": "hgraph-build-000001",
+      "constraint_evaluation": {
+        "satisfied_constraints": true,
+        "violated_constraints": []
+      },
+      "elapsed_seconds": 1.498688315,
+      "execution": {
+        "actual_concurrency": 48,
+        "index_deserialize_count": 1,
+        "index_instance_reuse": false,
+        "load_policy": "fresh_deserialize_per_trial",
+        "query_count": 10000,
+        "reload_succeeded": true,
+        "requested_concurrency": 48
+      },
+      "failure": null,
+      "metrics": {
+        "build_and_search_seconds": 39.397673158,
+        "latency_avg_ms": 0.37290099049999936,
+        "latency_p99_ms": 0.6729630000000001,
+        "qps": 125774.01485962128,
+        "recall_at_k": 0.9415200000000062,
+        "search_seconds": 0.07950767900000001
+      },
+      "search_params": {
+        "hgraph": {
+          "ef_search": 40
+        }
+      },
+      "status": "success",
+      "top_k": 10,
+      "trial_id": "hgraph-trial-000003",
+      "workload_name": "batch_throughput"
+    },
+    {
+      "build_id": "hgraph-build-000001",
+      "constraint_evaluation": {
+        "satisfied_constraints": true,
+        "violated_constraints": []
+      },
+      "elapsed_seconds": 1.548315233,
+      "execution": {
+        "actual_concurrency": 48,
+        "index_deserialize_count": 1,
+        "index_instance_reuse": false,
+        "load_policy": "fresh_deserialize_per_trial",
+        "query_count": 10000,
+        "reload_succeeded": true,
+        "requested_concurrency": 48
+      },
+      "failure": null,
+      "metrics": {
+        "build_and_search_seconds": 39.446898035000004,
+        "latency_avg_ms": 0.6120367930000012,
+        "latency_p99_ms": 1.0507870000000001,
+        "qps": 77680.42763013266,
+        "recall_at_k": 0.982380000000001,
+        "search_seconds": 0.128732556
+      },
+      "search_params": {
+        "hgraph": {
+          "ef_search": 80
+        }
+      },
+      "status": "success",
+      "top_k": 10,
+      "trial_id": "hgraph-trial-000004",
+      "workload_name": "batch_throughput"
+    },
+    {
+      "build_id": "ivf-build-000002",
+      "constraint_evaluation": {
+        "satisfied_constraints": true,
+        "violated_constraints": []
+      },
+      "elapsed_seconds": 16.409593202,
+      "execution": {
+        "actual_concurrency": 1,
+        "index_deserialize_count": 1,
+        "index_instance_reuse": false,
+        "load_policy": "fresh_deserialize_per_trial",
+        "query_count": 10000,
+        "reload_succeeded": true,
+        "requested_concurrency": 1
+      },
+      "failure": null,
+      "metrics": {
+        "build_and_search_seconds": 77.79876285600001,
+        "latency_avg_ms": 1.5505326344999997,
+        "latency_p99_ms": 2.2457340000000006,
+        "qps": 644.7952037272951,
+        "recall_at_k": 0.9625300000000013,
+        "search_seconds": 15.508800224000002
+      },
+      "search_params": {
+        "ivf": {
+          "scan_buckets_count": 32
+        }
+      },
+      "status": "success",
+      "top_k": 10,
+      "trial_id": "ivf-trial-000005",
+      "workload_name": "online_latency"
+    },
+    {
+      "build_id": "ivf-build-000002",
+      "constraint_evaluation": {
+        "satisfied_constraints": true,
+        "violated_constraints": []
+      },
+      "elapsed_seconds": 30.224024039000003,
+      "execution": {
+        "actual_concurrency": 1,
+        "index_deserialize_count": 1,
+        "index_instance_reuse": false,
+        "load_policy": "fresh_deserialize_per_trial",
+        "query_count": 10000,
+        "reload_succeeded": true,
+        "requested_concurrency": 1
+      },
+      "failure": null,
+      "metrics": {
+        "build_and_search_seconds": 91.620266453,
+        "latency_avg_ms": 2.932633995099998,
+        "latency_p99_ms": 3.913700000000001,
+        "qps": 340.9443032376695,
+        "recall_at_k": 0.9788499999999998,
+        "search_seconds": 29.330303821
+      },
+      "search_params": {
+        "ivf": {
+          "scan_buckets_count": 64
+        }
+      },
+      "status": "success",
+      "top_k": 10,
+      "trial_id": "ivf-trial-000006",
+      "workload_name": "online_latency"
+    },
+    {
+      "build_id": "ivf-build-000002",
+      "constraint_evaluation": {
+        "satisfied_constraints": true,
+        "violated_constraints": []
+      },
+      "elapsed_seconds": 1.254477056,
+      "execution": {
+        "actual_concurrency": 48,
+        "index_deserialize_count": 1,
+        "index_instance_reuse": false,
+        "load_policy": "fresh_deserialize_per_trial",
+        "query_count": 10000,
+        "reload_succeeded": true,
+        "requested_concurrency": 48
+      },
+      "failure": null,
+      "metrics": {
+        "build_and_search_seconds": 62.66047910700001,
+        "latency_avg_ms": 1.7526399002999962,
+        "latency_p99_ms": 3.3253960000000005,
+        "qps": 26989.35317248713,
+        "recall_at_k": 0.9625300000000013,
+        "search_seconds": 0.370516475
+      },
+      "search_params": {
+        "ivf": {
+          "scan_buckets_count": 32
+        }
+      },
+      "status": "success",
+      "top_k": 10,
+      "trial_id": "ivf-trial-000007",
+      "workload_name": "batch_throughput"
+    },
+    {
+      "build_id": "ivf-build-000002",
+      "constraint_evaluation": {
+        "satisfied_constraints": false,
+        "violated_constraints": [
+          {
+            "actual": 14887.429365344553,
+            "comparison": "at_least",
+            "expected": 20000.0,
+            "name": "qps",
+            "reason": "threshold_not_met"
+          }
+        ]
+      },
+      "elapsed_seconds": 1.556916313,
+      "execution": {
+        "actual_concurrency": 48,
+        "index_deserialize_count": 1,
+        "index_instance_reuse": false,
+        "load_policy": "fresh_deserialize_per_trial",
+        "query_count": 10000,
+        "reload_succeeded": true,
+        "requested_concurrency": 48
+      },
+      "failure": null,
+      "metrics": {
+        "build_and_search_seconds": 62.961670269,
+        "latency_avg_ms": 3.1880456951000036,
+        "latency_p99_ms": 5.749162000000001,
+        "qps": 14887.429365344553,
+        "recall_at_k": 0.9788499999999998,
+        "search_seconds": 0.671707637
+      },
+      "search_params": {
+        "ivf": {
+          "scan_buckets_count": 64
+        }
+      },
+      "status": "success",
+      "top_k": 10,
+      "trial_id": "ivf-trial-000008",
+      "workload_name": "batch_throughput"
+    }
+  ],
+  "version": 1
+}

@@ -18,6 +18,7 @@
 #include <../extern/diskann/DiskANN/include/diskann_logger.h>
 #include <cpuinfo.h>
 
+#include <cstdlib>
 #include <sstream>
 
 #include "impl/logger/logger.h"
@@ -34,8 +35,10 @@ version() {
 bool
 init() {
 #ifndef NDEBUG
-    // set debug level by default in debug version of VSAG
-    logger::set_level(logger::level::debug);
+    // Set debug by default in debug builds, but preserve an explicit process-level choice.
+    if (std::getenv("VSAG_LOG_LEVEL") == nullptr) {
+        logger::set_level(logger::level::debug);
+    }
 #endif
 
     cpuinfo_initialize();

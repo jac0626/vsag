@@ -1,62 +1,80 @@
-# Performance Evaluation Tool (`eval_performance`)
+# Performance Evaluation Tool (eval_performance)
 
-`eval_performance` is the command-line performance evaluation tool shipped with VSAG, under
-`tools/eval/`. After building, the binary lives at `build-release/tools/eval/eval_performance`. It
-is used to compare throughput, latency, and recall across different indexes or parameter
-combinations.
+eval_performance is VSAG's command-line evaluation tool under tools/eval/. The built executable is
+build-release/tools/eval/eval_performance. It runs real build, load, and search operations for one
+concrete index configuration and reports throughput, latency, recall, and resource metrics.
 
 ## Building
 
-Tools are not built by default — enable them explicitly:
+Tools are disabled by default and must be enabled explicitly:
 
-```bash
-# via the project Makefile
+~~~bash
 VSAG_ENABLE_TOOLS=ON make release
-# or: make dev
 
-# or directly through CMake
+# Or use CMake directly
 cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release -DENABLE_TOOLS=ON
 cmake --build build-release -j
-# Output: ./build-release/tools/eval/eval_performance
-```
+~~~
 
-HDF5 must be installed on the system (Ubuntu: `apt install libhdf5-dev`; CentOS:
-`yum install hdf5-devel`).
+HDF5 must be installed (Ubuntu: apt install libhdf5-dev; CentOS: yum install hdf5-devel).
 
-## Two Modes
+## Search Modes
 
-### 1. Command-line mode (quick, one-off experiments)
+The standalone eval tool accepts `knn` and `knn_filter`; `knn` remains the default. The
+unimplemented `range` and `range_filter` modes are rejected during configuration instead of
+emitting zero-valued success results. AutoTune V1 invokes only unfiltered KNN.
 
-```bash
+## Command-Line Mode
+
+The command-line type accepts build or search. First build and serialize the index:
+
+~~~bash
+CREATE_PARAMS='{"dim":128,"dtype":"float32","metric_type":"l2",'\
+'"index_param":{"base_quantization_type":"fp32","max_degree":32,'\
+'"ef_construction":300}}'
+./build-release/tools/eval/eval_performance \
+    --datapath /tmp/sift-128-euclidean.hdf5 \
+    --index_name hgraph \
+    --type build \
+    --create_params "$CREATE_PARAMS" \
+    --index_path /tmp/vsag_eval/hgraph_fp32.index
+~~~
+
+Then load the same artifact and run KNN:
+
+~~~bash
+CREATE_PARAMS='{"dim":128,"dtype":"float32","metric_type":"l2",'\
+'"index_param":{"base_quantization_type":"fp32","max_degree":32,'\
+'"ef_construction":300}}'
 ./build-release/tools/eval/eval_performance \
     --datapath /tmp/sift-128-euclidean.hdf5 \
     --index_name hgraph \
     --type search \
-    --create_params '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"fp32","max_degree":32,"ef_construction":300}}' \
+    --create_params "$CREATE_PARAMS" \
     --search_params '{"hgraph":{"ef_search":60}}' \
+    --index_path /tmp/vsag_eval/hgraph_fp32.index \
+    --search_mode knn \
+    --search-query-count 100000 \
     --topk 10
-```
+~~~
 
-Useful flags include `--search_mode` (`knn` / `range` / `knn_filter` / `range_filter`),
-`--search-query-count`, `--delete-index-after-search`, and the various `--disable_*` switches that
-turn off individual metrics. The reference template at `tools/eval/eval_template.yaml` shows the
-complete YAML shape.
+`--search-query-count` sets the minimum number of query operations for a standalone benchmark. If
+it exceeds the dataset query count, eval repeats dataset queries cyclically; otherwise every query
+is evaluated once. AutoTune overrides this value with the dataset query count, so each AutoTune
+trial still executes every query exactly once. Other useful flags include
+`--delete-index-after-search` and the `--disable_*` flags for individual metrics.
 
-### 2. Config-file mode (batch comparisons)
+## YAML Configuration Mode
 
-The YAML file is passed directly as a positional argument (no `--config` flag):
+Pass the YAML file as the positional argument:
 
-```bash
+~~~bash
 ./build-release/tools/eval/eval_performance my_eval.yaml
-```
+~~~
 
-A reference template is available at `tools/eval/eval_template.yaml`. A single configuration can
-define multiple named cases, plus an optional `global` section that holds shared settings such as
-thread counts, exporters, and an embedded HTTP monitor.
+A YAML case may use type: build,search to build, serialize, load, and search in one case:
 
-A minimal example:
-
-```yaml
+~~~yaml
 global:
   num_threads_building: 8
   num_threads_searching: 16
@@ -70,61 +88,77 @@ global:
 
 eval_case1:
   datapath: /tmp/sift-128-euclidean.hdf5
-  type: search
+  type: build,search
   index_name: hgraph
-  create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"fp32","max_degree":32,"ef_construction":300}}'
+  create_params: >-
+    {"dim":128,"dtype":"float32","metric_type":"l2",
+    "index_param":{"base_quantization_type":"fp32","max_degree":32,
+    "ef_construction":300}}
   search_params: '{"hgraph":{"ef_search":60}}'
-  index_path: /tmp/vsag_eval/hgraph_fp32
+  index_path: /tmp/vsag_eval/hgraph_fp32.index
+  search_mode: knn
+  search_query_count: 100000
   topk: 10
-```
+~~~
 
-Note: under `global.exporters`, each entry is a **named** exporter (a YAML map), not a list item.
+One YAML file may define multiple named cases. Each entry under global.exporters is a named map,
+not a list item. See tools/eval/eval_template.yaml for the complete shape.
 
-## Supported Dimensions
+## Metrics
 
-- **Efficiency**: QPS, TPS
-- **Quality**: average recall and quantile recall (P0/P10/P50/P90...)
-- **Latency**: average, P50/P95/P99
-- **Resource**: peak memory usage
+- Build: duration, TPS, and index memory.
+- Search quality: average recall and recall quantiles.
+- Search efficiency: QPS, average latency, and P50/P80/P90/P95/P99 latency.
+- Resources: index memory reported by the concrete index.
+- Optional process RSS: `memory_peak(build)` and `memory_peak(search)` report the maximum
+  increase observed at operation boundaries and by a 5 ms sampler. They may miss allocations
+  whose complete lifetime is shorter than one sampling interval.
 
-## Search Modes
+For KNN modes with recall metrics enabled, topk must not exceed the HDF5 ground-truth width;
+otherwise recall is not well-defined. AutoTune V1 always measures recall, also caps top_k at
+1,000,000, and therefore enforces both limits before evaluation. The eval runner also requires
+`topk * num_threads_searching <= 1,000,000` when recall is enabled, so a retained result batch can
+provide the requested concurrency without unbounded neighbor buffering; AutoTune validates the
+same rule as `top_k * concurrency <= 1,000,000`.
 
-`search_mode` accepts `knn`, `range`, `knn_filter`, and `range_filter`.
+Latency, QPS, and elapsed-time results describe the machine that ran the benchmark. When an
+AutoTune recommendation depends on those metrics, run the benchmark on a deployment-equivalent
+machine, including CPU/SIMD capabilities, core count, memory, VSAG build, and concurrency settings.
 
-## Output Formats and Destinations
+## Output
 
-Each exporter combines a `format` with a `to` destination.
+Each exporter specifies a format and a to destination:
 
-- Formats: `table` (or its alias `text`), `json`, `line_protocol` (for InfluxDB).
-- Destinations:
-    - `stdout` — print to standard output.
-    - `file://<path>` — write (overwrite) to a file.
-    - `influxdb://<host>:<port>/<path>?<query>` — POST to an InfluxDB v2 endpoint. Use
-      `format: line_protocol` and pass an authentication token via `vars.token` (the value must
-      include the `Token ` prefix, e.g. `Token <your-influxdb-token>`).
+- format: table (or text), json, or line_protocol.
+- to:
+    - stdout.
+    - file://<path>, which overwrites the file.
+    - influxdb://<host>:<port>/<path>?<query>, used with line_protocol.
 
-If no exporter is configured, results are printed to stdout in `table` format by default.
+Without exporters, results are printed to stdout as a table.
 
-## HTTP Monitor (optional)
+## HTTP Monitoring
 
-When configured, the tool starts an embedded HTTP server for the duration of a batch run and
-exposes live progress (current case, total cases, completion %) plus the latest metrics. This is
-helpful for long-running evaluations.
+Batch configurations may enable the embedded HTTP service:
 
-```yaml
+~~~yaml
 global:
   http_server:
     enabled: true
     port: 8080
-```
+~~~
+
+It exposes the current case, total case count, progress, and latest metrics.
 
 ## Datasets
 
-Any HDF5 dataset from [ann-benchmarks](https://github.com/erikbern/ann-benchmarks)
-(e.g. `sift-128-euclidean.hdf5`, `gist-960-euclidean.hdf5`) works out of the box.
+The eval tool works with HDF5 datasets from
+[ann-benchmarks](https://github.com/erikbern/ann-benchmarks), such as
+sift-128-euclidean.hdf5 and gist-960-euclidean.hdf5. See
+[HDF5 Dataset Format](dataset_format.md) for the complete contract.
 
 ## References
 
-- Source: `tools/eval/`
-- Local tool entry point: `tools/eval/README.md`
-- Reference numbers on standard hardware: [Reference Performance](performance.md).
+- Source: [tools/eval](https://github.com/antgroup/vsag/tree/main/tools/eval)
+- Local entry point: [tools/eval/README.md](../../../../../tools/eval/README.md)
+- Standard-environment results: [Reference Performance](performance.md)

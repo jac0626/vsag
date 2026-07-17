@@ -38,6 +38,10 @@ produced by VSAG's sparse-vector serialization (decoded by `parse_sparse_vectors
     - `K` — number of ground-truth neighbors per query
 - **Content**: precomputed top-`K` indices into `/train`.
 
+For `search_mode=knn_filter` with recall enabled, these must be the top-`K` neighbors after
+applying the label equality filter (`train_labels[id] == test_labels[query]`). The eval runner
+rejects ground-truth ids whose label does not match the query label.
+
 ### `/distances` (ground-truth distances)
 
 - **Type**: `FLOAT32`
@@ -88,12 +92,10 @@ formulas below.
 
 - **Type**: `FLOAT32`
 - **Shape**: `(L,)`
-- **Usage**: stores per-class validation ratios. The evaluation tool indexes this array
-  with the **raw label value** (`valid_ratio_[label]`, see
-  `tools/eval/eval_dataset.h:71`), so labels must be non-negative integers and `L` must
-  be strictly greater than the maximum label value (typically `L > max(label)` with valid
-  indices `0..L-1`). It is the dataset author's responsibility to keep the array large
-  enough to cover every label that appears in `/train_labels` and `/test_labels`.
+- **Usage**: required by `search_mode=knn_filter`; stores the valid-vector ratio for each
+  class. The evaluation tool indexes this array with the **raw label value**, so labels must be
+  non-negative integers and `L` must exceed the maximum label value. Every ratio must be finite
+  and in `[0, 1]`; the eval runner rejects missing or out-of-range data instead of using it.
 
 ## Multi-Vector Datasets
 

@@ -23,24 +23,33 @@
 
 namespace vsag::eval {
 
+class LatencyMonitor;
+class MemoryPeakMonitor;
+class RecallMonitor;
+
 class SearchEvalCase : public EvalCase {
 public:
     SearchEvalCase(const std::string& dataset_path,
                    const std::string& index_path,
                    vsag::IndexPtr index,
-                   EvalConfig config);
+                   EvalConfig config,
+                   EvalDatasetPtr dataset = nullptr);
 
     ~SearchEvalCase() override = default;
 
     JsonType
     Run() override;
 
+    JsonType
+    RunWithSearchParam(const std::string& search_param);
+
+    void
+    LoadIndex();
+
 private:
     enum SearchType {
         KNN,
-        RANGE,
         KNN_FILTER,
-        RANGE_FILTER,
     };
 
     void
@@ -58,17 +67,20 @@ private:
     void
     deserialize(std::ifstream& infile);
 
+    JsonType
+    run_search_once();
+
+    void
+    reset_run_state();
+
     void
     do_knn_search();
 
     void
-    do_range_search();
+    do_knn_search(bool use_filter);
 
     void
     do_knn_filter_search();
-
-    void
-    do_range_filter_search();
 
     JsonType
     process_result();
@@ -84,10 +96,18 @@ private:
 
 private:
     std::vector<MonitorPtr> monitors_{};
+    std::shared_ptr<LatencyMonitor> latency_monitor_{nullptr};
+    std::shared_ptr<RecallMonitor> recall_monitor_{nullptr};
+    std::shared_ptr<MemoryPeakMonitor> memory_monitor_{nullptr};
 
     SearchType search_type_{SearchType::KNN};
-
     EvalConfig config_;
+
+    bool index_loaded_{false};
+    uint64_t index_deserialize_count_{0};
+    uint64_t search_run_ordinal_{0};
+    uint64_t actual_concurrency_{0};
+    uint64_t memory_monitor_baseline_pages_{0};
 
     std::atomic<uint64_t> statistics_query_count_{0};
     std::atomic<uint64_t> statistics_dist_cmp_{0};

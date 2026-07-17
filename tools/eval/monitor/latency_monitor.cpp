@@ -15,7 +15,11 @@
 
 #include "latency_monitor.h"
 
+#include <cmath>
 #include <mutex>
+#include <stdexcept>
+
+#include "search_record.h"
 
 namespace vsag::eval {
 
@@ -27,14 +31,31 @@ LatencyMonitor::LatencyMonitor(uint64_t max_record_counts) : Monitor("latency_mo
 
 void
 LatencyMonitor::Start() {
+    std::lock_guard<std::mutex> lock(record_mutex_);
+    latency_records_.clear();
+    batch_duration_seconds_ = 0.0;
+    batch_start_ = Clock::now();
 }
 void
 LatencyMonitor::Stop() {
+    const auto batch_end = Clock::now();
+    std::lock_guard<std::mutex> lock(record_mutex_);
+    batch_duration_seconds_ = std::chrono::duration<double>(batch_end - batch_start_).count();
+}
+
+void
+LatencyMonitor::Stop(double batch_duration_seconds) {
+    if (batch_duration_seconds < 0.0 || not std::isfinite(batch_duration_seconds)) {
+        throw std::invalid_argument("batch duration must be finite and non-negative");
+    }
+    std::lock_guard<std::mutex> lock(record_mutex_);
+    batch_duration_seconds_ = batch_duration_seconds;
 }
 
 Monitor::JsonType
 LatencyMonitor::GetResult() {
     JsonType result;
+    result["duration(s)"] = batch_duration_seconds_;
     for (auto& metric : metrics_) {
         this->cal_and_set_result(metric, result);
     }
@@ -42,17 +63,15 @@ LatencyMonitor::GetResult() {
 }
 void
 LatencyMonitor::Record(void* input) {
-    std::lock_guard<std::mutex> lock(record_mutex_);
-    std::thread::id thread_id = std::this_thread::get_id();
-    if (cur_time_.find(thread_id) == cur_time_.end()) {
-        cur_time_[thread_id] = Clock::now();
-        return;
+    if (input == nullptr) {
+        throw std::invalid_argument("latency monitor requires a search record");
     }
-    auto end_time = Clock::now();
-    double duration =
-        std::chrono::duration<double, std::milli>(end_time - cur_time_[thread_id]).count();
-    this->latency_records_.emplace_back(duration);
-    this->cur_time_[thread_id] = Clock::now();
+    const auto* record = static_cast<const SearchRecord*>(input);
+    if (record->latency_ms < 0.0 || not std::isfinite(record->latency_ms)) {
+        throw std::invalid_argument("search latency must be finite and non-negative");
+    }
+    std::lock_guard<std::mutex> lock(record_mutex_);
+    this->latency_records_.emplace_back(record->latency_ms);
 }
 void
 LatencyMonitor::SetMetrics(std::string metric) {
@@ -77,22 +96,26 @@ LatencyMonitor::cal_and_set_result(const std::string& metric, Monitor::JsonType&
 
 double
 LatencyMonitor::cal_qps() {
-    double total_time_cost =
-        std::accumulate(this->latency_records_.begin(), this->latency_records_.end(), double(0));
-    auto thread_num = cur_time_.size();
-    auto query_num = latency_records_.size();
-    return static_cast<double>(query_num) * thread_num * 1000.0 / total_time_cost;
+    if (batch_duration_seconds_ <= 0.0) {
+        return 0.0;
+    }
+    return static_cast<double>(latency_records_.size()) / batch_duration_seconds_;
 }
 
 double
 LatencyMonitor::cal_avg_latency() {
+    if (latency_records_.empty()) {
+        return 0.0;
+    }
     double total_time_cost =
         std::accumulate(this->latency_records_.begin(), this->latency_records_.end(), double(0));
-    auto query_num = latency_records_.size();
-    return total_time_cost / static_cast<double>(query_num);
+    return total_time_cost / static_cast<double>(latency_records_.size());
 }
 double
 LatencyMonitor::cal_latency_rate(double rate) {
+    if (latency_records_.empty()) {
+        return 0.0;
+    }
     std::sort(this->latency_records_.begin(), this->latency_records_.end());
     auto pos = static_cast<uint64_t>(rate * static_cast<double>(this->latency_records_.size() - 1));
     return latency_records_[pos];

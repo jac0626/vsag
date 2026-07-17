@@ -17,6 +17,8 @@
 
 #include <argparse/argparse.hpp>
 #include <cstdint>
+#include <cstdio>
+#include <exception>
 #include <fstream>
 #include <iostream>
 #include <string>
@@ -69,10 +71,10 @@ parse_args(argparse::ArgumentParser& parser, int argc, char** argv) {
         .help("The param for search");
     parser.add_argument<std::string>("--search_mode")
         .default_value("knn")
-        .choices("knn", "range", "knn_filter", "range_filter")
+        .choices("knn", "knn_filter")
         .help(
-            "The mode supported while use 'search' type,"
-            " choose from {\"knn\", \"range\", \"knn_filter\", \"range_filter\"}");
+            "The mode supported while use 'search' type, choose from {\"knn\", "
+            "\"knn_filter\"}");
     parser.add_argument("--delete-index-after-search")
         .default_value(false)
         .help("Delete index after search");
@@ -81,12 +83,12 @@ parse_args(argparse::ArgumentParser& parser, int argc, char** argv) {
         .help("The topk value for knn search or knn_filter search")
         .scan<'i', int>();
     parser.add_argument("--range")
-        .default_value(0.5f)
-        .help("The range value for range search or range_filter search")
+        .default_value(0.5F)
+        .help("Reserved range-search radius; range modes are not supported in V1")
         .scan<'f', float>();
     parser.add_argument("--search-query-count")
         .default_value(100000)
-        .help("The number of queries to run for search performance evaluation")
+        .help("The minimum number of queries to run for search performance evaluation")
         .scan<'i', uint64_t>();
 
     // metrics
@@ -109,9 +111,9 @@ parse_args(argparse::ArgumentParser& parser, int argc, char** argv) {
     try {
         parser.parse_args(argc, argv);
         check_args(parser);
-    } catch (const std::runtime_error& err) {
-        std::cerr << err.what() << std::endl;
+    } catch (const std::runtime_error&) {
         std::cerr << parser;
+        throw;
     }
 }
 
@@ -186,7 +188,7 @@ parse_yaml_file(const std::string& yaml_file) {
 }
 
 int
-main(int argc, char** argv) {
+run_eval(int argc, char** argv) {
     using vsag::eval::EvalCase;
     using vsag::eval::EvalConfig;
     using vsag::eval::Exporter;
@@ -256,5 +258,19 @@ main(int argc, char** argv) {
         if (eval_case != nullptr) {
             std::cout << eval_case->Run() << std::endl;
         }
+    }
+    return 0;
+}
+
+int
+main(int argc, char** argv) {
+    try {
+        return run_eval(argc, argv);
+    } catch (const std::exception& error) {
+        std::fprintf(stderr, "%s\n", error.what());
+        return 1;
+    } catch (...) {
+        std::fputs("unknown eval failure\n", stderr);
+        return 1;
     }
 }

@@ -15,9 +15,27 @@
 
 #include "./eval_config.h"
 
+#include <stdexcept>
+
 #include "./common.h"
 
 namespace vsag::eval {
+
+namespace {
+
+void
+validate_search_mode(const std::string& action_type, const std::string& search_mode) {
+    if (action_type != "search" && action_type != "build,search") {
+        return;
+    }
+    const bool supported = search_mode == "knn" || search_mode == "knn_filter";
+    if (!supported) {
+        throw std::invalid_argument("unsupported search_mode: " + search_mode +
+                                    "; supported modes are knn and knn_filter");
+    }
+}
+
+}  // namespace
 
 template <class T = std::string>
 void
@@ -67,6 +85,7 @@ EvalConfig::Load(argparse::ArgumentParser& parser) {
         config.enable_percent_latency = false;
     }
 
+    validate_search_mode(config.action_type, config.search_mode);
     return config;
 }
 
@@ -103,46 +122,47 @@ EvalConfig::Load(YAML::Node& yaml_node, const eval_job& global_options) {
 
     bool disable = false;
     check_and_get_value<bool>(yaml_node, "disable_recall", disable);
-    if (disable == true) {
+    if (disable) {
         config.enable_recall = false;
         disable = false;
     }
     check_and_get_value<bool>(yaml_node, "disable_recall", disable);
-    if (disable == true) {
+    if (disable) {
         config.enable_recall = false;
         disable = false;
     }
     check_and_get_value<bool>(yaml_node, "disable_percent_recall", disable);
-    if (disable == true) {
+    if (disable) {
         config.enable_percent_recall = false;
         disable = false;
     }
     check_and_get_value<bool>(yaml_node, "disable_qps", disable);
-    if (disable == true) {
+    if (disable) {
         config.enable_qps = false;
         disable = false;
     }
     check_and_get_value<bool>(yaml_node, "disable_tps", disable);
-    if (disable == true) {
+    if (disable) {
         config.enable_tps = false;
         disable = false;
     }
     check_and_get_value<bool>(yaml_node, "disable_memory", disable);
-    if (disable == true) {
+    if (disable) {
         config.enable_memory = false;
         disable = false;
     }
     check_and_get_value<bool>(yaml_node, "disable_latency", disable);
-    if (disable == true) {
+    if (disable) {
         config.enable_latency = false;
         disable = false;
     }
     check_and_get_value<bool>(yaml_node, "disable_percent_latency", disable);
-    if (disable == true) {
+    if (disable) {
         config.enable_percent_latency = false;
         disable = false;
     }
 
+    validate_search_mode(config.action_type, config.search_mode);
     return config;
 }
 
@@ -155,7 +175,9 @@ EvalConfig::CheckKeyAndType(YAML::Node& yaml_node) {
     if (action == "search") {
         check_exist_and_get_value<>(yaml_node, "search_params");
     }
-    check_and_get_value<>(yaml_node, "search_mode");
+    std::string search_mode = "knn";
+    check_and_get_value<>(yaml_node, "search_mode", search_mode);
+    validate_search_mode(action, search_mode);
     check_and_get_value<>(yaml_node, "index_path");
     check_and_get_value<int>(yaml_node, "topk");
     check_and_get_value<float>(yaml_node, "range");

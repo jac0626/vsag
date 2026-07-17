@@ -37,6 +37,10 @@ VSAG 的评测与基准工具（尤其是 [`eval_performance`](eval.md)）使用
     - `K` —— 每个查询的真实近邻个数
 - **内容**：预先计算好的 Top-`K` 索引，指向 `/train` 中的向量。
 
+`search_mode=knn_filter` 启用 recall 时，这里必须是在 label 相等过滤条件
+（`train_labels[id] == test_labels[query]`）下预先计算的 Top-`K`。eval runner 会拒绝
+label 与 query 不匹配的 ground-truth id。
+
 ### `/distances`（真实近邻距离）
 
 - **类型**：`FLOAT32`
@@ -84,11 +88,9 @@ VSAG 的评测与基准工具（尤其是 [`eval_performance`](eval.md)）使用
 
 - **类型**：`FLOAT32`
 - **形状**：`(L,)`
-- **用途**：保存每个类别的验证比例。评测工具会以**原始 label 值**作为下标
-  （`valid_ratio_[label]`，见 `tools/eval/eval_dataset.h:71`），因此 label 必须为
-  非负整数，且 `L` 必须严格大于最大 label 值（通常为 `L > max(label)`，下标范围
-  `0..L-1`）。数据集作者需自行保证该数组足够大，能覆盖 `/train_labels` 与
-  `/test_labels` 中出现的所有 label。
+- **用途**：`search_mode=knn_filter` 必填，保存每个类别的有效向量比例。评测工具以
+  **原始 label 值**作为下标，因此 label 必须为非负整数，且 `L` 必须大于最大 label。
+  每个比例必须是 `[0, 1]` 内的有限数；eval runner 会拒绝缺失、越界或非法值。
 
 ## 多向量数据集
 

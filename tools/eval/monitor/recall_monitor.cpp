@@ -15,30 +15,68 @@
 
 #include "recall_monitor.h"
 
+#include <algorithm>
 #include <mutex>
+#include <stdexcept>
 #include <unordered_set>
 
 #include "../eval_dataset.h"
+#include "search_record.h"
 namespace vsag::eval {
 
-static const double THRESHOLD_ERROR = 2e-6;
+namespace {
 
-static double
-get_recall(const float* distances,
-           const float* ground_truth_distances,
-           size_t recall_num,
-           size_t top_k) {
-    std::vector<float> gt_distances(ground_truth_distances, ground_truth_distances + top_k);
-    std::sort(gt_distances.begin(), gt_distances.end());
-    float threshold = gt_distances[top_k - 1];
-    size_t count = 0;
-    for (size_t i = 0; i < recall_num; ++i) {
-        if (distances[i] <= threshold + THRESHOLD_ERROR) {
-            ++count;
+constexpr double THRESHOLD_ERROR = 2e-6;
+
+double
+get_recall(const SearchRecord& record) {
+    if (record.requested_k == 0) {
+        return 0.0;
+    }
+    if (record.dataset == nullptr || record.query_data == nullptr ||
+        record.ground_truth_neighbors == nullptr) {
+        throw std::invalid_argument("recall monitor received an incomplete search record");
+    }
+    if (record.requested_k > record.ground_truth_count) {
+        throw std::invalid_argument("requested k exceeds the ground-truth width");
+    }
+
+    const auto base_count = record.dataset->GetNumberOfBase();
+    const auto distance_func = record.dataset->GetDistanceFunc();
+    auto dim = static_cast<uint64_t>(record.dataset->GetDim());
+    std::vector<float> ground_truth_distances;
+    ground_truth_distances.reserve(record.requested_k);
+    for (uint64_t i = 0; i < record.requested_k; ++i) {
+        const int64_t id = record.ground_truth_neighbors[i];
+        if (id < 0 || id >= base_count) {
+            throw std::invalid_argument("ground truth contains an invalid base id");
+        }
+        ground_truth_distances.emplace_back(
+            distance_func(record.query_data, record.dataset->GetOneTrain(id), &dim));
+    }
+    const float threshold =
+        *std::max_element(ground_truth_distances.begin(), ground_truth_distances.end());
+
+    uint64_t hit_count = 0;
+    std::unordered_set<int64_t> seen;
+    const uint64_t candidate_count = std::min(record.returned_count, record.requested_k);
+    if (record.neighbors != nullptr) {
+        for (uint64_t i = 0; i < candidate_count; ++i) {
+            const int64_t id = record.neighbors[i];
+            if (id < 0 || id >= base_count || not seen.emplace(id).second) {
+                continue;
+            }
+            const float distance =
+                distance_func(record.query_data, record.dataset->GetOneTrain(id), &dim);
+            if (distance <= threshold + THRESHOLD_ERROR) {
+                ++hit_count;
+            }
         }
     }
-    return static_cast<double>(count) / static_cast<double>(top_k);
+    return static_cast<double>(hit_count) / static_cast<double>(record.requested_k);
 }
+
+}  // namespace
 
 RecallMonitor::RecallMonitor(uint64_t max_record_counts) : Monitor("recall_monitor") {
     if (max_record_counts > 0) {
@@ -47,6 +85,8 @@ RecallMonitor::RecallMonitor(uint64_t max_record_counts) : Monitor("recall_monit
 }
 void
 RecallMonitor::Start() {
+    std::lock_guard<std::mutex> lock(record_mutex_);
+    recall_records_.clear();
 }
 
 void
@@ -63,25 +103,13 @@ RecallMonitor::GetResult() {
 }
 void
 RecallMonitor::Record(void* input) {
+    if (input == nullptr) {
+        throw std::invalid_argument("recall monitor requires a search record");
+    }
+    const auto* record = static_cast<const SearchRecord*>(input);
+    const double recall = get_recall(*record);
     std::lock_guard<std::mutex> lock(record_mutex_);
-
-    auto [neighbors, gt_neighbors, dataset, query_data, topk] =
-        *(reinterpret_cast<std::tuple<int64_t*, int64_t*, EvalDataset*, const void*, uint64_t>*>(
-            input));
-    size_t dim = dataset->GetDim();
-    auto distance_func = dataset->GetDistanceFunc();
-    auto gt_distances = std::shared_ptr<float[]>(new float[topk]);
-    auto distances = std::shared_ptr<float[]>(new float[topk]);
-    for (int i = 0; i < topk; ++i) {
-        distances[i] = distance_func(query_data, dataset->GetOneTrain(neighbors[i]), &dim);
-        gt_distances[i] = distance_func(query_data, dataset->GetOneTrain(gt_neighbors[i]), &dim);
-    }
-
-    float val = 0;
-    if (topk != 0) {
-        val = get_recall(distances.get(), gt_distances.get(), topk, topk);
-    }
-    this->recall_records_.emplace_back(val);
+    this->recall_records_.emplace_back(recall);
 }
 void
 RecallMonitor::SetMetrics(std::string metric) {
@@ -103,6 +131,9 @@ RecallMonitor::cal_and_set_result(const std::string& metric, Monitor::JsonType& 
 
 double
 RecallMonitor::cal_avg_recall() {
+    if (recall_records_.empty()) {
+        return 0.0;
+    }
     double sum =
         std::accumulate(this->recall_records_.begin(), this->recall_records_.end(), double(0));
     return sum / static_cast<double>(recall_records_.size());
@@ -110,6 +141,9 @@ RecallMonitor::cal_avg_recall() {
 
 double
 RecallMonitor::cal_recall_rate(double rate) {
+    if (recall_records_.empty()) {
+        return 0.0;
+    }
     std::sort(this->recall_records_.begin(), this->recall_records_.end());
     auto pos = static_cast<uint64_t>(rate * static_cast<double>(this->recall_records_.size() - 1));
     return recall_records_[pos];

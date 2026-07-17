@@ -15,10 +15,11 @@
 
 #pragma once
 
-#include <unistd.h>
-
+#include <atomic>
 #include <chrono>
-#include <fstream>
+#include <condition_variable>
+#include <mutex>
+#include <thread>
 
 #include "monitor.h"
 
@@ -26,9 +27,14 @@ namespace vsag::eval {
 
 class MemoryPeakMonitor : public Monitor {
 public:
-    explicit MemoryPeakMonitor(const std::string& name);
+    explicit MemoryPeakMonitor(std::string name);
 
-    ~MemoryPeakMonitor() override = default;
+    MemoryPeakMonitor(std::string name, uint64_t init_memory_pages);
+
+    ~MemoryPeakMonitor() override;
+
+    static uint64_t
+    GetCurrentResidentPages();
 
     void
     Start() override;
@@ -43,13 +49,20 @@ public:
     Record(void* input) override;
 
 private:
+    void
+    StopSampling();
+
+    void
+    SampleCurrentResidentPages();
+
     uint64_t max_memory_{0};
     uint64_t init_memory_{0};
     std::string process_name_{};
 
-    pid_t pid_{0};
-
-    std::ifstream infile_{};
+    std::atomic<bool> sampling_active_{false};
+    std::thread sampling_thread_{};
+    std::condition_variable sampling_cv_{};
+    std::mutex sampling_wait_mutex_{};
 };
 
 }  // namespace vsag::eval

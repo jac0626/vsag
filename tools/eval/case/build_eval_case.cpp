@@ -28,8 +28,10 @@ namespace vsag::eval {
 BuildEvalCase::BuildEvalCase(const std::string& dataset_path,
                              const std::string& index_path,
                              vsag::IndexPtr index,
-                             EvalConfig config)
-    : EvalCase(dataset_path, index_path, index), config_(std::move(config)) {
+                             EvalConfig config,
+                             EvalDatasetPtr dataset)
+    : EvalCase(dataset_path, index_path, std::move(index), std::move(dataset)),
+      config_(std::move(config)) {
     this->init_monitors();
 }
 
@@ -68,27 +70,46 @@ BuildEvalCase::do_build() {
     } else {
         base->SparseVectors((const SparseVector*)this->dataset_ptr_->GetTrain());
     }
-    for (auto& monitor : monitors_) {
-        monitor->Start();
-    }
-    auto build_index = index_->Build(base);
-    if (not build_index.has_value()) {
-        throw std::runtime_error(build_index.error().message);
-    }
-    for (auto& monitor : monitors_) {
-        monitor->Record();
-        monitor->Stop();
+    uint64_t started_monitor_count = 0;
+    try {
+        for (auto& monitor : monitors_) {
+            monitor->Start();
+            ++started_monitor_count;
+        }
+        auto build_index = index_->Build(base);
+        if (not build_index.has_value()) {
+            throw std::runtime_error(build_index.error().message);
+        }
+        for (uint64_t i = 0; i < started_monitor_count; ++i) {
+            monitors_[i]->Record();
+            monitors_[i]->Stop();
+        }
+    } catch (...) {
+        for (uint64_t i = 0; i < started_monitor_count; ++i) {
+            monitors_[i]->Stop();
+        }
+        throw;
     }
 }
 void
 BuildEvalCase::serialize() {
     std::filesystem::path dir_path(index_path_);
     dir_path = dir_path.parent_path();
-    if (!std::filesystem::exists(dir_path)) {
+    if (!dir_path.empty() && !std::filesystem::exists(dir_path)) {
         std::filesystem::create_directories(dir_path);
     }
     std::ofstream outfile(this->index_path_, std::ios::binary);
-    this->index_->Serialize(outfile);
+    if (!outfile.is_open()) {
+        throw std::runtime_error("failed to open index path for serialization: " + index_path_);
+    }
+    auto result = this->index_->Serialize(outfile);
+    if (not result.has_value()) {
+        throw std::runtime_error("failed to serialize index: " + result.error().message);
+    }
+    outfile.flush();
+    if (not outfile.good()) {
+        throw std::runtime_error("failed to serialize index: index stream write failed");
+    }
 }
 
 JsonType
@@ -100,18 +121,23 @@ BuildEvalCase::process_result() {
         EvalCase::MergeJsonType(one_result, eval_result);
     }
     result = eval_result;
-    result["tps"] = double(this->dataset_ptr_->GetNumberOfBase()) / double(result["duration(s)"]);
+    const double duration_seconds = result.value("duration(s)", 0.0);
+    result["tps"] =
+        duration_seconds > 0.0
+            ? static_cast<double>(this->dataset_ptr_->GetNumberOfBase()) / duration_seconds
+            : 0.0;
     EvalCase::MergeJsonType(this->basic_info_, result);
     result["index_info"] = JsonType::parse(config_.build_param);
     result["action"] = "build";
     result["index"] = config_.index_name;
+    result["index_memory(B)"] = this->index_->GetMemoryUsage();
     try {
         auto detail = this->index_->GetMemoryUsageDetail();
         for (const auto& [name, size] : detail) {
             result["memory_detail(B)"][name] = size;
         }
     } catch (const std::exception& e) {
-        logger_->Error(e.what());
+        result["memory_detail_error"] = e.what();
     }
     return result;
 }

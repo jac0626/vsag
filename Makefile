@@ -69,6 +69,20 @@ test:                    ## Build and run unit tests.
 	./build/tests/functests -d yes ${UT_FILTER} --allow-running-no-tests ${UT_SHARD}
 	./build/mockimpl/tests_mockimpl -d yes ${UT_FILTER} --allow-running-no-tests ${UT_SHARD}
 
+.PHONY: test_autotune
+test_autotune:           ## Build and run AutoTune tests.
+	cmake ${VSAG_CMAKE_ARGS} -B${DEBUG_BUILD_DIR} -DCMAKE_BUILD_TYPE=Debug \
+		-DENABLE_ASAN=OFF -DENABLE_TSAN=OFF -DENABLE_CCACHE=ON \
+		-DENABLE_TESTS=ON -DENABLE_TOOLS=ON
+	cmake --build ${DEBUG_BUILD_DIR} --target \
+		autotune_test autotune_public_api_test eval_dataset_test \
+		--parallel ${COMPILE_JOBS}
+	${DEBUG_BUILD_DIR}/tools/autotune/autotune_test -d yes ${UT_FILTER} \
+		--allow-running-no-tests ${UT_SHARD}
+	${DEBUG_BUILD_DIR}/tools/autotune/autotune_public_api_test
+	${DEBUG_BUILD_DIR}/tools/eval/eval_dataset_test -d yes ${UT_FILTER} \
+		--allow-running-no-tests ${UT_SHARD}
+
 .PHONY: asan
 asan:                    ## Build with AddressSanitizer option.
 	cmake ${VSAG_CMAKE_ARGS} -B${DEBUG_BUILD_DIR} -DCMAKE_BUILD_TYPE=Sanitize -DENABLE_ASAN=ON -DENABLE_TSAN=OFF -DENABLE_CCACHE=ON -DENABLE_TESTS=ON -DENABLE_MOCKIMPL=ON

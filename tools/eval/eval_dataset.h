@@ -103,10 +103,18 @@ public:
         return test_labels_;
     }
 
-    [[nodiscard]] float
-    GetValidRatio(int64_t label) const {
-        return valid_ratio_[label];
+    [[nodiscard]] bool
+    HasValidRatios() const {
+        return valid_ratio_ != nullptr;
     }
+
+    [[nodiscard]] int64_t
+    GetNumberOfLabels() const {
+        return number_of_label_;
+    }
+
+    [[nodiscard]] float
+    GetValidRatio(int64_t label) const;
 
     [[nodiscard]] const void*
     GetOneTrain(int64_t id) const {
@@ -153,6 +161,16 @@ public:
     [[nodiscard]] int64_t
     GetNumberOfQuery() const {
         return number_of_query_;
+    }
+
+    [[nodiscard]] uint64_t
+    GetGroundTruthK() const {
+        return neighbors_shape_.second > 0 ? static_cast<uint64_t>(neighbors_shape_.second) : 0;
+    }
+
+    [[nodiscard]] const std::string&
+    GetMetric() const {
+        return metric_;
     }
 
     [[nodiscard]] int64_t
@@ -221,6 +239,8 @@ public:
         temp["dim"] = this->GetDim();
         temp["base_count"] = this->GetNumberOfBase();
         temp["query_count"] = this->GetNumberOfQuery();
+        temp["ground_truth_k"] = this->GetGroundTruthK();
+        temp["metric"] = this->GetMetric();
         temp["data_type"] = this->GetTrainDataType();
         result["dataset_info"] = temp;
         return result;
@@ -284,7 +304,7 @@ private:
     }
 
 private:
-    vsag::DistanceFuncType distance_func_;
+    vsag::DistanceFuncType distance_func_{nullptr};
 
 protected:
     std::shared_ptr<char[]> train_;

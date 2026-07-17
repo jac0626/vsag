@@ -1,0 +1,98 @@
+{
+  "best_effort": null,
+  "elapsed_seconds": 164.678358419,
+  "failure": null,
+  "recommendation": {
+    "artifacts": {
+      "cleaned": false,
+      "cleanup_planned": false,
+      "expected_to_exist_after_response": true,
+      "index_path": "/tmp/vsag_autotune_sift/runs/run-1784190130162801680-0/artifacts/hgraph-build-000001.index",
+      "use_existing_index": false
+    },
+    "build_id": "hgraph-build-000001",
+    "constraint_evaluation": {
+      "shared": {
+        "satisfied_constraints": true,
+        "violated_constraints": []
+      }
+    },
+    "create_params": {
+      "dim": 128,
+      "dtype": "float32",
+      "index_param": {
+        "base_quantization_type": "fp32",
+        "build_thread_count": 48,
+        "ef_construction": 300,
+        "max_degree": 32
+      },
+      "metric_type": "l2",
+      "repr": "dense"
+    },
+    "evidence": {
+      "build_id": "hgraph-build-000001",
+      "trial_ids": [
+        "hgraph-trial-000002",
+        "hgraph-trial-000003"
+      ]
+    },
+    "index_name": "hgraph",
+    "searches": [
+      {
+        "concurrency": 1,
+        "constraint_evaluation": {
+          "satisfied_constraints": true,
+          "violated_constraints": []
+        },
+        "metrics": {
+          "build_and_search_seconds": 42.923802482,
+          "latency_avg_ms": 0.3602505369999998,
+          "latency_p99_ms": 0.45504600000000006,
+          "qps": 2773.435038435565,
+          "recall_at_k": 0.982380000000001,
+          "search_seconds": 3.605637003
+        },
+        "name": "online_latency",
+        "search_params": {
+          "hgraph": {
+            "ef_search": 80
+          }
+        },
+        "source_trial_id": "hgraph-trial-000002",
+        "top_k": 10
+      },
+      {
+        "concurrency": 48,
+        "constraint_evaluation": {
+          "satisfied_constraints": true,
+          "violated_constraints": []
+        },
+        "metrics": {
+          "build_and_search_seconds": 39.397673158,
+          "latency_avg_ms": 0.37290099049999936,
+          "latency_p99_ms": 0.6729630000000001,
+          "qps": 125774.01485962128,
+          "recall_at_k": 0.9415200000000062,
+          "search_seconds": 0.07950767900000001
+        },
+        "name": "batch_throughput",
+        "search_params": {
+          "hgraph": {
+            "ef_search": 40
+          }
+        },
+        "source_trial_id": "hgraph-trial-000003",
+        "top_k": 10
+      }
+    ],
+    "selection_reason": "all constraints satisfied; best top-level objective",
+    "shared_metrics": {
+      "build_seconds": 39.318165479,
+      "index_memory_mb": 751.2297744750977,
+      "index_size_mb": 665.4894905090332
+    }
+  },
+  "report_path": "/tmp/vsag_autotune_sift/report.json",
+  "status": "success",
+  "version": 1
+}

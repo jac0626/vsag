@@ -1,57 +1,79 @@
 # 性能评估工具（eval_performance）
 
-`eval_performance` 是 VSAG 自带的命令行性能评估工具，位于 `tools/eval/`，编译后二进制路径为
-`build-release/tools/eval/eval_performance`。它可以用于对比不同索引、不同参数组合的吞吐、延迟与召回率。
+eval_performance 是 VSAG 自带的命令行性能评估工具，位于 tools/eval/。编译后二进制路径为
+build-release/tools/eval/eval_performance。它对一份明确的索引配置执行真实 build、load 和
+search，并输出吞吐、延迟、召回率和资源指标。
 
 ## 构建
 
-`tools/` 默认不会编译，需要显式开启：
+tools 默认不会编译，需要显式开启：
 
-```bash
-# 通过项目 Makefile
+~~~bash
 VSAG_ENABLE_TOOLS=ON make release
-# 或：make dev
 
-# 也可直接通过 CMake
+# 或直接使用 CMake
 cmake -S . -B build-release -DCMAKE_BUILD_TYPE=Release -DENABLE_TOOLS=ON
 cmake --build build-release -j
-# 产物：./build-release/tools/eval/eval_performance
-```
+~~~
 
-需要系统安装 HDF5（Ubuntu: `apt install libhdf5-dev`；CentOS: `yum install hdf5-devel`）。
+需要系统安装 HDF5（Ubuntu：apt install libhdf5-dev；CentOS：yum install hdf5-devel）。
 
-## 两种模式
+## 搜索模式
 
-### 1. 命令行模式（适合单次快速测试）
+独立 eval 工具接受 `knn` 和 `knn_filter`，默认值仍是 `knn`。尚未实现的 `range` 和
+`range_filter` 会在配置阶段被拒绝，不再输出全零的成功结果。AutoTune V1 的范围更窄，
+只会调用无过滤 KNN。
 
-```bash
+## 命令行模式
+
+命令行的 type 只接受 build 或 search。先构建并序列化索引：
+
+~~~bash
+CREATE_PARAMS='{"dim":128,"dtype":"float32","metric_type":"l2",'\
+'"index_param":{"base_quantization_type":"fp32","max_degree":32,'\
+'"ef_construction":300}}'
+./build-release/tools/eval/eval_performance \
+    --datapath /tmp/sift-128-euclidean.hdf5 \
+    --index_name hgraph \
+    --type build \
+    --create_params "$CREATE_PARAMS" \
+    --index_path /tmp/vsag_eval/hgraph_fp32.index
+~~~
+
+再从相同路径加载索引并执行 KNN：
+
+~~~bash
+CREATE_PARAMS='{"dim":128,"dtype":"float32","metric_type":"l2",'\
+'"index_param":{"base_quantization_type":"fp32","max_degree":32,'\
+'"ef_construction":300}}'
 ./build-release/tools/eval/eval_performance \
     --datapath /tmp/sift-128-euclidean.hdf5 \
     --index_name hgraph \
     --type search \
-    --create_params '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"fp32","max_degree":32,"ef_construction":300}}' \
+    --create_params "$CREATE_PARAMS" \
     --search_params '{"hgraph":{"ef_search":60}}' \
+    --index_path /tmp/vsag_eval/hgraph_fp32.index \
+    --search_mode knn \
+    --search-query-count 100000 \
     --topk 10
-```
+~~~
 
-常用参数还包括 `--search_mode`（`knn` / `range` / `knn_filter` / `range_filter`）、
-`--search-query-count`、`--delete-index-after-search`，以及一系列用于关闭单项指标的
-`--disable_*` 开关。参考模板 `tools/eval/eval_template.yaml` 展示了完整的 YAML 结构。
+`--search-query-count` 设置独立 benchmark 的最少 query 操作数。若它大于数据集 query 数，
+eval 会循环复用数据集 query；否则每条 query 执行一次。AutoTune 会把该值覆盖为数据集 query
+数，因此每个 AutoTune trial 仍严格对每条 query 执行一次。其他常用参数包括
+`--delete-index-after-search` 和用于关闭单项指标的 `--disable_*` 开关。
 
-### 2. 配置文件模式（适合批量对比）
+## YAML 配置模式
 
-YAML 文件作为位置参数直接传入（不需要 `--config` 标志）：
+YAML 文件作为位置参数直接传入：
 
-```bash
+~~~bash
 ./build-release/tools/eval/eval_performance my_eval.yaml
-```
+~~~
 
-参考模板 `tools/eval/eval_template.yaml`。一份配置可以包含多个具名 case，并通过可选的
-`global` 段配置共享参数，例如线程数、导出器以及内嵌的 HTTP 监控服务。
+YAML case 可以使用 type: build,search，在一个 case 中先构建、序列化，再加载并搜索：
 
-最小示例：
-
-```yaml
+~~~yaml
 global:
   num_threads_building: 8
   num_threads_searching: 16
@@ -65,60 +87,75 @@ global:
 
 eval_case1:
   datapath: /tmp/sift-128-euclidean.hdf5
-  type: search
+  type: build,search
   index_name: hgraph
-  create_params: '{"dim":128,"dtype":"float32","metric_type":"l2","index_param":{"base_quantization_type":"fp32","max_degree":32,"ef_construction":300}}'
+  create_params: >-
+    {"dim":128,"dtype":"float32","metric_type":"l2",
+    "index_param":{"base_quantization_type":"fp32","max_degree":32,
+    "ef_construction":300}}
   search_params: '{"hgraph":{"ef_search":60}}'
-  index_path: /tmp/vsag_eval/hgraph_fp32
+  index_path: /tmp/vsag_eval/hgraph_fp32.index
+  search_mode: knn
+  search_query_count: 100000
   topk: 10
-```
+~~~
 
-注意：`global.exporters` 下每一项都是**具名**的导出器（即 YAML map），并不是数组。
+一份 YAML 可以包含多个具名 case。global.exporters 下的每一项是具名 map，不是数组。
+完整字段参考 tools/eval/eval_template.yaml。
 
-## 支持的评估维度
+## 指标
 
-- **效率**：QPS、TPS
-- **效果**：平均召回率、分位召回率（P0/P10/P50/P90...）
-- **延迟**：平均延迟、P50/P95/P99 延迟
-- **资源**：峰值内存占用
+- 构建：duration、TPS 和索引内存。
+- 搜索效果：平均召回率和召回率分位数。
+- 搜索效率：QPS、平均延迟和 P50/P80/P90/P95/P99 延迟。
+- 资源：具体索引报告的索引内存。
+- 可选进程 RSS：`memory_peak(build)` 和 `memory_peak(search)` 是操作边界及每 5 ms
+  采样观察到的最大增量；生命周期短于一次采样间隔的完整内存分配可能不会被捕获。
 
-## 搜索模式
+对启用 recall 指标的 KNN 模式，topk 必须不超过 HDF5 ground truth 的宽度，否则 recall 没有
+有效定义。AutoTune V1 始终测量 recall，还把 top_k 上限固定为 1,000,000，因此会在评估前
+同时检查这两个限制。启用 recall 时，eval runner 还要求
+`topk * num_threads_searching <= 1,000,000`，确保保留结果的 batch 能提供请求并发且 neighbor
+缓冲不会无界增长；AutoTune 对应校验为 `top_k * concurrency <= 1,000,000`。
 
-`search_mode` 支持 `knn`、`range`、`knn_filter`、`range_filter` 四种。
+延迟、QPS 和耗时指标只描述执行 benchmark 的当前机器。AutoTune recommendation 依赖这些
+指标时，应在与部署环境同规格的机器上评估，包括 CPU/SIMD、核数、内存、VSAG 构建和并发
+配置。
 
-## 输出格式与导出目标
+## 输出
 
-每个导出器同时指定一种 `format` 与一个 `to` 目标。
+每个 exporter 指定 format 和 to：
 
-- 格式：`table`（或别名 `text`）、`json`、`line_protocol`（用于 InfluxDB）。
-- 目标：
-    - `stdout` — 输出到标准输出。
-    - `file://<path>` — 写入文件（覆盖）。
-    - `influxdb://<host>:<port>/<path>?<query>` — POST 到 InfluxDB v2 接口；
-      需要使用 `format: line_protocol`，并通过 `vars.token` 传入鉴权令牌
-      （值需包含 `Token ` 前缀，例如 `Token <your-influxdb-token>`）。
+- format：table（或 text）、json、line_protocol。
+- to：
+    - stdout。
+    - file://<path>，覆盖写文件。
+    - influxdb://<host>:<port>/<path>?<query>，与 line_protocol 配合使用。
 
-如未配置任何导出器，结果默认以 `table` 格式打印到 stdout。
+未配置 exporter 时默认以 table 格式输出到 stdout。
 
-## HTTP 监控（可选）
+## HTTP 监控
 
-启用后，工具会在批量评估运行期间启动一个内嵌 HTTP 服务，实时暴露当前进度（当前案例、
-总案例数、完成百分比）和最新指标，便于长时间任务的状态观察。
+批量配置可以启用内嵌 HTTP 服务：
 
-```yaml
+~~~yaml
 global:
   http_server:
     enabled: true
     port: 8080
-```
+~~~
+
+服务展示当前 case、总 case 数、进度和最近指标。
 
 ## 数据集
 
-可使用 [ann-benchmarks](https://github.com/erikbern/ann-benchmarks) 提供的 HDF5 格式数据集
-（如 `sift-128-euclidean.hdf5`、`gist-960-euclidean.hdf5`）。
+eval 工具可以使用
+[ann-benchmarks](https://github.com/erikbern/ann-benchmarks) 的 HDF5 数据集，例如
+sift-128-euclidean.hdf5 和 gist-960-euclidean.hdf5。详细格式见
+[HDF5 数据集格式](dataset_format.md)。
 
 ## 参考
 
-- 源码：`tools/eval/`
-- 本地工具入口：`tools/eval/README.md`
-- 标准机型的基准结果见 [标准环境性能参考](performance.md)。
+- 源码：[tools/eval](https://github.com/antgroup/vsag/tree/main/tools/eval)
+- 本地入口：[tools/eval/README_zh.md](../../../../../tools/eval/README_zh.md)
+- 标准环境结果：[标准环境性能参考](performance.md)

@@ -18,6 +18,7 @@ last-reviewed: 2026-05-12
 ```bash
 make debug
 make test
+make test_autotune
 make fmt
 make lint
 make fix-lint
@@ -47,6 +48,12 @@ Do not assume newer versions are acceptable; the repository enforces these
 versions for consistent formatting and diagnostics. CI will fail otherwise.
 
 ## Testing expectations
+
+`make test_autotune` configures the tools build, builds the AutoTune and eval correctness test
+binaries, and runs candidate-planning, real eval integration, metric, concurrency, and dataset
+regression cases. It is intentionally separate from `make test` so ordinary library unit tests do
+not unconditionally pay the HDF5/tools build cost. Pull-request CI runs both binaries in the
+existing x86 tools build.
 
 - New features should include tests.
 - Bug fixes should include regression coverage.

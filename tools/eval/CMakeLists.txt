@@ -30,16 +30,21 @@ set (eval_srcs
     eval_dataset.cpp
     eval_job.cpp)
 
+find_package (Threads REQUIRED)
 add_library (vsag_eval_common INTERFACE)
-target_compile_options (vsag_eval_common INTERFACE -fopenmp)
-target_link_options (vsag_eval_common INTERFACE -fopenmp)
 target_link_libraries (vsag_eval_common INTERFACE
-    pthread
+    Threads::Threads
     yaml-cpp
     argparse::argparse
     tabulate
     vsag_httplib
     vsag_src_common)
+if (TARGET vsag_openmp)
+    target_link_libraries (vsag_eval_common INTERFACE vsag_openmp)
+else ()
+    find_package (OpenMP REQUIRED COMPONENTS CXX)
+    target_link_libraries (vsag_eval_common INTERFACE OpenMP::OpenMP_CXX)
+endif ()
 if (TARGET vsag_hdf5_headers)
     target_link_libraries (vsag_eval_common INTERFACE vsag_hdf5_headers)
 endif ()
@@ -56,12 +61,14 @@ target_link_libraries (eval_performance PRIVATE
     vsag_eval_common
     ${HDF5_CPP_STATIC_LIBRARY}
     ${HDF5_C_STATIC_LIBRARY}
-    z dl)
+    z
+    ${CMAKE_DL_LIBS})
 add_dependencies (eval_performance hdf5)
 
 if (ENABLE_TESTS)
     add_executable (eval_dataset_test
-        eval_dataset_test.cpp)
+        eval_dataset_test.cpp
+        eval_correctness_test.cpp)
     target_include_directories (eval_dataset_test PRIVATE
         ${CMAKE_CURRENT_SOURCE_DIR})
     target_link_libraries (eval_dataset_test PRIVATE
@@ -72,6 +79,7 @@ if (ENABLE_TESTS)
         vsag_eval_common
         ${HDF5_CPP_STATIC_LIBRARY}
         ${HDF5_C_STATIC_LIBRARY}
-        z dl)
+        z
+        ${CMAKE_DL_LIBS})
     add_dependencies (eval_dataset_test hdf5 Catch2)
 endif ()
