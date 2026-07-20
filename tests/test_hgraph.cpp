@@ -1065,7 +1065,8 @@ TEST_CASE("HGraph Tune uses available codes", "[ft][search][hgraph][tune_codes]"
         auto binary_set = index->Serialize();
         REQUIRE(binary_set.has_value());
 
-        auto reloaded = TestIndex::TestFactory("hgraph", parameters, true);
+        // ignore_reorder is a serialization-only option and is not persisted in 0.18.
+        auto reloaded = TestIndex::TestFactory("hgraph", make_parameters("fp32,fp32"), true);
         auto deserialize_result = reloaded->Deserialize(binary_set.value());
         REQUIRE(deserialize_result.has_value());
 
