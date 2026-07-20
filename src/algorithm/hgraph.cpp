@@ -532,8 +532,7 @@ HGraph::map_hgraph_param(const JsonType& hgraph_json) {
 bool
 HGraph::Tune(const std::string& parameters, bool disable_future_tuning) {
     std::scoped_lock lock(this->add_mutex_);
-    if (this->immutable_ or
-        not this->index_feature_list_->CheckFeature(IndexFeature::SUPPORT_TUNE)) {
+    if (not this->index_feature_list_->CheckFeature(IndexFeature::SUPPORT_TUNE)) {
         return false;
     }
 
