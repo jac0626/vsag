@@ -136,6 +136,11 @@ HGraph::Tune(const std::string& parameters, bool disable_future_tuning) {
             FlattenInterface::MakeInstance(hgraph_parameter->precise_codes_param, common_param);
     }
 
+    const auto current_count = total_count_.load(std::memory_order_acquire);
+    auto covers_active_ids = [current_count](const FlattenInterfacePtr& codes) {
+        return codes != nullptr and codes->TotalCount() >= current_count;
+    };
+
     // Check which codes need to be rebuilt.
     bool is_tune_base_code = false;
     bool is_tune_precise_code = false;
@@ -144,19 +149,20 @@ HGraph::Tune(const std::string& parameters, bool disable_future_tuning) {
         is_tune_base_code = true;
     }
     if (need_precise_codes and
-        (high_precise_codes_ == nullptr or
+        (not covers_active_ids(high_precise_codes_) or
          high_precise_codes_->GetQuantizerName() != new_precise_code->GetQuantizerName())) {
         is_tune_precise_code = true;
     }
 
     FlattenInterfacePtr tune_source;
     if (is_tune_base_code or is_tune_precise_code) {
-        if (raw_vector_ != nullptr) {
+        if (covers_active_ids(raw_vector_)) {
             tune_source = raw_vector_;
-        } else if (high_precise_codes_ != nullptr and
+        } else if (covers_active_ids(high_precise_codes_) and
                    high_precise_codes_->GetQuantizerName() == QUANTIZATION_TYPE_VALUE_FP32) {
             tune_source = high_precise_codes_;
-        } else if (basic_flatten_codes_->GetQuantizerName() == QUANTIZATION_TYPE_VALUE_FP32) {
+        } else if (covers_active_ids(basic_flatten_codes_) and
+                   basic_flatten_codes_->GetQuantizerName() == QUANTIZATION_TYPE_VALUE_FP32) {
             tune_source = basic_flatten_codes_;
         } else {
             return false;

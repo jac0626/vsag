@@ -1373,6 +1373,44 @@ TEST_CASE("HGraph Tune uses available codes", "[ft][search][hgraph][tune_codes]"
         require_fp32_accuracy(index);
     }
 
+    SECTION("unloaded precise codes") {
+        auto parsed = vsag::JsonType::Parse(make_parameters("fp32,fp32"));
+        parsed[vsag::INDEX_PARAM]["ignore_reorder"].SetBool(true);
+        auto parameters = parsed.Dump();
+
+        auto index = TestIndex::TestFactory("hgraph", parameters, true);
+        TestIndex::TestBuildIndex(index, dataset, true);
+        auto binary_set = index->Serialize();
+        REQUIRE(binary_set.has_value());
+
+        auto reloaded = TestIndex::TestFactory("hgraph", parameters, true);
+        auto deserialize_result = reloaded->Deserialize(binary_set.value());
+        REQUIRE(deserialize_result.has_value());
+
+        auto tune_result = reloaded->Tune(make_parameters("fp32,fp32"), true);
+        REQUIRE(tune_result.has_value());
+        REQUIRE(tune_result.value());
+        require_fp32_accuracy(reloaded);
+    }
+
+    SECTION("force-removed codes still cover active ids") {
+        auto parsed = vsag::JsonType::Parse(make_parameters("fp32"));
+        parsed[vsag::INDEX_PARAM]["support_force_remove"].SetBool(true);
+        auto parameters = parsed.Dump();
+
+        auto index = TestIndex::TestFactory("hgraph", parameters, true);
+        TestIndex::TestBuildIndex(index, dataset, true);
+
+        auto remove_result =
+            index->Remove(dataset->base_->GetIds()[0], vsag::RemoveMode::FORCE_REMOVE);
+        REQUIRE(remove_result.has_value());
+        REQUIRE(remove_result.value() == 1);
+
+        auto tune_result = index->Tune(make_parameters("bf16"), true);
+        REQUIRE(tune_result.has_value());
+        REQUIRE(tune_result.value());
+    }
+
     SECTION("no usable codes") {
         auto index = make_index("sq8,bf16");
         auto result = index->Tune(make_parameters("bf16,bf16"));
