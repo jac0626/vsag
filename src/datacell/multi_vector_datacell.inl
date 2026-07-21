@@ -119,32 +119,6 @@ MultiVectorDataCell<QuantTmpl, IOTmpl>::Resize(InnerIdType new_capacity) {
 }
 
 template <typename QuantTmpl, typename IOTmpl>
-bool
-MultiVectorDataCell<QuantTmpl, IOTmpl>::CompareRawVectorWithId(const void* vector,
-                                                               InnerIdType id) {
-    if (vector == nullptr) {
-        return false;
-    }
-    const auto* multi_vector = static_cast<const MultiVector*>(vector);
-    if (multi_vector->vectors_ == nullptr) {
-        return false;
-    }
-    const uint64_t vector_bytes = static_cast<uint64_t>(multi_vector->len_) *
-                                  static_cast<uint64_t>(multi_vector_dim_) * sizeof(float);
-    bool need_release = false;
-    const auto* codes = this->GetCodesById(id, need_release);
-    const auto stored_len = *reinterpret_cast<const uint32_t*>(codes);
-    bool result = stored_len == multi_vector->len_;
-    if (result) {
-        result = std::memcmp(codes + sizeof(uint32_t), multi_vector->vectors_, vector_bytes) == 0;
-    }
-    if (need_release) {
-        this->Release(codes);
-    }
-    return result;
-}
-
-template <typename QuantTmpl, typename IOTmpl>
 std::string
 MultiVectorDataCell<QuantTmpl, IOTmpl>::GetQuantizerName() {
     return this->quantizer_->Name();
@@ -256,15 +230,13 @@ MultiVectorDataCell<QuantTmpl, IOTmpl>::Query(float* result_dists,
     std::vector<uint64_t> data_sizes(id_count);
     uint64_t total_size = 0;
     for (InnerIdType i = 0; i < id_count; ++i) {
-        data_sizes[i] = sizeof(uint32_t) +
-                        static_cast<uint64_t>(lens[i]) * multi_vector_dim_ * sizeof(float);
+        data_sizes[i] =
+            sizeof(uint32_t) + static_cast<uint64_t>(lens[i]) * multi_vector_dim_ * sizeof(float);
         total_size += data_sizes[i];
     }
     ByteBuffer all_codes(total_size, this->allocator_);
-    if (!this->io_->MultiRead(all_codes.data,
-                              data_sizes.data(),
-                              offsets.data(),
-                              static_cast<uint64_t>(id_count))) {
+    if (!this->io_->MultiRead(
+            all_codes.data, data_sizes.data(), offsets.data(), static_cast<uint64_t>(id_count))) {
         throw VsagException(ErrorType::READ_ERROR,
                             "MultiVectorDataCell: failed to read token data");
     }

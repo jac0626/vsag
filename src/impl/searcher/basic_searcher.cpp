@@ -537,12 +537,12 @@ BasicSearcher::search_impl(const GraphInterfacePtr& graph,
                 inner_search_param.duplicate_id = min_index;
             }
         } else {
-            bool is_duplicate =
-                inner_search_param.duplicate_query_id < flatten->TotalCount() &&
-                flatten->CompareVectors(inner_search_param.duplicate_query_id, min_index);
-            if (not is_duplicate) {
-                is_duplicate = flatten->CompareRawVectorWithId(query, min_index);
-            }
+            const bool has_stored_query =
+                inner_search_param.duplicate_query_id < flatten->TotalCount();
+            const bool is_duplicate =
+                has_stored_query
+                    ? flatten->CompareVectors(inner_search_param.duplicate_query_id, min_index)
+                    : flatten->CompareRawVectorWithId(query, min_index);
             if (is_duplicate) {
                 inner_search_param.duplicate_id = min_index;
             }

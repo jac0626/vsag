@@ -860,8 +860,10 @@ HGraph::InitFeatures() {
         IndexFeature::SUPPORT_BUILD,
         IndexFeature::SUPPORT_BUILD_WITH_MULTI_THREAD,
         IndexFeature::SUPPORT_ADD_AFTER_BUILD,
-        IndexFeature::SUPPORT_MERGE_INDEX,
     });
+    if (not this->using_dedup_storage()) {
+        this->index_feature_list_->SetFeature(IndexFeature::SUPPORT_MERGE_INDEX);
+    }
     // search
     this->index_feature_list_->SetFeatures({
         IndexFeature::SUPPORT_KNN_SEARCH,

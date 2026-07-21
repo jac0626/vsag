@@ -57,9 +57,6 @@ public:
     void
     ReserveLogicalSize(InnerIdType new_size);
 
-    void
-    MergeOther(const CodeSlotMap& other, InnerIdType logical_bias, CodeSlotIdType physical_bias);
-
     [[nodiscard]] CodeSlotIdType
     PhysicalCount() const;
 

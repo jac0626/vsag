@@ -156,9 +156,6 @@ TEST_CASE("MultiVectorDataCell GetCodesById reads back inserted data",
         data_cell->InsertVector(multi_vectors.data() + i, static_cast<InnerIdType>(i));
     }
 
-    REQUIRE(data_cell->CompareRawVectorWithId(multi_vectors.data() + 1, 1));
-    REQUIRE_FALSE(data_cell->CompareRawVectorWithId(multi_vectors.data(), 1));
-
     for (uint64_t i = 0; i < multi_vectors.size(); ++i) {
         bool need_release = false;
         const uint8_t* codes = data_cell->GetCodesById(static_cast<InnerIdType>(i), need_release);

@@ -248,43 +248,24 @@ TEST_CASE("HGraph exact duplicate fallback supports every dense data type",
     }
 }
 
-TEST_CASE("HGraph exact duplicate fallback supports sparse vectors",
-          "[ut][hgraph][duplicate][data_type][sparse]") {
+TEST_CASE("HGraph deduplicate_storage rejects non-dense vector representations",
+          "[ut][hgraph][duplicate][data_type][config]") {
     constexpr int64_t dim = 16;
-    auto common_param = MakeCommonParam(dim);
-    common_param.data_type_ = vsag::DataTypes::DATA_TYPE_SPARSE;
-    common_param.repr_ = vsag::RecordRepr::SPARSE;
-    common_param.metric_ = vsag::MetricType::METRIC_TYPE_IP;
     auto hgraph_json = MakeFp32HGraphJson();
-    hgraph_json["base_quantization_type"].SetString("sparse");
-    auto index = MakeHGraphIndex(hgraph_json, common_param);
 
-    std::vector<uint32_t> ids0 = {1, 3};
-    std::vector<float> vals0 = {1.0F, 2.0F};
-    std::vector<uint32_t> ids1 = {2, 5};
-    std::vector<float> vals1 = {3.0F, 4.0F};
-    std::vector<vsag::SparseVector> base_vectors = {
-        {2, ids0.data(), vals0.data()},
-        {2, ids1.data(), vals1.data()},
-    };
-    std::vector<int64_t> base_ids = {10, 20};
-    auto base = vsag::Dataset::Make();
-    base->NumElements(2)
-        ->Dim(dim)
-        ->Ids(base_ids.data())
-        ->SparseVectors(base_vectors.data())
-        ->Owner(false);
-    REQUIRE(index->Build(base).has_value());
+    SECTION("sparse") {
+        auto common_param = MakeCommonParam(dim);
+        common_param.data_type_ = vsag::DataTypes::DATA_TYPE_SPARSE;
+        common_param.metric_ = vsag::MetricType::METRIC_TYPE_IP;
+        hgraph_json["base_quantization_type"].SetString("sparse");
+        REQUIRE_THROWS(MakeHGraphIndex(hgraph_json, common_param));
+    }
 
-    std::vector<int64_t> duplicate_id = {30};
-    auto duplicate = vsag::Dataset::Make();
-    duplicate->NumElements(1)
-        ->Dim(dim)
-        ->Ids(duplicate_id.data())
-        ->SparseVectors(base_vectors.data() + 1)
-        ->Owner(false);
-    REQUIRE(index->Add(duplicate).has_value());
-    RequireRangeContains(index, duplicate, {20, 30}, -1, 1000.0F);
+    SECTION("multi-vector") {
+        auto common_param = MakeCommonParam(dim);
+        common_param.repr_ = vsag::RecordRepr::MULTI_VECTOR;
+        REQUIRE_THROWS(MakeHGraphIndex(hgraph_json, common_param));
+    }
 }
 
 TEST_CASE("HGraph Add exact duplicate keeps duplicate label searchable",
@@ -893,51 +874,31 @@ TEST_CASE("HGraph deduplicate_storage Tune keeps physical slots isolated",
     REQUIRE(duplicate_base_distance.value() == 0.0F);
 }
 
-TEST_CASE("HGraph deduplicate_storage Merge keeps slot map and duplicate tracker",
-          "[ut][hgraph][duplicate][merge]") {
+TEST_CASE("HGraph deduplicate_storage rejects Merge", "[ut][hgraph][duplicate][merge]") {
     constexpr int64_t dim = 2;
     auto common_param = MakeCommonParam(dim);
     auto hgraph_json = MakeFp32HGraphJson();
 
     auto target = MakeHGraphIndex(hgraph_json, common_param);
+    REQUIRE_FALSE(target->CheckFeature(vsag::IndexFeature::SUPPORT_MERGE_INDEX));
     std::vector<float> target_vectors = {0.0F, 0.0F};
     std::vector<int64_t> target_ids = {10};
     auto target_data = MakeFloatDataset(target_vectors, target_ids, dim, 1);
     REQUIRE(target->Build(target_data).has_value());
 
     auto source = MakeHGraphIndex(hgraph_json, common_param);
-    std::vector<float> source_vectors = {
-        4.0F,
-        0.0F,
-        7.0F,
-        0.0F,
-    };
-    std::vector<int64_t> source_ids = {20, 30};
-    auto source_data = MakeFloatDataset(source_vectors, source_ids, dim, 2);
+    std::vector<float> source_vectors = {4.0F, 0.0F};
+    std::vector<int64_t> source_ids = {20};
+    auto source_data = MakeFloatDataset(source_vectors, source_ids, dim, 1);
     REQUIRE(source->Build(source_data).has_value());
-
-    std::vector<float> duplicate_vector = {7.0F, 0.0F};
-    std::vector<int64_t> duplicate_id = {40};
-    auto duplicate = MakeFloatDataset(duplicate_vector, duplicate_id, dim, 1);
-    REQUIRE(source->Add(duplicate).has_value());
 
     vsag::IdMapFunction id_map = [](int64_t id) -> std::tuple<bool, int64_t> {
         return std::make_tuple(true, id);
     };
     auto merge_result = target->Merge({vsag::MergeUnit{source, id_map}});
-    REQUIRE(merge_result.has_value());
-
-    auto duplicate_query = MakeFloatQuery(duplicate_vector, dim);
-    RequireRangeContains(target, duplicate_query, {30, 40}, 2, 0.01F, kBruteForceSearchParams);
-
-    std::vector<float> unique_vector = {10.0F, 0.0F};
-    std::vector<int64_t> unique_id = {50};
-    auto unique = MakeFloatDataset(unique_vector, unique_id, dim, 1);
-    REQUIRE(target->Add(unique).has_value());
-
-    auto duplicate_distance = target->CalcDistanceById(duplicate_vector.data(), duplicate_id[0]);
-    REQUIRE(duplicate_distance.has_value());
-    REQUIRE(duplicate_distance.value() == 0.0F);
+    REQUIRE_FALSE(merge_result.has_value());
+    REQUIRE(merge_result.error().message.find("deduplicate_storage") != std::string::npos);
+    REQUIRE(target->GetNumElements() == 1);
 }
 
 TEST_CASE("HGraph deduplicate_storage ExportModel keeps an empty reusable model",

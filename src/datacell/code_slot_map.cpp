@@ -133,36 +133,6 @@ CodeSlotMap::ReserveLogicalSize(InnerIdType new_size) {
     this->EnsureLogicalSize(new_size);
 }
 
-void
-CodeSlotMap::MergeOther(const CodeSlotMap& other,
-                        InnerIdType logical_bias,
-                        CodeSlotIdType physical_bias) {
-    if (this == &other) {
-        throw VsagException(ErrorType::INVALID_ARGUMENT, "code slot map cannot merge itself");
-    }
-
-    auto other_logical_count = other.PublishedLogicalCount();
-    auto other_physical_count = other.PhysicalCount();
-    auto current_physical_count = this->PhysicalCount();
-    CHECK_ARGUMENT(current_physical_count == physical_bias,
-                   fmt::format("code slot physical bias({}) must match physical count({})",
-                               physical_bias,
-                               current_physical_count));
-
-    this->ReserveLogicalSize(logical_bias + other_logical_count);
-    for (CodeSlotIdType slot_id = 0; slot_id < other_physical_count; ++slot_id) {
-        auto allocated_slot = this->AllocateSlot();
-        CHECK_ARGUMENT(allocated_slot == physical_bias + slot_id,
-                       fmt::format("allocated code slot({}) must match expected slot({})",
-                                   allocated_slot,
-                                   physical_bias + slot_id));
-    }
-    for (InnerIdType inner_id = 0; inner_id < other_logical_count; ++inner_id) {
-        auto code_slot_id = other.Resolve(inner_id);
-        this->PublishSlot(logical_bias + inner_id, physical_bias + code_slot_id);
-    }
-}
-
 CodeSlotIdType
 CodeSlotMap::PhysicalCount() const {
     return physical_count_.load(std::memory_order_acquire);
@@ -201,6 +171,13 @@ CodeSlotMap::Deserialize(StreamReader& reader) {
     StreamReader::ReadObj(reader, physical_count);
     Vector<CodeSlotIdType> slots(allocator_);
     StreamReader::ReadVector(reader, slots);
+    if (physical_count > slots.size()) {
+        throw VsagException(
+            ErrorType::INVALID_BINARY,
+            fmt::format("invalid code slot mapping: physical count {} exceeds slot count {}",
+                        physical_count,
+                        slots.size()));
+    }
     this->ReleaseSlots();
     this->EnsureLogicalSize(static_cast<InnerIdType>(slots.size()));
     InnerIdType published_logical_count = 0;

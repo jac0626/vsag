@@ -62,9 +62,6 @@ public:
                             "Encode function is not implemented for SparseVectorDataCell");
     }
 
-    bool
-    CompareRawVectorWithId(const void* vector, InnerIdType id) override;
-
     float
     ComputePairVectors(InnerIdType id1, InnerIdType id2) override;
 

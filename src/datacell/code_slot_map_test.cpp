@@ -265,6 +265,21 @@ TEST_CASE("CodeSlotMap serializes logical to physical slots", "[ut][datacell][co
     REQUIRE_THROWS(restored.Resolve(3));
 }
 
+TEST_CASE("CodeSlotMap rejects an impossible serialized physical count",
+          "[ut][datacell][code_slot_map]") {
+    auto allocator = vsag::SafeAllocator::FactoryDefaultAllocator();
+    std::stringstream stream;
+    vsag::IOStreamWriter writer(stream);
+    constexpr vsag::CodeSlotIdType physical_count = 2;
+    std::vector<vsag::CodeSlotIdType> slots = {0};
+    vsag::StreamWriter::WriteObj(writer, physical_count);
+    vsag::StreamWriter::WriteVector(writer, slots);
+
+    vsag::CodeSlotMap mapping(allocator.get());
+    vsag::IOStreamReader reader(stream);
+    REQUIRE_THROWS(mapping.Deserialize(reader));
+}
+
 TEST_CASE("CodeSlotMap supports concurrent independent binds", "[ut][datacell][code_slot_map]") {
     auto allocator = vsag::SafeAllocator::FactoryDefaultAllocator();
     vsag::CodeSlotMap mapping(allocator.get());

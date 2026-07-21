@@ -65,6 +65,12 @@ HGraph::HGraph(const HGraphParameterPtr& hgraph_param, const vsag::IndexCommonPa
       use_old_serial_format_(common_param.use_old_serial_format_) {
     this->support_duplicate_ = hgraph_param->support_duplicate;
     this->deduplicate_storage_ = hgraph_param->deduplicate_storage;
+    const bool is_dense_vector = common_param.repr_ == RecordRepr::DENSE &&
+                                 common_param.data_type_ != DataTypes::DATA_TYPE_SPARSE;
+    if (this->deduplicate_storage_ && not is_dense_vector) {
+        throw VsagException(ErrorType::INVALID_ARGUMENT,
+                            "HGraph deduplicate_storage only supports dense vectors");
+    }
     if (this->deduplicate_storage_ && this->graph_type_ != GRAPH_TYPE_VALUE_NSW) {
         throw VsagException(ErrorType::INVALID_ARGUMENT,
                             "HGraph deduplicate_storage only supports nsw graph");
@@ -346,18 +352,19 @@ HGraph::generate_one_route_graph() {
 float
 HGraph::CalcDistanceById(const float* query, int64_t id, bool calculate_precise_distance) const {
     FlattenInterfacePtr flat;
-    {
-        std::shared_lock<std::shared_mutex> lock;
-        if (!this->immutable_.load(std::memory_order_acquire)) {
-            lock = this->acquire_global_read_lock();
-        }
-        flat = this->basic_flatten_codes_;
-        if (has_precise_reorder() && calculate_precise_distance) {
-            flat = this->high_precise_codes_;
-        }
-        if (create_new_raw_vector_ && calculate_precise_distance) {
-            flat = this->raw_vector_;
-        }
+    std::shared_lock<std::shared_mutex> lock;
+    if (!this->immutable_.load(std::memory_order_acquire)) {
+        lock = this->acquire_global_read_lock();
+    }
+    flat = this->basic_flatten_codes_;
+    if (has_precise_reorder() && calculate_precise_distance) {
+        flat = this->high_precise_codes_;
+    }
+    if (create_new_raw_vector_ && calculate_precise_distance) {
+        flat = this->raw_vector_;
+    }
+    if (lock.owns_lock() && not this->using_dedup_storage()) {
+        lock.unlock();
     }
     return InnerIndexInterface::calc_distance_by_id(query, id, flat);
 }
@@ -368,18 +375,19 @@ HGraph::CalDistanceById(const float* query,
                         int64_t count,
                         bool calculate_precise_distance) const {
     FlattenInterfacePtr flat;
-    {
-        std::shared_lock<std::shared_mutex> lock;
-        if (!this->immutable_.load(std::memory_order_acquire)) {
-            lock = this->acquire_global_read_lock();
-        }
-        flat = this->basic_flatten_codes_;
-        if (has_precise_reorder() && calculate_precise_distance) {
-            flat = this->high_precise_codes_;
-        }
-        if (create_new_raw_vector_ && calculate_precise_distance) {
-            flat = this->raw_vector_;
-        }
+    std::shared_lock<std::shared_mutex> lock;
+    if (!this->immutable_.load(std::memory_order_acquire)) {
+        lock = this->acquire_global_read_lock();
+    }
+    flat = this->basic_flatten_codes_;
+    if (has_precise_reorder() && calculate_precise_distance) {
+        flat = this->high_precise_codes_;
+    }
+    if (create_new_raw_vector_ && calculate_precise_distance) {
+        flat = this->raw_vector_;
+    }
+    if (lock.owns_lock() && not this->using_dedup_storage()) {
+        lock.unlock();
     }
     return InnerIndexInterface::cal_distance_by_id(query, ids, count, flat);
 }
@@ -414,6 +422,10 @@ HGraph::ExportModel(const IndexCommonParam& param) const {
 }
 void
 HGraph::GetCodeByInnerId(InnerIdType inner_id, uint8_t* data) const {
+    std::shared_lock<std::shared_mutex> lock;
+    if (this->using_dedup_storage() && !this->immutable_.load(std::memory_order_acquire)) {
+        lock = this->acquire_global_read_lock();
+    }
     if (raw_vector_ != nullptr) {
         raw_vector_->GetCodesById(inner_id, data);
         return;
@@ -428,6 +440,8 @@ HGraph::GetCodeByInnerId(InnerIdType inner_id, uint8_t* data) const {
 
 void
 HGraph::Merge(const std::vector<MergeUnit>& merge_units) {
+    CHECK_ARGUMENT(not this->using_dedup_storage(),
+                   "HGraph deduplicate_storage does not support Merge");
     int64_t total_count = this->GetNumElements();
     for (const auto& unit : merge_units) {
         total_count += unit.index->GetNumElements();
@@ -440,49 +454,17 @@ HGraph::Merge(const std::vector<MergeUnit>& merge_units) {
             std::dynamic_pointer_cast<IndexImpl<HGraph>>(merge_unit.index)->GetInnerIndex());
         CHECK_ARGUMENT(this->support_duplicate_ == other_index->support_duplicate_,
                        "cannot merge HGraph with different support_duplicate settings");
-        CHECK_ARGUMENT(this->using_dedup_storage() == other_index->using_dedup_storage(),
-                       "cannot merge HGraph with different deduplicate_storage settings");
+        CHECK_ARGUMENT(not other_index->using_dedup_storage(),
+                       "HGraph deduplicate_storage does not support Merge");
 
         auto logical_bias = this->total_count_.load(std::memory_order_acquire);
-        auto physical_bias = logical_bias;
-        if (this->using_dedup_storage()) {
-            CHECK_ARGUMENT(
-                this->code_slot_map_ != nullptr and other_index->code_slot_map_ != nullptr,
-                "deduplicate_storage merge requires code slot maps");
-            auto duplicate_tracker = this->bottom_graph_->GetDuplicateTracker();
-            auto other_duplicate_tracker = other_index->bottom_graph_->GetDuplicateTracker();
-            CHECK_ARGUMENT(duplicate_tracker != nullptr and other_duplicate_tracker != nullptr,
-                           "deduplicate_storage merge requires duplicate trackers");
-
-            physical_bias = this->code_slot_map_->PhysicalCount();
-            auto required_physical_capacity =
-                physical_bias + other_index->code_slot_map_->PhysicalCount();
-            this->ensure_physical_code_capacity(required_physical_capacity);
-        }
         if (total_count_ == 0) {
             this->entry_point_id_ = other_index->entry_point_id_;
         }
-        GetCodeSlotPhysicalFlatten(basic_flatten_codes_)
-            ->MergeOther(GetCodeSlotPhysicalFlatten(other_index->basic_flatten_codes_),
-                         physical_bias);
+        basic_flatten_codes_->MergeOther(other_index->basic_flatten_codes_, logical_bias);
         label_table_->MergeOther(other_index->label_table_, merge_unit.id_map_func);
         if (has_precise_reorder()) {
-            GetCodeSlotPhysicalFlatten(high_precise_codes_)
-                ->MergeOther(GetCodeSlotPhysicalFlatten(other_index->high_precise_codes_),
-                             physical_bias);
-        }
-        if (this->using_dedup_storage()) {
-            if (create_new_raw_vector_) {
-                GetCodeSlotPhysicalFlatten(raw_vector_)
-                    ->MergeOther(GetCodeSlotPhysicalFlatten(other_index->raw_vector_),
-                                 physical_bias);
-            }
-            this->code_slot_map_->MergeOther(
-                *other_index->code_slot_map_, logical_bias, physical_bias);
-            this->bottom_graph_->GetDuplicateTracker()->MergeOther(
-                *other_index->bottom_graph_->GetDuplicateTracker(),
-                logical_bias,
-                other_index->GetNumElements());
+            high_precise_codes_->MergeOther(other_index->high_precise_codes_, logical_bias);
         }
         bottom_graph_->MergeOther(other_index->bottom_graph_, logical_bias);
         if (route_graphs_.size() < other_index->route_graphs_.size()) {
@@ -526,6 +508,10 @@ HGraph::Merge(const std::vector<MergeUnit>& merge_units) {
 
 void
 HGraph::GetVectorByInnerId(InnerIdType inner_id, float* data) const {
+    std::shared_lock<std::shared_mutex> lock;
+    if (this->using_dedup_storage() && !this->immutable_.load(std::memory_order_acquire)) {
+        lock = this->acquire_global_read_lock();
+    }
     auto codes = (has_precise_reorder()) ? high_precise_codes_ : basic_flatten_codes_;
     codes = (create_new_raw_vector_) ? raw_vector_ : codes;
     bool release;
@@ -734,6 +720,10 @@ HGraph::UpdateVector(int64_t id, const DatasetPtr& new_base, bool force_update) 
 
     // note that only modify vector need to obtain unique lock
     // and the lock has been obtained inside datacell
+    std::shared_lock<std::shared_mutex> map_lock;
+    if (this->using_dedup_storage() && !this->immutable_.load(std::memory_order_acquire)) {
+        map_lock = this->acquire_global_read_lock();
+    }
     bool update_status = basic_flatten_codes_->UpdateVector(new_base_vec, inner_id);
     if (has_precise_reorder()) {
         update_status = update_status && high_precise_codes_->UpdateVector(new_base_vec, inner_id);
