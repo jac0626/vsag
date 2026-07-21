@@ -102,6 +102,9 @@ public:
     uint64_t
     EstimateMemory(uint64_t num_elements) const override;
 
+    [[nodiscard]] uint64_t
+    GetMemoryUsage() const override;
+
     void
     GetAttributeSetByInnerId(InnerIdType inner_id, AttributeSet* attr) const override;
 
@@ -612,6 +615,9 @@ private:
     std::atomic<int64_t> delete_count_{0};  // number of force-removed vectors
 
     std::shared_ptr<Optimizer<BasicSearcher>> optimizer_;  // search parameter optimizer
+
+    ReaderPtr reader_{nullptr};          // shared reader used by base, graph, and precise codes
+    ReaderPtr precise_reader_{nullptr};  // optional dedicated reader for precise codes
 
     bool create_new_raw_vector_{false};  // whether a separate raw vector exists
     FlattenInterfacePtr temporary_build_flatten_codes_{nullptr};  // temp flatten during build
