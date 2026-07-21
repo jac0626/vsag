@@ -27,6 +27,8 @@
 #include "../inner_index_interface.h"
 #include "common.h"
 #include "datacell/attribute_inverted_interface.h"
+#include "datacell/code_slot_flatten_adapter.h"
+#include "datacell/code_slot_map.h"
 #include "datacell/flatten_interface.h"
 #include "datacell/graph_interface.h"
 #include "datacell/sparse_graph_datacell_parameter.h"
@@ -51,88 +53,6 @@
 
 namespace vsag {
 class IteratorFilterContext;
-
-using CodeSlotIdType = InnerIdType;
-
-struct HGraphCodeSlotMap {
-    // HGraph protects slot-map lifetime and capacity changes with its outer locks. Slot bindings
-    // are published and read with atomics so the search hot path does not take an extra map lock.
-    explicit HGraphCodeSlotMap(Allocator* allocator);
-
-    ~HGraphCodeSlotMap();
-
-    CodeSlotIdType
-    AllocateSlot();
-
-    void
-    PublishSlot(InnerIdType inner_id, CodeSlotIdType code_slot_id);
-
-    [[nodiscard]] CodeSlotIdType
-    Resolve(InnerIdType inner_id) const;
-
-    void
-    ResolvePair(InnerIdType inner_id1,
-                InnerIdType inner_id2,
-                CodeSlotIdType& code_slot_id1,
-                CodeSlotIdType& code_slot_id2) const;
-
-    void
-    ResolveBatch(const InnerIdType* inner_ids,
-                 InnerIdType count,
-                 CodeSlotIdType* code_slot_ids) const;
-
-    void
-    ReserveLogicalSize(InnerIdType new_size);
-
-    void
-    MergeOther(const HGraphCodeSlotMap& other,
-               InnerIdType logical_bias,
-               CodeSlotIdType physical_bias);
-
-    [[nodiscard]] CodeSlotIdType
-    PhysicalCount() const;
-
-    [[nodiscard]] InnerIdType
-    PublishedLogicalCount() const;
-
-    void
-    Serialize(StreamWriter& writer) const;
-
-    void
-    Deserialize(StreamReader& reader);
-
-    [[nodiscard]] uint64_t
-    GetMemoryUsage() const;
-
-private:
-    void
-    EnsureLogicalSize(InnerIdType new_size);
-
-    void
-    ReleaseSlots();
-
-    Allocator* allocator_{nullptr};
-    std::atomic<CodeSlotIdType>* inner_to_slot_{nullptr};
-    InnerIdType logical_capacity_{0};
-    std::atomic<CodeSlotIdType> physical_count_{0};
-    std::atomic<InnerIdType> published_logical_count_{0};
-    mutable std::shared_mutex mutex_;
-};
-
-FlattenInterfacePtr
-MakeHGraphCodeSlotAdapter(FlattenInterfacePtr base,
-                          std::shared_ptr<const HGraphCodeSlotMap> mapping,
-                          Allocator* allocator,
-                          const std::atomic<uint64_t>* logical_total_count);
-
-// Physical storage operations must bypass the logical-id adapter.
-FlattenInterfacePtr
-GetHGraphPhysicalFlatten(const FlattenInterfacePtr& flatten);
-
-void
-InsertVectorToHGraphCodeSlot(const FlattenInterfacePtr& flatten,
-                             const void* vector,
-                             CodeSlotIdType code_slot_id);
 
 /**
  * @brief HGraph: hierarchical navigable graph index.
@@ -825,7 +745,7 @@ private:
 private:
     FlattenInterfacePtr basic_flatten_codes_{nullptr};  // coarse/quantized codes for graph search
     FlattenInterfacePtr high_precise_codes_{nullptr};   // precise codes for reorder (optional)
-    std::shared_ptr<HGraphCodeSlotMap> code_slot_map_{nullptr};
+    std::shared_ptr<CodeSlotMap> code_slot_map_{nullptr};
 
     Vector<GraphInterfacePtr> route_graphs_;   // upper-layer route graphs
     GraphInterfacePtr bottom_graph_{nullptr};  // base-level graph (all vectors)

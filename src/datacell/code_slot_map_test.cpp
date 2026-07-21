@@ -12,6 +12,8 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include "code_slot_map.h"
+
 #include <atomic>
 #include <cstring>
 #include <future>
@@ -20,7 +22,7 @@
 #include <sstream>
 #include <vector>
 
-#include "hgraph.h"
+#include "code_slot_flatten_adapter.h"
 #include "impl/allocator/safe_allocator.h"
 #include "storage/stream_reader.h"
 #include "storage/stream_writer.h"
@@ -197,9 +199,9 @@ public:
 
 }  // namespace
 
-TEST_CASE("HGraphCodeSlotMap binds logical ids to physical slots", "[ut][hgraph][code_slot_map]") {
+TEST_CASE("CodeSlotMap binds logical ids to physical slots", "[ut][datacell][code_slot_map]") {
     auto allocator = vsag::SafeAllocator::FactoryDefaultAllocator();
-    vsag::HGraphCodeSlotMap mapping(allocator.get());
+    vsag::CodeSlotMap mapping(allocator.get());
 
     mapping.ReserveLogicalSize(4);
     auto slot0 = mapping.AllocateSlot();
@@ -221,9 +223,9 @@ TEST_CASE("HGraphCodeSlotMap binds logical ids to physical slots", "[ut][hgraph]
     REQUIRE(mapping.Resolve(3) == 2);
 }
 
-TEST_CASE("HGraphCodeSlotMap rejects invalid mappings", "[ut][hgraph][code_slot_map]") {
+TEST_CASE("CodeSlotMap rejects invalid mappings", "[ut][datacell][code_slot_map]") {
     auto allocator = vsag::SafeAllocator::FactoryDefaultAllocator();
-    vsag::HGraphCodeSlotMap mapping(allocator.get());
+    vsag::CodeSlotMap mapping(allocator.get());
 
     REQUIRE_THROWS(mapping.Resolve(0));
     REQUIRE_THROWS(mapping.PublishSlot(1, 0));
@@ -235,9 +237,9 @@ TEST_CASE("HGraphCodeSlotMap rejects invalid mappings", "[ut][hgraph][code_slot_
     REQUIRE_THROWS(mapping.PublishSlot(1, slot + 1));
 }
 
-TEST_CASE("HGraphCodeSlotMap serializes logical to physical slots", "[ut][hgraph][code_slot_map]") {
+TEST_CASE("CodeSlotMap serializes logical to physical slots", "[ut][datacell][code_slot_map]") {
     auto allocator = vsag::SafeAllocator::FactoryDefaultAllocator();
-    vsag::HGraphCodeSlotMap mapping(allocator.get());
+    vsag::CodeSlotMap mapping(allocator.get());
 
     mapping.ReserveLogicalSize(5);
     mapping.PublishSlot(0, mapping.AllocateSlot());
@@ -250,7 +252,7 @@ TEST_CASE("HGraphCodeSlotMap serializes logical to physical slots", "[ut][hgraph
     vsag::IOStreamWriter writer(stream);
     mapping.Serialize(writer);
 
-    vsag::HGraphCodeSlotMap restored(allocator.get());
+    vsag::CodeSlotMap restored(allocator.get());
     vsag::IOStreamReader reader(stream);
     restored.Deserialize(reader);
 
@@ -263,10 +265,9 @@ TEST_CASE("HGraphCodeSlotMap serializes logical to physical slots", "[ut][hgraph
     REQUIRE_THROWS(restored.Resolve(3));
 }
 
-TEST_CASE("HGraphCodeSlotMap supports concurrent independent binds",
-          "[ut][hgraph][code_slot_map]") {
+TEST_CASE("CodeSlotMap supports concurrent independent binds", "[ut][datacell][code_slot_map]") {
     auto allocator = vsag::SafeAllocator::FactoryDefaultAllocator();
-    vsag::HGraphCodeSlotMap mapping(allocator.get());
+    vsag::CodeSlotMap mapping(allocator.get());
 
     constexpr vsag::InnerIdType count = 64;
     mapping.ReserveLogicalSize(count);
@@ -289,10 +290,10 @@ TEST_CASE("HGraphCodeSlotMap supports concurrent independent binds",
     }
 }
 
-TEST_CASE("HGraphCodeSlotAdapter maps logical ids before calling flatten",
-          "[ut][hgraph][code_slot_map]") {
+TEST_CASE("CodeSlotFlattenAdapter maps logical ids before calling flatten",
+          "[ut][datacell][code_slot_map]") {
     auto allocator = vsag::SafeAllocator::FactoryDefaultAllocator();
-    auto mapping = std::make_shared<vsag::HGraphCodeSlotMap>(allocator.get());
+    auto mapping = std::make_shared<vsag::CodeSlotMap>(allocator.get());
     mapping->ReserveLogicalSize(4);
     mapping->PublishSlot(0, mapping->AllocateSlot());
     auto slot1 = mapping->AllocateSlot();
@@ -302,18 +303,18 @@ TEST_CASE("HGraphCodeSlotAdapter maps logical ids before calling flatten",
 
     auto physical_codes = std::make_shared<RecordingFlatten>();
     std::atomic<uint64_t> logical_total_count{4};
-    auto adapter = vsag::MakeHGraphCodeSlotAdapter(
+    auto adapter = vsag::MakeCodeSlotFlattenAdapter(
         physical_codes, mapping, allocator.get(), &logical_total_count);
 
     REQUIRE(mapping->PhysicalCount() == 3);
     REQUIRE(adapter->TotalCount() == 4);
-    REQUIRE(vsag::GetHGraphPhysicalFlatten(adapter) == physical_codes);
-    REQUIRE(vsag::GetHGraphPhysicalFlatten(physical_codes) == physical_codes);
+    REQUIRE(vsag::GetCodeSlotPhysicalFlatten(adapter) == physical_codes);
+    REQUIRE(vsag::GetCodeSlotPhysicalFlatten(physical_codes) == physical_codes);
     REQUIRE_THROWS(adapter->Resize(8));
     REQUIRE_THROWS(adapter->Move(0, 1));
     REQUIRE_THROWS(adapter->MergeOther(adapter, 0));
     REQUIRE_THROWS(adapter->ShrinkToFit(2));
-    vsag::GetHGraphPhysicalFlatten(adapter)->Resize(8);
+    vsag::GetCodeSlotPhysicalFlatten(adapter)->Resize(8);
     REQUIRE(physical_codes->max_capacity_ == 8);
 
     vsag::InnerIdType logical_ids[] = {0, 2, 3};
@@ -378,7 +379,7 @@ TEST_CASE("HGraphCodeSlotAdapter maps logical ids before calling flatten",
     restored_physical_codes->total_count_ = 0;
     restored_physical_codes->max_capacity_ = 0;
     restored_physical_codes->code_size_ = 0;
-    auto restored_adapter = vsag::MakeHGraphCodeSlotAdapter(
+    auto restored_adapter = vsag::MakeCodeSlotFlattenAdapter(
         restored_physical_codes, mapping, allocator.get(), &logical_total_count);
     vsag::IOStreamReader reader(stream);
     restored_adapter->Deserialize(reader);
@@ -388,7 +389,7 @@ TEST_CASE("HGraphCodeSlotAdapter maps logical ids before calling flatten",
     REQUIRE(restored_adapter->TotalCount() == 4);
 
     auto model_physical_codes = std::make_shared<RecordingFlatten>();
-    auto model_adapter = vsag::MakeHGraphCodeSlotAdapter(
+    auto model_adapter = vsag::MakeCodeSlotFlattenAdapter(
         model_physical_codes, mapping, allocator.get(), &logical_total_count);
     adapter->ExportModel(model_adapter);
     REQUIRE(physical_codes->exported_models.size() == 1);

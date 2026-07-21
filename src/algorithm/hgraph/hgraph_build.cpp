@@ -495,12 +495,12 @@ HGraph::insert_persistent_codes_unlocked(const void* data, InnerIdType inner_id)
 
 void
 HGraph::insert_persistent_codes_to_slot(const void* data, CodeSlotIdType code_slot_id) {
-    InsertVectorToHGraphCodeSlot(this->basic_flatten_codes_, data, code_slot_id);
+    InsertVectorToCodeSlot(this->basic_flatten_codes_, data, code_slot_id);
     if (has_precise_reorder()) {
-        InsertVectorToHGraphCodeSlot(this->high_precise_codes_, data, code_slot_id);
+        InsertVectorToCodeSlot(this->high_precise_codes_, data, code_slot_id);
     }
     if (create_new_raw_vector_) {
-        InsertVectorToHGraphCodeSlot(this->raw_vector_, data, code_slot_id);
+        InsertVectorToCodeSlot(this->raw_vector_, data, code_slot_id);
     }
 }
 
@@ -799,12 +799,12 @@ HGraph::ensure_physical_code_capacity_unlocked(CodeSlotIdType required_capacity)
 
     auto new_capacity = static_cast<InnerIdType>(
         next_multiple_of_power_of_two(required_capacity, this->resize_increase_count_bit_));
-    GetHGraphPhysicalFlatten(this->basic_flatten_codes_)->Resize(new_capacity);
+    GetCodeSlotPhysicalFlatten(this->basic_flatten_codes_)->Resize(new_capacity);
     if (has_precise_reorder()) {
-        GetHGraphPhysicalFlatten(this->high_precise_codes_)->Resize(new_capacity);
+        GetCodeSlotPhysicalFlatten(this->high_precise_codes_)->Resize(new_capacity);
     }
     if (create_new_raw_vector_) {
-        GetHGraphPhysicalFlatten(this->raw_vector_)->Resize(new_capacity);
+        GetCodeSlotPhysicalFlatten(this->raw_vector_)->Resize(new_capacity);
     }
     this->physical_code_capacity_.store(new_capacity, std::memory_order_release);
     this->cal_memory_usage();

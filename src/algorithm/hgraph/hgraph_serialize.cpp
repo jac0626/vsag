@@ -795,7 +795,7 @@ HGraph::Deserialize(StreamReader& reader) {
         }
         this->physical_code_capacity_.store(
             static_cast<InnerIdType>(
-                GetHGraphPhysicalFlatten(this->basic_flatten_codes_)->max_capacity_),
+                GetCodeSlotPhysicalFlatten(this->basic_flatten_codes_)->max_capacity_),
             std::memory_order_release);
 
         for (auto& route_graph : this->route_graphs_) {
@@ -877,7 +877,7 @@ HGraph::Deserialize(StreamReader& reader) {
         }
         this->physical_code_capacity_.store(
             static_cast<InnerIdType>(
-                GetHGraphPhysicalFlatten(this->basic_flatten_codes_)->max_capacity_),
+                GetCodeSlotPhysicalFlatten(this->basic_flatten_codes_)->max_capacity_),
             std::memory_order_release);
 
         for (auto& route_graph : this->route_graphs_) {
@@ -914,7 +914,7 @@ HGraph::Deserialize(StreamReader& reader) {
         auto physical_count = this->code_slot_map_->PhysicalCount();
         auto validate_physical_count = [physical_count](const FlattenInterfacePtr& flatten,
                                                         const char* name) {
-            auto actual_count = GetHGraphPhysicalFlatten(flatten)->TotalCount();
+            auto actual_count = GetCodeSlotPhysicalFlatten(flatten)->TotalCount();
             if (actual_count != physical_count) {
                 throw VsagException(
                     ErrorType::INVALID_BINARY,
