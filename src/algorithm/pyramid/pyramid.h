@@ -92,6 +92,9 @@ public:
     void
     Deserialize(StreamReader& reader);
 
+    [[nodiscard]] uint64_t
+    GetMemoryUsage() const;
+
     friend class Pyramid;
     friend class PyramidAnalyzer;
 
@@ -173,10 +176,7 @@ public:
         if (use_reorder_) {
             reorder_ = std::make_shared<FlattenReorder>(get_reorder_codes(), allocator_);
         }
-        if (pyramid_param->store_raw_vector) {
-            raw_vector_ =
-                FlattenInterface::MakeInstance(pyramid_param->raw_vector_param, common_param);
-        }
+        check_and_init_raw_vector(pyramid_param->raw_vector_param, common_param);
     }
 
     explicit Pyramid(const ParamPtr& param, const IndexCommonParam& common_param)
@@ -234,6 +234,12 @@ public:
 
     int64_t
     GetNumberRemoved() const override;
+
+    [[nodiscard]] uint64_t
+    GetMemoryUsage() const override;
+
+    [[nodiscard]] std::unordered_map<std::string, uint64_t>
+    GetMemoryUsageDetail() const override;
 
     uint32_t
     Remove(const std::vector<int64_t>& ids, RemoveMode mode) override;
@@ -318,6 +324,10 @@ private:
         VisitedListPool* pool_;
         VisitedListPtr vl_;
     };
+
+    void
+    check_and_init_raw_vector(const FlattenInterfaceParamPtr& raw_vector_param,
+                               const IndexCommonParam& common_param);
 
     /// One named hierarchy with its own root IndexNode and build parameters.
     struct Hierarchy {
@@ -418,7 +428,7 @@ private:
     UnorderedMap<std::string, std::unique_ptr<Hierarchy>> hierarchies_;  // named hierarchies
     FlattenInterfacePtr base_codes_{nullptr};          // coarse codes for graph build/search
     FlattenInterfacePtr precise_codes_{nullptr};       // precise codes for reorder (if enabled)
-    FlattenInterfacePtr raw_vector_{nullptr};          // original vectors for decode-only paths
+    FlattenInterfacePtr raw_vector_{nullptr};          // raw FP32 vectors (if enabled)
     std::unique_ptr<VisitedListPool> pool_ = nullptr;  // pool of visited-lists for search
 
     MutexArrayPtr points_mutex_{nullptr};                // per-point locks for concurrent access
@@ -438,7 +448,8 @@ private:
         2021};                              // random number generator for level promotion
     ReorderInterfacePtr reorder_{nullptr};  // reorder helper (if use_reorder_)
 
-    uint32_t index_min_size_{0};  // min node size before graph is built
+    uint32_t index_min_size_{0};         // min node size before graph is built
+    bool create_new_raw_vector_{false};  // whether raw_vector_ owns separate storage
 };
 
 }  // namespace vsag
