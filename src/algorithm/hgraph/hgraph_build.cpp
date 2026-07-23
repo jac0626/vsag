@@ -504,6 +504,9 @@ HGraph::insert_persistent_codes_to_slot(const void* data, CodeSlotIdType code_sl
     }
 }
 
+// Adding one logical point is split into probe and publish phases. The publish_* helpers commit
+// the probe result by binding deduplicated storage, updating duplicate tracking, or inserting a
+// unique point into the graph.
 bool
 HGraph::insert_one_logical_point(const void* data, const AddRow& row, const AddContext& context) {
     const auto inner_id = row.inner_id;

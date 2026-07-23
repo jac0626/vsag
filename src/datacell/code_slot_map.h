@@ -26,6 +26,8 @@ namespace vsag {
 
 using CodeSlotIdType = InnerIdType;
 
+// Maps logical inner IDs to physical slots in shared code storage. Resolve* translates logical
+// IDs to physical slot IDs, while PublishSlot atomically binds a logical ID to a slot.
 class CodeSlotMap {
 public:
     // Capacity changes must be externally synchronized with Resolve, PublishSlot, and
