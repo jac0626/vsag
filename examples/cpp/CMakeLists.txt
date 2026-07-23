@@ -164,3 +164,6 @@ if (TARGET vsag::autotune)
         328_feature_autotune_existing_pyramid.cpp)
     target_link_libraries (328_feature_autotune_existing_pyramid vsag::autotune)
 endif ()
+
+add_executable(329_feature_ivf_precise_bucket 329_feature_ivf_precise_bucket.cpp)
+target_link_libraries(329_feature_ivf_precise_bucket vsag)
