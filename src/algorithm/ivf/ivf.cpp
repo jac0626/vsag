@@ -364,6 +364,7 @@ IVF::IVF(const IVFParameterPtr& param, const IndexCommonParam& common_param)
       buckets_per_data_(param->buckets_per_data),
       location_map_(common_param.allocator_.get()),
       bucket_searcher_(std::make_shared<FlatBucketSearcher>()) {
+    this->disk_backed_precise_bucket_ = param->UsesDiskBackedPreciseBucket();
     this->bucket_ = BucketInterface::MakeInstance(param->bucket_param, common_param);
     if (this->bucket_ == nullptr) {
         throw VsagException(ErrorType::INTERNAL_ERROR, "bucket init error");
@@ -469,6 +470,11 @@ IVF::InitFeatures() {
                                             IndexFeature::SUPPORT_EXPORT_MODEL,
                                             IndexFeature::SUPPORT_GET_MEMORY_USAGE,
                                             IndexFeature::SUPPORT_MERGE_INDEX});
+    if (this->disk_backed_precise_bucket_) {
+        this->index_feature_list_->SetFeature(IndexFeature::SUPPORT_CLONE, false);
+        this->index_feature_list_->SetFeature(IndexFeature::SUPPORT_EXPORT_MODEL, false);
+        this->index_feature_list_->SetFeature(IndexFeature::SUPPORT_MERGE_INDEX, false);
+    }
 
     if (this->bucket_->GetQuantizerName() == QUANTIZATION_TYPE_VALUE_PQFS) {
         this->index_feature_list_->SetFeature(IndexFeature::SUPPORT_ADD_AFTER_BUILD, false);
@@ -644,6 +650,10 @@ IVF::GetNumElements() const {
 
 void
 IVF::Merge(const std::vector<MergeUnit>& merge_units) {
+    if (this->disk_backed_precise_bucket_) {
+        throw VsagException(ErrorType::UNSUPPORTED_INDEX_OPERATION,
+                            "Merge does not support disk-backed IVF precise buckets");
+    }
     this->bucket_->Unpack();
     if (precise_bucket_ != nullptr) {
         this->precise_bucket_->Unpack();
@@ -1224,6 +1234,10 @@ IVF::reorder_with_precise_bucket(const DistHeapPtr& input,
 
 InnerIndexPtr
 IVF::ExportModel(const IndexCommonParam& param) const {
+    if (this->disk_backed_precise_bucket_) {
+        throw VsagException(ErrorType::UNSUPPORTED_INDEX_OPERATION,
+                            "ExportModel does not support disk-backed IVF precise buckets");
+    }
     auto index = std::make_shared<IVF>(this->create_param_ptr_, param);
     IVFPartitionStrategy::Clone(this->partition_strategy_, index->partition_strategy_);
     this->bucket_->ExportModel(index->bucket_);
