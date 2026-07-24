@@ -195,6 +195,21 @@ namespace {
 using vsag::test::EraseStreamingBlock;
 using vsag::test::InsertUnknownStreamingBlock;
 
+class BlockSizeLimitGuard {
+public:
+    explicit BlockSizeLimitGuard(uint64_t block_size_limit)
+        : origin_size_(vsag::Options::Instance().block_size_limit()) {
+        vsag::Options::Instance().set_block_size_limit(block_size_limit);
+    }
+
+    ~BlockSizeLimitGuard() {
+        vsag::Options::Instance().set_block_size_limit(origin_size_);
+    }
+
+private:
+    uint64_t origin_size_;
+};
+
 std::string
 GenerateBucketPreciseParameters(int buckets_per_data,
                                 const std::string& precise_io_type = "block_memory_io",
@@ -399,6 +414,7 @@ TEST_CASE_PERSISTENT_FIXTURE(IVFTestIndex,
 TEST_CASE_PERSISTENT_FIXTURE(IVFTestIndex,
                              "IVF bucket precise mirrors basic postings",
                              "[ft][ivf][reorder][serialize][pr]") {
+    BlockSizeLimitGuard block_size_limit_guard(2ULL * 1024 * 1024);
     constexpr int64_t dim = 16;
     constexpr int64_t base_count = 128;
     constexpr int64_t buckets_count = 16;
@@ -434,6 +450,7 @@ TEST_CASE_PERSISTENT_FIXTURE(IVFTestIndex,
 TEST_CASE_PERSISTENT_FIXTURE(IVFTestIndex,
                              "IVF bucket precise streaming",
                              "[ft][ivf][reorder][serialize][streaming][pr]") {
+    BlockSizeLimitGuard block_size_limit_guard(2ULL * 1024 * 1024);
     constexpr int64_t dim = 16;
     constexpr int64_t base_count = 128;
     constexpr int64_t buckets_count = 16;
@@ -472,6 +489,7 @@ TEST_CASE_PERSISTENT_FIXTURE(IVFTestIndex,
 TEST_CASE_PERSISTENT_FIXTURE(IVFTestIndex,
                              "IVF disk bucket precise rejects aliased ownership operations",
                              "[ft][ivf][reorder][serialize][streaming][export][pr]") {
+    BlockSizeLimitGuard block_size_limit_guard(2ULL * 1024 * 1024);
     constexpr int64_t dim = 16;
     constexpr int64_t base_count = 128;
     const auto precise_file_path = dir.GenerateRandomFile(false);
@@ -553,6 +571,7 @@ TEST_CASE_PERSISTENT_FIXTURE(IVFTestIndex,
 TEST_CASE_PERSISTENT_FIXTURE(IVFTestIndex,
                              "IVF bucket precise merge",
                              "[ft][ivf][reorder][merge][pr]") {
+    BlockSizeLimitGuard block_size_limit_guard(2ULL * 1024 * 1024);
     constexpr int64_t dim = 16;
     constexpr int64_t base_count = 128;
     constexpr int64_t buckets_count = 16;
