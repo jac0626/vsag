@@ -15,8 +15,10 @@
 
 #pragma once
 
+#include <functional>
 #include <limits>
 #include <mutex>
+#include <vector>
 
 #include "typing.h"
 #include "utils/filter_search_skip_strategy.h"
@@ -70,6 +72,12 @@ public:
 
     // time record
     std::shared_ptr<Timer> time_cost{nullptr};
+
+    // Adaptive ef (PoC): invoked once at the moment a KNN search would terminate
+    // with the initial ef. Receives the current top-candidate distances in
+    // ascending order; if the returned value is larger than the current ef, the
+    // search resumes in place (visited set and frontier are preserved).
+    std::function<uint64_t(const std::vector<float>&)> adaptive_ef_hook{nullptr};
 
     InnerSearchParam&
     operator=(const InnerSearchParam& other) = default;

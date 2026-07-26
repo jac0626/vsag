@@ -73,6 +73,12 @@ public:
     DataTypes data_type{DataTypes::DATA_TYPE_FLOAT};
 
     std::string name;
+
+    // adaptive ef (declarative recall): calibrated inside Build() when enabled
+    bool adaptive_ef_enable{false};
+    uint64_t adaptive_ef_sample_count{1000};
+    std::vector<float> adaptive_ef_targets{0.90F, 0.95F, 0.99F};
+    uint64_t adaptive_ef_cap{5000};
 };
 
 class HGraphSearchParameters : public IndexSearchParameter {
@@ -95,6 +101,14 @@ public:
     float skip_ratio{0.2F};
     FilterSearchSkipStrategyType skip_strategy_type{
         FilterSearchSkipStrategyType::DETERMINISTIC_ACCUMULATIVE};
+
+    // adaptive ef (declarative recall): requires an index built with the
+    // adaptive_ef build parameter; see adaptive_ef.h
+    float adaptive_ef_target_recall{0.0F};
+    float adaptive_ef_alpha{0.05F};
+    uint64_t adaptive_ef_cap{0};  // 0: use the calibrated default
+    // internal: resume straight to this ef (used by calibration)
+    uint64_t adaptive_ef_force{0};
 
 private:
     HGraphSearchParameters() = default;

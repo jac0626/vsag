@@ -93,6 +93,12 @@ JsonType
 HGraph::map_hgraph_param(const JsonType& hgraph_json) {
     static const ConstParamMap external_mapping = {
         {
+            "adaptive_ef",
+            {
+                "adaptive_ef",
+            },
+        },
+        {
             HGRAPH_USE_REORDER,
             {
                 USE_REORDER_KEY,

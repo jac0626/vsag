@@ -63,6 +63,14 @@ HGraph::HGraph(const HGraphParameterPtr& hgraph_param, const vsag::IndexCommonPa
       graph_type_(hgraph_param->graph_type),
       hierarchical_datacell_param_(hgraph_param->hierarchical_graph_param),
       use_old_serial_format_(common_param.use_old_serial_format_) {
+    if (hgraph_param->adaptive_ef_enable) {
+        adaptive_ef_state_ = std::make_shared<AdaptiveEfState>();
+        adaptive_ef_state_->enabled = true;
+        adaptive_ef_state_->sample_count = hgraph_param->adaptive_ef_sample_count;
+        adaptive_ef_state_->targets = hgraph_param->adaptive_ef_targets;
+        adaptive_ef_state_->ef_cap = hgraph_param->adaptive_ef_cap;
+    }
+
     this->support_duplicate_ = hgraph_param->support_duplicate;
     this->deduplicate_storage_ = hgraph_param->deduplicate_storage;
     const bool is_dense_vector = common_param.repr_ == RecordRepr::DENSE &&

@@ -14,6 +14,11 @@
 
 #include <fmt/format.h>
 
+#include <cmath>
+#include <fstream>
+#include <mutex>
+#include <unordered_map>
+
 #include "attr/argparse.h"
 #include "dataset_impl.h"
 #include "hgraph.h"  // IWYU pragma: keep
@@ -481,6 +486,55 @@ HGraph::SearchWithRequest(const SearchRequest& request) const {
         search_param.enable_rabitq_one_bit_search = params.rabitq_one_bit_search;
     } else {
         search_param.ef = std::max(params.ef_search, k);
+        if (params.adaptive_ef_force > 0) {
+            const uint64_t ef_min = search_param.ef;
+            uint64_t cap = params.adaptive_ef_cap;
+            if (cap == 0) {
+                cap = adaptive_ef_state_ != nullptr ? adaptive_ef_state_->ef_cap
+                                                    : params.adaptive_ef_force;
+            }
+            const uint64_t forced = std::min(std::max(params.adaptive_ef_force, ef_min), cap);
+            search_param.adaptive_ef_hook =
+                [forced](const std::vector<float>&) -> uint64_t { return forced; };
+        } else if (params.adaptive_ef_target_recall > 0.0F) {
+            if (adaptive_ef_state_ == nullptr or not adaptive_ef_state_->calibrated) {
+                throw VsagException(
+                    ErrorType::INVALID_ARGUMENT,
+                    fmt::format("adaptive_ef is not available on this index: {}",
+                                adaptive_ef_state_ == nullptr
+                                    ? "index was not built with adaptive_ef enabled"
+                                    : adaptive_ef_state_->disabled_reason));
+            }
+            const auto* head =
+                adaptive_ef_state_->FindHead(params.adaptive_ef_target_recall);
+            if (head == nullptr) {
+                throw VsagException(
+                    ErrorType::INVALID_ARGUMENT,
+                    fmt::format("adaptive_ef target_recall {} is not calibrated on this index",
+                                params.adaptive_ef_target_recall));
+            }
+            float mu_q = 0;
+            float sigma_q = 0;
+            float q_norm = 0;
+            adaptive_ef_state_->QueryMoments(static_cast<const float*>(raw_query),
+                                             this->dim_,
+                                             &mu_q,
+                                             &sigma_q,
+                                             &q_norm);
+            // calibration queries are stored (normalized) vectors, so the norm
+            // feature carries no signal; keep it constant on both sides
+            q_norm = 1.0F;
+            const float alpha = params.adaptive_ef_alpha;
+            const uint64_t ef_min = search_param.ef;
+            const uint64_t ef_cap =
+                params.adaptive_ef_cap > 0 ? params.adaptive_ef_cap : adaptive_ef_state_->ef_cap;
+            search_param.adaptive_ef_hook =
+                [head, mu_q, sigma_q, q_norm, alpha, ef_min, ef_cap](
+                    const std::vector<float>& dists_asc) -> uint64_t {
+                return AdaptiveEfState::Predict(
+                    *head, dists_asc, mu_q, sigma_q, q_norm, alpha, ef_min, ef_cap);
+            };
+        }
         search_param.is_inner_id_allowed = ft;
         search_param.topk = static_cast<int64_t>(search_param.ef);
         if (params.topk_factor > 1.0F) {

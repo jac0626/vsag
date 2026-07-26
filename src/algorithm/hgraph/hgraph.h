@@ -33,6 +33,7 @@
 #include "datacell/graph_interface.h"
 #include "datacell/sparse_graph_datacell_parameter.h"
 #include "hgraph_cache.h"
+#include "adaptive_ef.h"
 #include "hgraph_parameter.h"
 #include "impl/basic_optimizer.h"
 #include "impl/heap/distance_heap.h"
@@ -151,6 +152,9 @@ public:
 
     void
     GetVectorByInnerId(InnerIdType inner_id, float* data) const override;
+
+    void
+    calibrate_adaptive_ef();
 
     IndexType
     GetIndexType() const override {
@@ -791,6 +795,8 @@ private:
     std::atomic<int64_t> delete_count_{0};  // number of force-removed vectors
 
     std::shared_ptr<Optimizer<BasicSearcher>> optimizer_;  // search parameter optimizer
+
+    std::shared_ptr<AdaptiveEfState> adaptive_ef_state_{nullptr};  // see adaptive_ef.h
 
     bool create_new_raw_vector_{false};        // whether a separate raw vector exists
     FlattenInterfacePtr raw_vector_{nullptr};  // raw float vectors (for distance calc)

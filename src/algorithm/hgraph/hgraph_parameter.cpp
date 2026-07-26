@@ -16,6 +16,7 @@
 #include "hgraph_parameter.h"
 
 #include <cmath>
+#include <sstream>
 
 #include "datacell/extra_info_datacell_parameter.h"
 #include "datacell/flatten_datacell_parameter.h"
@@ -151,6 +152,28 @@ HGraphParameter::FromJson(const JsonType& json) {
     if (json.Contains(HGRAPH_PERSIST_SOURCE_ID_KEY)) {
         this->persist_source_id = json[HGRAPH_PERSIST_SOURCE_ID_KEY].GetBool();
     }
+    if (json.Contains("adaptive_ef")) {
+        const auto& ada = json["adaptive_ef"];
+        if (ada.Contains("enable")) {
+            this->adaptive_ef_enable = ada["enable"].GetBool();
+        }
+        if (ada.Contains("sample_count")) {
+            this->adaptive_ef_sample_count = ada["sample_count"].GetUint64();
+        }
+        if (ada.Contains("ef_cap")) {
+            this->adaptive_ef_cap = ada["ef_cap"].GetUint64();
+        }
+        if (ada.Contains("targets")) {
+            this->adaptive_ef_targets.clear();
+            std::stringstream ss(ada["targets"].GetString());
+            std::string token;
+            while (std::getline(ss, token, ',')) {
+                if (!token.empty()) {
+                    this->adaptive_ef_targets.push_back(std::stof(token));
+                }
+            }
+        }
+    }
 }
 
 JsonType
@@ -171,6 +194,16 @@ HGraphParameter::ToJson() const {
     json[SUPPORT_FORCE_REMOVE].SetBool(this->support_force_remove);
     json[HGRAPH_PERSIST_SOURCE_ID_KEY].SetBool(this->persist_source_id);
     json[TRAIN_SAMPLE_COUNT_KEY].SetInt(this->train_sample_count);
+    json["adaptive_ef"]["enable"].SetBool(this->adaptive_ef_enable);
+    json["adaptive_ef"]["sample_count"].SetUint64(this->adaptive_ef_sample_count);
+    json["adaptive_ef"]["ef_cap"].SetUint64(this->adaptive_ef_cap);
+    {
+        std::string ts;
+        for (uint64_t i = 0; i < this->adaptive_ef_targets.size(); ++i) {
+            ts += (i ? "," : "") + std::to_string(this->adaptive_ef_targets[i]);
+        }
+        json["adaptive_ef"]["targets"].SetString(ts);
+    }
     return json;
 }
 
@@ -231,6 +264,21 @@ HGraphSearchParameters::FromJson(const std::string& json_string) {
     obj.ef_search = ef_search_json.GetInt();
     if (params[INDEX_TYPE_HGRAPH].Contains(HGRAPH_PARAMETER_HOPS_LIMIT)) {
         obj.hops_limit = params[INDEX_TYPE_HGRAPH][HGRAPH_PARAMETER_HOPS_LIMIT].GetInt();
+    }
+    if (params[INDEX_TYPE_HGRAPH].Contains("adaptive_ef")) {
+        const auto& ada = params[INDEX_TYPE_HGRAPH]["adaptive_ef"];
+        if (ada.Contains("target_recall")) {
+            obj.adaptive_ef_target_recall = ada["target_recall"].GetFloat();
+        }
+        if (ada.Contains("alpha")) {
+            obj.adaptive_ef_alpha = ada["alpha"].GetFloat();
+        }
+        if (ada.Contains("ef_cap")) {
+            obj.adaptive_ef_cap = ada["ef_cap"].GetInt();
+        }
+        if (ada.Contains("force_ef")) {
+            obj.adaptive_ef_force = ada["force_ef"].GetInt();
+        }
     }
     if (params[INDEX_TYPE_HGRAPH].Contains(HGRAPH_USE_EXTRA_INFO_FILTER)) {
         obj.use_extra_info_filter =

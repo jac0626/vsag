@@ -146,6 +146,7 @@ BasicSearcher::search_impl(const GraphInterfacePtr& graph,
     auto lower_bound = std::numeric_limits<float>::max();
 
     uint32_t hops = 0;
+    bool adaptive_ef_decided = false;
     uint32_t dist_cmp = 0;
     uint32_t count_no_visited = 0;
     Vector<InnerIdType> to_be_visited_id(graph->MaximumDegree(), alloc);
@@ -219,6 +220,27 @@ BasicSearcher::search_impl(const GraphInterfacePtr& graph,
 
         if constexpr (mode == InnerSearchMode::KNN_SEARCH) {
             if ((-current_node_pair.first) > lower_bound && top_candidates->Size() == ef) {
+                if (inner_search_param.adaptive_ef_hook != nullptr && not adaptive_ef_decided) {
+                    adaptive_ef_decided = true;
+                    std::vector<std::pair<float, InnerIdType>> saved;
+                    saved.reserve(top_candidates->Size());
+                    while (not top_candidates->Empty()) {
+                        saved.emplace_back(top_candidates->Top());
+                        top_candidates->Pop();
+                    }
+                    std::vector<float> dists(saved.size());
+                    for (uint64_t i = 0; i < saved.size(); ++i) {
+                        dists[saved.size() - 1 - i] = saved[i].first;
+                    }
+                    for (const auto& item : saved) {
+                        top_candidates->Push(item.first, item.second);
+                    }
+                    uint64_t new_ef = inner_search_param.adaptive_ef_hook(dists);
+                    if (new_ef > ef) {
+                        ef = new_ef;
+                        continue;
+                    }
+                }
                 if (reasoning != nullptr) {
                     reasoning->SetTermination(ReasoningContext::kTerminationLowerBoundReached);
                 }
@@ -344,6 +366,7 @@ BasicSearcher::search_impl(const GraphInterfacePtr& graph,
     auto lower_bound = std::numeric_limits<float>::max();
 
     uint32_t hops = 0;
+    bool adaptive_ef_decided = false;
     uint32_t dist_cmp = 0;
     uint32_t count_no_visited = 0;
     Vector<InnerIdType> to_be_visited_id(graph->MaximumDegree(), alloc);
@@ -416,6 +439,27 @@ BasicSearcher::search_impl(const GraphInterfacePtr& graph,
 
         if constexpr (mode == InnerSearchMode::KNN_SEARCH) {
             if ((-current_node_pair.first) > lower_bound && top_candidates->Size() == ef) {
+                if (inner_search_param.adaptive_ef_hook != nullptr && not adaptive_ef_decided) {
+                    adaptive_ef_decided = true;
+                    std::vector<std::pair<float, InnerIdType>> saved;
+                    saved.reserve(top_candidates->Size());
+                    while (not top_candidates->Empty()) {
+                        saved.emplace_back(top_candidates->Top());
+                        top_candidates->Pop();
+                    }
+                    std::vector<float> dists(saved.size());
+                    for (uint64_t i = 0; i < saved.size(); ++i) {
+                        dists[saved.size() - 1 - i] = saved[i].first;
+                    }
+                    for (const auto& item : saved) {
+                        top_candidates->Push(item.first, item.second);
+                    }
+                    uint64_t new_ef = inner_search_param.adaptive_ef_hook(dists);
+                    if (new_ef > ef) {
+                        ef = new_ef;
+                        continue;
+                    }
+                }
                 if (reasoning != nullptr) {
                     reasoning->SetTermination(ReasoningContext::kTerminationLowerBoundReached);
                 }

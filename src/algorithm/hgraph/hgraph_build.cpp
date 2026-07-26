@@ -19,6 +19,7 @@
 #include <cstdlib>
 #include <fstream>
 #include <future>
+#include <random>
 #include <limits>
 #include <unordered_map>
 #include <unordered_set>
@@ -154,6 +155,9 @@ HGraph::Build(const DatasetPtr& data) {
         if (use_elp_optimizer_) {
             elp_optimize();
         }
+        if (adaptive_ef_state_ != nullptr and adaptive_ef_state_->enabled) {
+            this->calibrate_adaptive_ef();
+        }
         return ret;
     }
     std::vector<int64_t> ret;
@@ -164,6 +168,9 @@ HGraph::Build(const DatasetPtr& data) {
     }
     if (use_elp_optimizer_) {
         elp_optimize();
+    }
+    if (adaptive_ef_state_ != nullptr and adaptive_ef_state_->enabled) {
+        this->calibrate_adaptive_ef();
     }
     return ret;
 }
@@ -1795,6 +1802,179 @@ HGraph::cache_rebuild_route_graphs(BuildCachePlan& plan) {
     logger::info("[hgraph_build_cache] route_graph_build finished in {:.3f}s levels={}",
                  static_cast<double>(route_graph_elapsed) / 1000000.0,
                  this->route_graphs_.size());
+}
+
+
+void
+HGraph::calibrate_adaptive_ef() {
+    auto& state = *this->adaptive_ef_state_;
+    constexpr int64_t kCalibK = 100;
+    const auto total = static_cast<uint64_t>(this->GetNumElements());
+    if (total < static_cast<uint64_t>(kCalibK) * 4) {
+        state.calibrated = false;
+        state.disabled_reason = "not enough vectors to calibrate adaptive_ef";
+        logger::warn("adaptive_ef: {}", state.disabled_reason);
+        return;
+    }
+
+    // dataset moments over stored vectors (normalized view)
+    const auto dim = static_cast<uint64_t>(this->dim_);
+    std::vector<double> mean_acc(dim, 0.0);
+    std::vector<double> sq_acc(dim, 0.0);
+    std::vector<float> buf(dim);
+    for (uint64_t id = 0; id < total; ++id) {
+        this->GetVectorByInnerId(static_cast<InnerIdType>(id), buf.data());
+        double norm = 0;
+        for (uint64_t d = 0; d < dim; ++d) {
+            norm += static_cast<double>(buf[d]) * buf[d];
+        }
+        norm = std::sqrt(std::max(norm, 1e-24));
+        for (uint64_t d = 0; d < dim; ++d) {
+            double v = buf[d] / norm;
+            mean_acc[d] += v;
+            sq_acc[d] += v * v;
+        }
+    }
+    state.data_mean.resize(dim);
+    state.data_var.resize(dim);
+    for (uint64_t d = 0; d < dim; ++d) {
+        double m = mean_acc[d] / static_cast<double>(total);
+        state.data_mean[d] = static_cast<float>(m);
+        state.data_var[d] =
+            static_cast<float>(std::max(sq_acc[d] / static_cast<double>(total) - m * m, 0.0));
+    }
+
+    // sampled calibration queries (stored vectors themselves; original ada-ef style)
+    const uint64_t n_sample = std::min(state.sample_count, total);
+    const uint64_t stride = std::max<uint64_t>(1, total / n_sample);
+    std::vector<InnerIdType> sample_ids;
+    for (uint64_t id = 0; id < total and sample_ids.size() < n_sample; id += stride) {
+        sample_ids.push_back(static_cast<InnerIdType>(id));
+    }
+    const auto n = static_cast<uint64_t>(sample_ids.size());
+
+    std::vector<uint64_t> ef_grid;
+    for (uint64_t ef : {100, 125, 150, 175, 200, 250, 300, 350, 400, 500, 600, 700, 800,
+                        1000, 1200, 1400, 1600, 2000, 2400, 2800, 3200, 4000, 5000}) {
+        if (ef >= static_cast<uint64_t>(kCalibK) and ef <= state.ef_cap) {
+            ef_grid.push_back(ef);
+        }
+    }
+    const std::string bf_params =
+        R"({"hgraph": {"ef_search": 100, "brute_force_threshold": 1.0}})";
+    const std::string probe_params = R"({"hgraph": {"ef_search": 100}})";
+
+    std::vector<float> features(n * kAdaptiveEfFeatureCount);
+    std::vector<float> recall_matrix(n * ef_grid.size());
+    std::vector<float> qbuf(dim);
+    // Sampled stored vectors are systematically easier than external queries
+    // (they sit in their own neighborhood), which degenerates the labels.
+    // Perturb each sample with per-dimension-scaled noise to emulate a
+    // realistic query distribution.
+    std::mt19937 rng(20240601);
+    std::normal_distribution<float> gauss(0.0F, 1.0F);
+    for (uint64_t i = 0; i < n; ++i) {
+        this->GetVectorByInnerId(sample_ids[i], qbuf.data());
+        double norm = 0;
+        for (uint64_t dd = 0; dd < dim; ++dd) {
+            qbuf[dd] += gauss(rng) * std::sqrt(state.data_var[dd]) * 1.0F;
+            norm += static_cast<double>(qbuf[dd]) * qbuf[dd];
+        }
+        norm = std::sqrt(std::max(norm, 1e-24));
+        for (uint64_t dd = 0; dd < dim; ++dd) {
+            qbuf[dd] = static_cast<float>(qbuf[dd] / norm);
+        }
+        auto query = Dataset::Make();
+        query->NumElements(1)->Dim(static_cast<int64_t>(dim))->Float32Vectors(qbuf.data())
+            ->Owner(false);
+        // ground truth: exact scan
+        auto gt_result = this->KnnSearch(query, kCalibK, bf_params, nullptr);
+        std::unordered_set<int64_t> gt;
+        for (int64_t j = 0; j < gt_result->GetDim(); ++j) {
+            gt.insert(gt_result->GetIds()[j]);
+        }
+        // probe features at ef=k
+        auto probe = this->KnnSearch(query, kCalibK, probe_params, nullptr);
+        std::vector<float> dists(probe->GetDistances(),
+                                 probe->GetDistances() + probe->GetDim());
+        std::sort(dists.begin(), dists.end());
+        float mu_q = 0;
+        float sigma_q = 0;
+        float q_norm = 0;
+        state.QueryMoments(qbuf.data(), static_cast<int64_t>(dim), &mu_q, &sigma_q, &q_norm);
+        AdaptiveEfState::ComputeFeatures(
+            dists, mu_q, sigma_q, q_norm, features.data() + i * kAdaptiveEfFeatureCount);
+        // recall at each rung, resume semantics via force_ef
+        for (uint64_t g = 0; g < ef_grid.size(); ++g) {
+            const std::string force_params =
+                R"({"hgraph": {"ef_search": 100, "adaptive_ef": {"force_ef": )" +
+                std::to_string(ef_grid[g]) + "}}}";
+            auto res = this->KnnSearch(query, kCalibK, force_params, nullptr);
+            int64_t hit = 0;
+            for (int64_t j = 0; j < res->GetDim(); ++j) {
+                hit += gt.count(res->GetIds()[j]) > 0 ? 1 : 0;
+            }
+            recall_matrix[i * ef_grid.size() + g] =
+                static_cast<float>(hit) / static_cast<float>(kCalibK);
+        }
+    }
+
+    // per-target heads
+    std::vector<uint64_t> fit_rows;
+    std::vector<uint64_t> cal_rows;
+    for (uint64_t i = 0; i < n; ++i) {
+        (i % 5 == 4 ? cal_rows : fit_rows).push_back(i);
+    }
+    state.heads.clear();
+    float mid_spearman = 0;
+    for (float target : state.targets) {
+        std::vector<float> log2_required(n);
+        for (uint64_t i = 0; i < n; ++i) {
+            float req = static_cast<float>(state.ef_cap) * 2.0F;
+            for (uint64_t g = 0; g < ef_grid.size(); ++g) {
+                if (recall_matrix[i * ef_grid.size() + g] >= target) {
+                    req = static_cast<float>(ef_grid[g]);
+                    break;
+                }
+            }
+            log2_required[i] = std::log2(req);
+        }
+        auto head =
+            AdaptiveEfState::TrainHead(features, log2_required, fit_rows, cal_rows, target);
+        // predictability gate on the calibration split (pre-margin predictions)
+        std::vector<float> preds;
+        std::vector<float> labels;
+        for (auto i : cal_rows) {
+            double acc = head.weights[2 * kAdaptiveEfFeatureCount];
+            for (int64_t j = 0; j < kAdaptiveEfFeatureCount; ++j) {
+                double z = (features[i * kAdaptiveEfFeatureCount + j] - head.feat_mean[j]) /
+                           head.feat_stdev[j];
+                acc += head.weights[j] * z +
+                       head.weights[kAdaptiveEfFeatureCount + j] * z * z;
+            }
+            preds.push_back(static_cast<float>(acc));
+            labels.push_back(log2_required[i]);
+        }
+        float sp = AdaptiveEfState::SpearmanCorrelation(preds, labels);
+        if (std::abs(target - state.targets[state.targets.size() / 2]) < 1e-4F) {
+            mid_spearman = sp;
+        }
+        state.heads.emplace_back(std::move(head));
+    }
+    state.spearman = mid_spearman;
+    if (mid_spearman < 0.5F) {
+        state.calibrated = false;
+        state.disabled_reason = fmt::format(
+            "difficulty not predictable on this index (spearman={:.3f} < 0.5)", mid_spearman);
+        state.heads.clear();
+        logger::warn("adaptive_ef disabled: {}", state.disabled_reason);
+        return;
+    }
+    state.calibrated = true;
+    logger::info("adaptive_ef calibrated: samples={}, spearman={:.3f}, targets={}",
+                 n,
+                 mid_spearman,
+                 state.targets.size());
 }
 
 }  // namespace vsag

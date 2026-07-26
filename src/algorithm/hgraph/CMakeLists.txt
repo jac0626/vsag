@@ -1,4 +1,5 @@
 set(HGRAPH_SRCS
+    adaptive_ef.cpp
     hgraph.cpp
     hgraph_build.cpp
     hgraph_modify.cpp

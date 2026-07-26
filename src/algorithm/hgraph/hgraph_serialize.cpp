@@ -203,6 +203,10 @@ HGraph::serialize_basic_info() const {
     jsonify_basic_info["total_count"].SetUint64(this->total_count_.load());
     jsonify_basic_info["max_level"].SetUint64(this->route_graphs_.size());
     jsonify_basic_info[INDEX_PARAM].SetString(this->create_param_ptr_->ToString());
+    if (this->adaptive_ef_state_ != nullptr) {
+        jsonify_basic_info["adaptive_ef_state"].SetString(
+            base64_encode(this->adaptive_ef_state_->SerializeToString()));
+    }
 
     return jsonify_basic_info;
 }
@@ -220,6 +224,11 @@ HGraph::serialize_basic_info() const {
 void
 HGraph::deserialize_basic_info(const JsonType& jsonify_basic_info) {
     logger::debug("jsonify_basic_info:\n{}", dump_basic_info_for_log(jsonify_basic_info));
+    if (jsonify_basic_info.Contains("adaptive_ef_state")) {
+        this->adaptive_ef_state_ = std::make_shared<AdaptiveEfState>();
+        this->adaptive_ef_state_->DeserializeFromString(
+            base64_decode(jsonify_basic_info["adaptive_ef_state"].GetString()));
+    }
     FROM_JSON(jsonify_basic_info, use_reorder, Bool);
     this->reorder_by_base_ = false;
     FROM_JSON(jsonify_basic_info, reorder_by_base, Bool);
