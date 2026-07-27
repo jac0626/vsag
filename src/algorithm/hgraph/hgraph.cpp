@@ -64,10 +64,17 @@ HGraph::HGraph(const HGraphParameterPtr& hgraph_param, const vsag::IndexCommonPa
       hierarchical_datacell_param_(hgraph_param->hierarchical_graph_param),
       use_old_serial_format_(common_param.use_old_serial_format_) {
     if (hgraph_param->adaptive_ef_enable) {
+        CHECK_ARGUMENT(common_param.data_type_ == DataTypes::DATA_TYPE_FLOAT,
+                       "adaptive_ef currently supports only float32 vectors");
+        CHECK_ARGUMENT(common_param.metric_ == MetricType::METRIC_TYPE_COSINE,
+                       "adaptive_ef currently supports only cosine distance");
+        CHECK_ARGUMENT(not hgraph_param->use_reorder,
+                       "adaptive_ef currently does not support precise reorder");
         adaptive_ef_state_ = std::make_shared<AdaptiveEfState>();
         adaptive_ef_state_->enabled = true;
         adaptive_ef_state_->sample_count = hgraph_param->adaptive_ef_sample_count;
         adaptive_ef_state_->targets = hgraph_param->adaptive_ef_targets;
+        adaptive_ef_state_->topks = hgraph_param->adaptive_ef_topks;
         adaptive_ef_state_->ef_cap = hgraph_param->adaptive_ef_cap;
     }
 
@@ -90,6 +97,11 @@ HGraph::HGraph(const HGraphParameterPtr& hgraph_param, const vsag::IndexCommonPa
     neighbors_mutex_ = std::make_shared<PointsMutex>(0, common_param.allocator_.get());
     this->basic_flatten_codes_ =
         FlattenInterface::MakeInstance(hgraph_param->base_codes_param, common_param);
+    if (adaptive_ef_state_ != nullptr) {
+        CHECK_ARGUMENT(
+            this->basic_flatten_codes_->GetQuantizerName() == QUANTIZATION_TYPE_VALUE_FP32,
+            "adaptive_ef currently supports only fp32 base quantization");
+    }
     if (has_precise_reorder()) {
         this->high_precise_codes_ =
             FlattenInterface::MakeInstance(hgraph_param->precise_codes_param, common_param);
@@ -268,6 +280,7 @@ HGraph::Tune(const std::string& parameters, bool disable_future_tuning) {
     // preventing concurrent searches from accessing partially updated state.
     {
         std::scoped_lock<std::shared_mutex> wlock(this->global_mutex_);
+        this->invalidate_adaptive_ef("index tuning invalidated adaptive_ef calibration");
         auto param = std::dynamic_pointer_cast<HGraphParameter>(create_param_ptr_);
         basic_flatten_codes_ = new_basic;
         if (drop_precise_codes) {
@@ -450,6 +463,9 @@ void
 HGraph::Merge(const std::vector<MergeUnit>& merge_units) {
     CHECK_ARGUMENT(not this->using_dedup_storage(),
                    "HGraph deduplicate_storage does not support Merge");
+    if (not merge_units.empty()) {
+        this->invalidate_adaptive_ef("index changed after adaptive_ef calibration");
+    }
     int64_t total_count = this->GetNumElements();
     for (const auto& unit : merge_units) {
         total_count += unit.index->GetNumElements();
@@ -532,6 +548,18 @@ HGraph::GetVectorByInnerId(InnerIdType inner_id, float* data) const {
     if (release) {
         codes->Release(buffer);
     }
+}
+
+void
+HGraph::invalidate_adaptive_ef(const std::string& reason) {
+    this->adaptive_ef_generation_.fetch_add(1, std::memory_order_acq_rel);
+    std::unique_lock<std::shared_mutex> lock(this->adaptive_ef_mutex_);
+    if (this->adaptive_ef_state_ == nullptr or not this->adaptive_ef_state_->enabled) {
+        return;
+    }
+    this->adaptive_ef_state_->calibrated = false;
+    this->adaptive_ef_state_->disabled_reason = reason;
+    this->adaptive_ef_state_->heads.clear();
 }
 
 void
@@ -673,6 +701,7 @@ HGraph::UpdateVector(int64_t id, const DatasetPtr& new_base, bool force_update) 
         std::shared_lock label_lock(this->label_lookup_mutex_);
         inner_id = this->label_table_->GetIdByLabel(id);
     }
+    this->invalidate_adaptive_ef("index changed after adaptive_ef calibration");
 
     // the validation of the new vector
     void* new_base_vec = nullptr;

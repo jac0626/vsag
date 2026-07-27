@@ -79,6 +79,7 @@ most users need; the exhaustive list is in [Index Parameters](../resources/index
 | `support_force_remove` | bool | `false` | Enable `RemoveMode::FORCE_REMOVE` and its extra synchronization on the built index |
 | `store_raw_vector` | bool | `false` | Keep the raw vector in addition to the quantized copy (useful for `cosine`) |
 | `use_elp_optimizer` | bool | `false` | Auto-tune search parameters after build |
+| `adaptive_ef` | object | disabled | Backward-compatible shortcut that calibrates during `Build`; explicit post-build training is preferred — see [Adaptive ef](#adaptive-ef) |
 | `base_io_type` / `precise_io_type` | string | `"block_memory_io"` | Storage backend (`memory_io`, `block_memory_io`, `buffer_io`, `async_io`, `mmap_io`) |
 | `base_file_path` / `precise_file_path` | string | — | File path; required when the corresponding `*_io_type` is disk-backed (`buffer_io`, `async_io`, `mmap_io`) |
 | `hgraph_init_capacity` | int | `100` | Initial capacity hint (doesn't cap the final size) |
@@ -229,11 +230,101 @@ Search-time parameters live under the `hgraph` sub-object:
 | `brute_force_threshold` | float | `0.0` | Selectivity-aware brute-force fallback. When `> 0` and the supplied filter's `ValidRatio()` is `≤ brute_force_threshold`, the search **bypasses the graph traversal entirely** and runs an exact scan over the valid ids using the best available flatten codes (see the section below). Must lie in `[0.0, 1.0]`; the default `0.0` disables the feature and preserves legacy behavior. |
 | `rabitq_one_bit_search` | bool | `false` | Enables the RaBitQ filter/lower-bound path. On an x+y split index it uses all x filter bits; see [RaBitQ x+y Split](../quantization/rabitq_split.md). |
 | `rabitq_error_rate` | float | index default | Positive lower-bound error multiplier for this search. It can be tuned without rebuilding the split index. |
+| `adaptive_ef` | object | disabled | Request a calibrated recall target and risk level; see [Adaptive ef](#adaptive-ef) |
 
 ```cpp
 auto result = index->KnnSearch(
     query, topk, R"({"hgraph": {"ef_search": 200}})").value();
 ```
+
+### Adaptive ef
+
+Adaptive ef uses the first 100 search candidates to predict how far that query should
+continue, then resumes the same graph traversal at a calibrated `ef`. The preferred flow
+is to build or deserialize the graph once, then explicitly train adaptive ef on that
+existing index:
+
+```cpp
+auto trained = index->EnableAdaptiveEf(R"({
+    "sample_count": 1000,
+    "ef_cap": 5000,
+    "targets": "0.90,0.95,0.99",
+    "topks": "10,50,100"
+})");
+if (!trained.has_value()) {
+    // Invalid configuration, unsupported index, or a training failure.
+}
+// trained.value() is true when at least one top-k/target/alpha combination passed.
+```
+
+This operation does not rebuild the graph, so a serialized base index can be loaded,
+trained, and serialized again with its adaptive state. For backward compatibility, the
+same configuration can still be placed under `index_param.adaptive_ef` to train
+automatically during `Build`:
+
+```json
+{
+    "dtype": "float32",
+    "metric_type": "cosine",
+    "dim": 128,
+    "index_param": {
+        "base_quantization_type": "fp32",
+        "adaptive_ef": {
+            "enable": true,
+            "sample_count": 1000,
+            "ef_cap": 5000,
+            "targets": "0.90,0.95,0.99",
+            "topks": "10,50,100"
+        }
+    }
+}
+```
+
+At search time, `target_recall` selects one of those targets and `alpha` selects the
+allowed calibration miss probability (`0.2`, `0.1`, or `0.05`):
+
+```json
+{
+    "hgraph": {
+        "ef_search": 100,
+        "adaptive_ef": {"target_recall": 0.95, "alpha": 0.05}
+    }
+}
+```
+
+Each top-k, target, and alpha combination is enabled independently. On held-out gate
+queries, calibration integer-refines the sparse training frontier and directly measures a
+fixed-ef policy that reaches at least the same observed target pass rate. This prevents a
+coarse ef rung from overstating the fixed baseline's cost. Adaptive ef must use at least
+10% fewer distance comparisons, and must avoid a cost regression at matched pass rate in
+every synthetic query-difficulty stratum. If the measured fixed-ef pass counts or work
+violate the monotonic trend required by the refinement, the combination fails closed. A
+combination also fails closed when no fixed ef up to `ef_cap` reaches the adaptive pass
+count; costs at different pass rates are never compared. A combination that fails any
+check returns an invalid-argument error instead of silently falling back. Calibration uses
+perturbed stored vectors, so passing this relative performance gate is not a recall
+guarantee for a different production query distribution; validate against representative
+queries before rollout.
+
+The current implementation deliberately has a narrow support domain:
+
+- `dtype: "float32"`, `metric_type: "cosine"`, FP32 base quantization, and no reorder;
+- non-iterator KNN search only, with top-k listed in `topks` and both top-k and
+  `ef_search` no greater than 100;
+- no filters, attribute or extra-info filtering, parallel search, `hops_limit`, timeout,
+  `rabitq_one_bit_search`, `topk_factor`, or `brute_force_threshold`.
+
+Calibration runs exact and graph searches over the configured samples, top-k values, and
+targets. It also evaluates the sparse ef grid and performs cached direct-search refinement
+on gate rows, so `EnableAdaptiveEf` is a synchronous, potentially expensive operation.
+The refinement is logarithmic in each sparse-rung gap rather than a dense scan of every
+integer ef. Do not run it concurrently with index mutations, and train only indexes with
+no removed vectors. `Add`, `Remove`, `UpdateVector`, `Merge`, and `Tune` invalidate the
+calibrated policy; call `EnableAdaptiveEf` again on the stable index before using adaptive
+ef. Fixed `ef_search` remains available after invalidation. Legacy version-1 adaptive
+models load fail-closed and can be upgraded by calling `EnableAdaptiveEf` without
+rebuilding the graph. Adaptive state requires the current serialization format; legacy
+v0.14 serialization rejects it.
 
 ### Brute-force fallback under highly selective filters (`brute_force_threshold`)
 

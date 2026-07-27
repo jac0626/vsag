@@ -482,9 +482,14 @@ InnerIndexInterface::Clone(const IndexCommonParam& param) {
     std::stringstream ss;
     IOStreamWriter writer(ss);
     this->Serialize(writer);
+    const auto serialized_size = ss.tellp();
+    if (serialized_size < 0) {
+        throw VsagException(ErrorType::INTERNAL_ERROR,
+                            "failed to determine serialized index size while cloning");
+    }
     ss.seekg(0, std::ios::beg);
     IOStreamReader reader(ss);
-    auto max_size = this->CalSerializeSize();
+    const auto max_size = static_cast<uint64_t>(serialized_size);
     BufferStreamReader buffer_reader(&reader, max_size, this->allocator_);
     auto index = this->Fork(param);
     index->Deserialize(buffer_reader);

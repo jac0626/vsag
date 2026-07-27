@@ -19,8 +19,9 @@
 #include <cstdlib>
 #include <fstream>
 #include <future>
-#include <random>
 #include <limits>
+#include <random>
+#include <stdexcept>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -156,7 +157,7 @@ HGraph::Build(const DatasetPtr& data) {
             elp_optimize();
         }
         if (adaptive_ef_state_ != nullptr and adaptive_ef_state_->enabled) {
-            this->calibrate_adaptive_ef();
+            this->train_adaptive_ef(std::make_shared<AdaptiveEfState>(*adaptive_ef_state_));
         }
         return ret;
     }
@@ -170,7 +171,7 @@ HGraph::Build(const DatasetPtr& data) {
         elp_optimize();
     }
     if (adaptive_ef_state_ != nullptr and adaptive_ef_state_->enabled) {
-        this->calibrate_adaptive_ef();
+        this->train_adaptive_ef(std::make_shared<AdaptiveEfState>(*adaptive_ef_state_));
     }
     return ret;
 }
@@ -295,6 +296,9 @@ HGraph::Add(const DatasetPtr& data) {
     }
 
     this->validate_add_data(data);
+    if (data->GetNumElements() > 0) {
+        this->invalidate_adaptive_ef("index changed after adaptive_ef calibration");
+    }
     auto context = this->prepare_add_context(data);
     this->prepare_graph_read_codes(data, context);
     auto batch = this->prepare_add_batch(data);
@@ -1804,15 +1808,107 @@ HGraph::cache_rebuild_route_graphs(BuildCachePlan& plan) {
                  this->route_graphs_.size());
 }
 
+bool
+HGraph::EnableAdaptiveEf(const std::string& parameters) {
+    std::scoped_lock training_lock(this->adaptive_ef_training_mutex_);
+    const auto adaptive_json = JsonType::Parse(parameters, false);
+    CHECK_ARGUMENT(not adaptive_json.IsDiscarded() and adaptive_json.IsObject(),
+                   "adaptive_ef training parameters must be a JSON object");
+
+    const auto current_param = std::dynamic_pointer_cast<HGraphParameter>(create_param_ptr_);
+    CHECK_ARGUMENT(current_param != nullptr, "HGraphParameter is required for adaptive_ef");
+    auto full_json = current_param->ToJson();
+    {
+        std::shared_lock<std::shared_mutex> state_lock(this->adaptive_ef_mutex_);
+        if (adaptive_ef_state_ != nullptr and adaptive_ef_state_->enabled) {
+            full_json["adaptive_ef"]["sample_count"].SetUint64(adaptive_ef_state_->sample_count);
+            full_json["adaptive_ef"]["ef_cap"].SetUint64(adaptive_ef_state_->ef_cap);
+            std::string targets;
+            for (uint64_t i = 0; i < adaptive_ef_state_->targets.size(); ++i) {
+                targets += (i == 0 ? "" : ",") + std::to_string(adaptive_ef_state_->targets[i]);
+            }
+            full_json["adaptive_ef"]["targets"].SetString(targets);
+            std::string topks;
+            for (uint64_t i = 0; i < adaptive_ef_state_->topks.size(); ++i) {
+                topks += (i == 0 ? "" : ",") + std::to_string(adaptive_ef_state_->topks[i]);
+            }
+            full_json["adaptive_ef"]["topks"].SetString(topks);
+        }
+    }
+    for (const auto* key : {"sample_count", "ef_cap", "targets", "topks"}) {
+        if (adaptive_json.Contains(key)) {
+            full_json["adaptive_ef"][key].SetJson(adaptive_json[key]);
+        }
+    }
+    full_json["adaptive_ef"]["enable"].SetBool(true);
+    const HGraphParameter training_param(full_json);
+
+    auto candidate = std::make_shared<AdaptiveEfState>();
+    candidate->enabled = true;
+    candidate->sample_count = training_param.adaptive_ef_sample_count;
+    candidate->targets = training_param.adaptive_ef_targets;
+    candidate->topks = training_param.adaptive_ef_topks;
+    candidate->ef_cap = training_param.adaptive_ef_cap;
+    return this->train_adaptive_ef_locked(std::move(candidate));
+}
+
+bool
+HGraph::train_adaptive_ef(std::shared_ptr<AdaptiveEfState> candidate) {
+    std::scoped_lock training_lock(this->adaptive_ef_training_mutex_);
+    return this->train_adaptive_ef_locked(std::move(candidate));
+}
+
+bool
+HGraph::train_adaptive_ef_locked(std::shared_ptr<AdaptiveEfState> candidate) {
+    CHECK_ARGUMENT(candidate != nullptr and candidate->enabled,
+                   "adaptive_ef training requires an enabled configuration");
+    CHECK_ARGUMENT(this->data_type_ == DataTypes::DATA_TYPE_FLOAT,
+                   "adaptive_ef currently supports only float32 vectors");
+    CHECK_ARGUMENT(this->metric_ == MetricType::METRIC_TYPE_COSINE,
+                   "adaptive_ef currently supports only cosine distance");
+    CHECK_ARGUMENT(not this->use_reorder_,
+                   "adaptive_ef currently does not support precise reorder");
+    CHECK_ARGUMENT(this->basic_flatten_codes_->GetQuantizerName() == QUANTIZATION_TYPE_VALUE_FP32,
+                   "adaptive_ef currently supports only fp32 base quantization");
+    CHECK_ARGUMENT(this->GetNumElements() > 0, "adaptive_ef training requires a non-empty index");
+    CHECK_ARGUMENT(this->GetNumberRemoved() == 0,
+                   "adaptive_ef training does not support indexes with removed vectors");
+
+    const uint64_t generation = this->adaptive_ef_generation_.load(std::memory_order_acquire);
+    this->calibrate_adaptive_ef(*candidate);
+    candidate->Validate(this->dim_);
+
+    std::unique_lock<std::shared_mutex> state_lock(this->adaptive_ef_mutex_);
+    CHECK_ARGUMENT(this->adaptive_ef_generation_.load(std::memory_order_acquire) == generation,
+                   "index changed during adaptive_ef training; retry on a stable index");
+    adaptive_ef_state_ = std::move(candidate);
+    return adaptive_ef_state_->calibrated;
+}
 
 void
-HGraph::calibrate_adaptive_ef() {
-    auto& state = *this->adaptive_ef_state_;
-    constexpr int64_t kCalibK = 100;
+HGraph::calibrate_adaptive_ef(AdaptiveEfState& state) {
+    constexpr uint64_t kProbeEf = 100;
+    constexpr double kMinRelativeSaving = 0.10;
+    const float supported_alphas[3] = {0.2F, 0.1F, 0.05F};
+
+    state.calibrated = false;
+    state.disabled_reason.clear();
+    state.heads.clear();
+
     const auto total = static_cast<uint64_t>(this->GetNumElements());
-    if (total < static_cast<uint64_t>(kCalibK) * 4) {
-        state.calibrated = false;
+    if (total < kProbeEf * 4) {
         state.disabled_reason = "not enough vectors to calibrate adaptive_ef";
+        logger::warn("adaptive_ef: {}", state.disabled_reason);
+        return;
+    }
+    if (state.topks.empty() or state.ef_cap < kProbeEf) {
+        state.disabled_reason = "invalid adaptive_ef topks or ef_cap";
+        logger::warn("adaptive_ef: {}", state.disabled_reason);
+        return;
+    }
+    const uint64_t max_topk = *std::max_element(state.topks.begin(), state.topks.end());
+    if (max_topk > kProbeEf) {
+        state.disabled_reason = "adaptive_ef topk exceeds the calibrated probe ef";
         logger::warn("adaptive_ef: {}", state.disabled_reason);
         return;
     }
@@ -1852,129 +1948,390 @@ HGraph::calibrate_adaptive_ef() {
         sample_ids.push_back(static_cast<InnerIdType>(id));
     }
     const auto n = static_cast<uint64_t>(sample_ids.size());
+    std::mt19937 rng(20240601);
+    std::shuffle(sample_ids.begin(), sample_ids.end(), rng);
 
     std::vector<uint64_t> ef_grid;
-    for (uint64_t ef : {100, 125, 150, 175, 200, 250, 300, 350, 400, 500, 600, 700, 800,
-                        1000, 1200, 1400, 1600, 2000, 2400, 2800, 3200, 4000, 5000}) {
-        if (ef >= static_cast<uint64_t>(kCalibK) and ef <= state.ef_cap) {
+    for (uint64_t ef : {100, 125,  150,  175,  200,  250,  300,  350,  400,  500,  600, 700,
+                        800, 1000, 1200, 1400, 1600, 2000, 2400, 2800, 3200, 4000, 5000}) {
+        if (ef >= kProbeEf and ef <= state.ef_cap) {
             ef_grid.push_back(ef);
         }
     }
-    const std::string bf_params =
-        R"({"hgraph": {"ef_search": 100, "brute_force_threshold": 1.0}})";
+    ef_grid.push_back(state.ef_cap);
+    std::sort(ef_grid.begin(), ef_grid.end());
+    ef_grid.erase(std::unique(ef_grid.begin(), ef_grid.end()), ef_grid.end());
+    state.ef_grid = ef_grid;
+
+    const std::string bf_params = R"({"hgraph": {"ef_search": 100, "brute_force_threshold": 1.0}})";
     const std::string probe_params = R"({"hgraph": {"ef_search": 100}})";
 
+    const uint64_t topk_count = state.topks.size();
+    const uint64_t grid_count = ef_grid.size();
     std::vector<float> features(n * kAdaptiveEfFeatureCount);
-    std::vector<float> recall_matrix(n * ef_grid.size());
+    std::vector<float> recall_matrix(topk_count * n * grid_count);
+    std::vector<double> cost_matrix(topk_count * n * grid_count);
+    std::vector<float> calibration_queries(n * dim);
+    std::vector<int64_t> ground_truth(n * max_topk);
+
+    const auto matrix_index = [n, grid_count](
+                                  uint64_t topk_index, uint64_t row, uint64_t grid_index) {
+        return (topk_index * n + row) * grid_count + grid_index;
+    };
+    const auto distance_count = [](const DatasetPtr& result) {
+        const auto values = result->GetStatistics({"dist_cmp"});
+        if (values.empty() or values[0].empty()) {
+            throw std::runtime_error("adaptive_ef search did not report dist_cmp");
+        }
+        return static_cast<double>(std::stoull(values[0]));
+    };
+    const auto recall =
+        [](const DatasetPtr& result, const std::unordered_set<int64_t>& truth, uint64_t topk) {
+            uint64_t hit = 0;
+            for (int64_t j = 0; j < result->GetDim(); ++j) {
+                hit += truth.count(result->GetIds()[j]) > 0 ? 1 : 0;
+            }
+            return static_cast<float>(hit) / static_cast<float>(topk);
+        };
+
     std::vector<float> qbuf(dim);
     // Sampled stored vectors are systematically easier than external queries
     // (they sit in their own neighborhood), which degenerates the labels.
-    // Perturb each sample with per-dimension-scaled noise to emulate a
-    // realistic query distribution.
-    std::mt19937 rng(20240601);
+    // Use stratified perturbations for training coverage. Gate results must
+    // pass independently in every stratum because the production mix is
+    // unknown.
     std::normal_distribution<float> gauss(0.0F, 1.0F);
+    const float noise_scales[4] = {0.05F, 0.33F, 0.66F, 1.0F};
     for (uint64_t i = 0; i < n; ++i) {
         this->GetVectorByInnerId(sample_ids[i], qbuf.data());
+        const float noise_scale = noise_scales[i % 4];
         double norm = 0;
         for (uint64_t dd = 0; dd < dim; ++dd) {
-            qbuf[dd] += gauss(rng) * std::sqrt(state.data_var[dd]) * 1.0F;
+            qbuf[dd] += gauss(rng) * std::sqrt(state.data_var[dd]) * noise_scale;
             norm += static_cast<double>(qbuf[dd]) * qbuf[dd];
         }
         norm = std::sqrt(std::max(norm, 1e-24));
         for (uint64_t dd = 0; dd < dim; ++dd) {
             qbuf[dd] = static_cast<float>(qbuf[dd] / norm);
         }
+        std::copy(qbuf.begin(), qbuf.end(), calibration_queries.begin() + i * dim);
+
         auto query = Dataset::Make();
-        query->NumElements(1)->Dim(static_cast<int64_t>(dim))->Float32Vectors(qbuf.data())
+        query->NumElements(1)
+            ->Dim(static_cast<int64_t>(dim))
+            ->Float32Vectors(qbuf.data())
             ->Owner(false);
+
         // ground truth: exact scan
-        auto gt_result = this->KnnSearch(query, kCalibK, bf_params, nullptr);
-        std::unordered_set<int64_t> gt;
-        for (int64_t j = 0; j < gt_result->GetDim(); ++j) {
-            gt.insert(gt_result->GetIds()[j]);
+        auto gt_result = this->KnnSearch(query, static_cast<int64_t>(max_topk), bf_params, nullptr);
+        if (gt_result->GetDim() < static_cast<int64_t>(max_topk)) {
+            state.disabled_reason = "exact calibration search returned too few neighbors";
+            logger::warn("adaptive_ef: {}", state.disabled_reason);
+            return;
         }
-        // probe features at ef=k
-        auto probe = this->KnnSearch(query, kCalibK, probe_params, nullptr);
-        std::vector<float> dists(probe->GetDistances(),
-                                 probe->GetDistances() + probe->GetDim());
+        for (uint64_t j = 0; j < max_topk; ++j) {
+            ground_truth[i * max_topk + j] = gt_result->GetIds()[j];
+        }
+
+        // Probe features at the same ef used by the runtime hook.
+        auto probe = this->KnnSearch(query, static_cast<int64_t>(kProbeEf), probe_params, nullptr);
+        std::vector<float> dists(probe->GetDistances(), probe->GetDistances() + probe->GetDim());
         std::sort(dists.begin(), dists.end());
         float mu_q = 0;
         float sigma_q = 0;
         float q_norm = 0;
         state.QueryMoments(qbuf.data(), static_cast<int64_t>(dim), &mu_q, &sigma_q, &q_norm);
+        q_norm = 1.0F;
         AdaptiveEfState::ComputeFeatures(
             dists, mu_q, sigma_q, q_norm, features.data() + i * kAdaptiveEfFeatureCount);
-        // recall at each rung, resume semantics via force_ef
-        for (uint64_t g = 0; g < ef_grid.size(); ++g) {
-            const std::string force_params =
-                R"({"hgraph": {"ef_search": 100, "adaptive_ef": {"force_ef": )" +
-                std::to_string(ef_grid[g]) + "}}}";
-            auto res = this->KnnSearch(query, kCalibK, force_params, nullptr);
-            int64_t hit = 0;
-            for (int64_t j = 0; j < res->GetDim(); ++j) {
-                hit += gt.count(res->GetIds()[j]) > 0 ? 1 : 0;
+
+        // Recall and work at each rung under the same resume semantics used
+        // by the adaptive runtime policy.
+        for (uint64_t topk_index = 0; topk_index < topk_count; ++topk_index) {
+            const uint64_t topk = state.topks[topk_index];
+            std::unordered_set<int64_t> truth;
+            for (uint64_t j = 0; j < topk; ++j) {
+                truth.insert(ground_truth[i * max_topk + j]);
             }
-            recall_matrix[i * ef_grid.size() + g] =
-                static_cast<float>(hit) / static_cast<float>(kCalibK);
+            for (uint64_t g = 0; g < grid_count; ++g) {
+                const std::string force_params =
+                    R"({"hgraph": {"ef_search": 100, "adaptive_ef": {"force_ef": )" +
+                    std::to_string(ef_grid[g]) + R"(, "ef_cap": )" + std::to_string(state.ef_cap) +
+                    "}}}";
+                auto result =
+                    this->KnnSearch(query, static_cast<int64_t>(topk), force_params, nullptr);
+                const uint64_t index = matrix_index(topk_index, i, g);
+                recall_matrix[index] = recall(result, truth, topk);
+                cost_matrix[index] = distance_count(result);
+            }
         }
     }
 
-    // per-target heads
+    // Split fit, conformal calibration, and final gate rows. The modulo
+    // pattern is balanced across all four noise strata over each 20 rows.
     std::vector<uint64_t> fit_rows;
     std::vector<uint64_t> cal_rows;
+    std::vector<uint64_t> gate_rows;
     for (uint64_t i = 0; i < n; ++i) {
-        (i % 5 == 4 ? cal_rows : fit_rows).push_back(i);
+        if (i % 10 < 6) {
+            fit_rows.push_back(i);
+        } else if (i % 10 < 8) {
+            cal_rows.push_back(i);
+        } else {
+            gate_rows.push_back(i);
+        }
     }
-    state.heads.clear();
-    float mid_spearman = 0;
-    for (float target : state.targets) {
-        std::vector<float> log2_required(n);
-        for (uint64_t i = 0; i < n; ++i) {
-            float req = static_cast<float>(state.ef_cap) * 2.0F;
-            for (uint64_t g = 0; g < ef_grid.size(); ++g) {
-                if (recall_matrix[i * ef_grid.size() + g] >= target) {
-                    req = static_cast<float>(ef_grid[g]);
-                    break;
+    if (fit_rows.empty() or cal_rows.empty() or gate_rows.empty()) {
+        state.disabled_reason = "adaptive_ef calibration split is empty";
+        logger::warn("adaptive_ef: {}", state.disabled_reason);
+        return;
+    }
+
+    // Direct fixed-ef results on untouched gate rows. These cannot be
+    // substituted with force_ef: resume search has already pruned under the
+    // probe ef and is path-dependent.
+    const uint64_t gate_count = gate_rows.size();
+    std::vector<DatasetPtr> gate_queries(gate_count);
+    std::vector<std::unordered_set<int64_t>> gate_truth(topk_count * gate_count);
+    for (uint64_t gate_index = 0; gate_index < gate_count; ++gate_index) {
+        const uint64_t row = gate_rows[gate_index];
+        gate_queries[gate_index] = Dataset::Make();
+        gate_queries[gate_index]
+            ->NumElements(1)
+            ->Dim(static_cast<int64_t>(dim))
+            ->Float32Vectors(calibration_queries.data() + row * dim)
+            ->Owner(false);
+        for (uint64_t topk_index = 0; topk_index < topk_count; ++topk_index) {
+            const uint64_t topk = state.topks[topk_index];
+            auto& truth = gate_truth[topk_index * gate_count + gate_index];
+            for (uint64_t j = 0; j < topk; ++j) {
+                truth.insert(ground_truth[row * max_topk + j]);
+            }
+        }
+    }
+
+    struct FixedGateEvaluation {
+        std::vector<float> recalls;
+        std::vector<double> costs;
+        std::vector<uint8_t> measured;
+    };
+    std::vector<std::unordered_map<uint64_t, FixedGateEvaluation>> fixed_gate_cache(topk_count);
+    for (auto& cache : fixed_gate_cache) {
+        cache.reserve(grid_count * 4);
+    }
+    const auto evaluate_fixed_gate = [&](uint64_t topk_index,
+                                         uint64_t ef,
+                                         int64_t selected_stratum) -> const FixedGateEvaluation& {
+        auto& cache = fixed_gate_cache[topk_index];
+        auto [entry, inserted] = cache.try_emplace(ef);
+        auto& evaluation = entry->second;
+        if (inserted) {
+            evaluation.recalls.resize(gate_count);
+            evaluation.costs.resize(gate_count);
+            evaluation.measured.resize(gate_count, 0);
+        }
+
+        const uint64_t topk = state.topks[topk_index];
+        const std::string fixed_params = R"({"hgraph": {"ef_search": )" + std::to_string(ef) + "}}";
+        for (uint64_t gate_index = 0; gate_index < gate_count; ++gate_index) {
+            const uint64_t row = gate_rows[gate_index];
+            if ((selected_stratum >= 0 and row % 4 != static_cast<uint64_t>(selected_stratum)) or
+                evaluation.measured[gate_index] != 0) {
+                continue;
+            }
+            auto result = this->KnnSearch(
+                gate_queries[gate_index], static_cast<int64_t>(topk), fixed_params, nullptr);
+            evaluation.recalls[gate_index] =
+                recall(result, gate_truth[topk_index * gate_count + gate_index], topk);
+            evaluation.costs[gate_index] = distance_count(result);
+            evaluation.measured[gate_index] = 1;
+        }
+        return evaluation;
+    };
+    for (uint64_t topk_index = 0; topk_index < topk_count; ++topk_index) {
+        for (uint64_t g = 0; g < grid_count; ++g) {
+            evaluate_fixed_gate(topk_index, ef_grid[g], -1);
+        }
+    }
+
+    const auto grid_index_for = [&ef_grid](uint64_t ef) {
+        auto it = std::lower_bound(ef_grid.begin(), ef_grid.end(), ef);
+        if (it == ef_grid.end()) {
+            return static_cast<uint64_t>(ef_grid.size() - 1);
+        }
+        return static_cast<uint64_t>(std::distance(ef_grid.begin(), it));
+    };
+
+    uint64_t enabled_combinations = 0;
+    float min_spearman = 1.0F;
+    for (uint64_t topk_index = 0; topk_index < topk_count; ++topk_index) {
+        const uint64_t topk = state.topks[topk_index];
+        for (float target : state.targets) {
+            std::vector<float> log2_required(n);
+            for (uint64_t i = 0; i < n; ++i) {
+                log2_required[i] =
+                    static_cast<float>(std::log2(static_cast<double>(state.ef_cap)) + 1.0);
+                for (uint64_t g = 0; g < grid_count; ++g) {
+                    if (recall_matrix[matrix_index(topk_index, i, g)] >= target) {
+                        log2_required[i] =
+                            static_cast<float>(std::log2(static_cast<double>(ef_grid[g])));
+                        break;
+                    }
                 }
             }
-            log2_required[i] = std::log2(req);
-        }
-        auto head =
-            AdaptiveEfState::TrainHead(features, log2_required, fit_rows, cal_rows, target);
-        // predictability gate on the calibration split (pre-margin predictions)
-        std::vector<float> preds;
-        std::vector<float> labels;
-        for (auto i : cal_rows) {
-            double acc = head.weights[2 * kAdaptiveEfFeatureCount];
-            for (int64_t j = 0; j < kAdaptiveEfFeatureCount; ++j) {
-                double z = (features[i * kAdaptiveEfFeatureCount + j] - head.feat_mean[j]) /
-                           head.feat_stdev[j];
-                acc += head.weights[j] * z +
-                       head.weights[kAdaptiveEfFeatureCount + j] * z * z;
+
+            auto head = AdaptiveEfState::TrainHead(
+                features, log2_required, fit_rows, cal_rows, target, topk);
+            std::vector<float> predictions;
+            std::vector<float> labels;
+            predictions.reserve(gate_count);
+            labels.reserve(gate_count);
+            for (auto row : gate_rows) {
+                predictions.push_back(static_cast<float>(AdaptiveEfState::PredictLog2FromFeatures(
+                    head, features.data() + row * kAdaptiveEfFeatureCount)));
+                labels.push_back(log2_required[row]);
             }
-            preds.push_back(static_cast<float>(acc));
-            labels.push_back(log2_required[i]);
+            const float spearman = AdaptiveEfState::SpearmanCorrelation(predictions, labels);
+            min_spearman = std::min(min_spearman, spearman);
+            if (spearman < 0.5F) {
+                std::fill(std::begin(head.alpha_enabled), std::end(head.alpha_enabled), false);
+                logger::warn("adaptive_ef disabled for topk={} target={}: spearman={:.3f} < 0.5",
+                             topk,
+                             target,
+                             spearman);
+                state.heads.emplace_back(std::move(head));
+                continue;
+            }
+
+            for (uint64_t alpha_index = 0; alpha_index < 3; ++alpha_index) {
+                const float alpha = supported_alphas[alpha_index];
+                uint64_t adaptive_success = 0;
+                double adaptive_cost = 0;
+                uint64_t stratum_success[4] = {0, 0, 0, 0};
+                double stratum_adaptive_cost[4] = {0, 0, 0, 0};
+
+                for (uint64_t gate_index = 0; gate_index < gate_count; ++gate_index) {
+                    const uint64_t row = gate_rows[gate_index];
+                    const uint64_t predicted_ef =
+                        state.PredictFromFeatures(head,
+                                                  features.data() + row * kAdaptiveEfFeatureCount,
+                                                  alpha,
+                                                  kProbeEf,
+                                                  state.ef_cap);
+                    const uint64_t g = grid_index_for(predicted_ef);
+                    const uint64_t index = matrix_index(topk_index, row, g);
+                    const bool passed = recall_matrix[index] >= target;
+                    adaptive_success += passed ? 1 : 0;
+                    adaptive_cost += cost_matrix[index];
+                    const uint64_t stratum = row % 4;
+                    stratum_success[stratum] += passed ? 1 : 0;
+                    stratum_adaptive_cost[stratum] += cost_matrix[index];
+                }
+
+                const auto select_matched_fixed = [&](uint64_t required_success,
+                                                      int64_t selected_stratum) {
+                    const auto summarize = [&](uint64_t ef) {
+                        const auto& evaluation =
+                            evaluate_fixed_gate(topk_index, ef, selected_stratum);
+                        AdaptiveEfFixedGatePoint point;
+                        for (uint64_t gate_index = 0; gate_index < gate_count; ++gate_index) {
+                            const uint64_t row = gate_rows[gate_index];
+                            if (selected_stratum >= 0 and
+                                row % 4 != static_cast<uint64_t>(selected_stratum)) {
+                                continue;
+                            }
+                            point.success += evaluation.recalls[gate_index] >= target ? 1 : 0;
+                            point.total_cost += evaluation.costs[gate_index];
+                        }
+                        return point;
+                    };
+                    return MatchAdaptiveEfFixedGate(required_success, ef_grid, summarize);
+                };
+
+                const auto fixed_match = select_matched_fixed(adaptive_success, -1);
+                const double fixed_mean_cost =
+                    fixed_match.total_cost / static_cast<double>(gate_count);
+                const double adaptive_mean_cost = adaptive_cost / static_cast<double>(gate_count);
+                bool fixed_trustworthy = fixed_match.trustworthy;
+                // A relative gate is meaningful only when fixed ef reaches at least the same
+                // observed pass count. If no fixed ef up to the cap matches adaptive quality,
+                // reject instead of comparing costs at different pass rates.
+                bool enabled =
+                    AdaptiveEfFixedGatePasses(adaptive_cost, fixed_match, kMinRelativeSaving);
+
+                // Compare every synthetic difficulty stratum with an integer-refined direct
+                // fixed-ef result that reaches at least the same observed target pass count. This
+                // prevents a favorable aggregate mix from hiding a quality or cost regression.
+                if (enabled) {
+                    for (uint64_t stratum = 0; stratum < 4; ++stratum) {
+                        const auto fixed_stratum = select_matched_fixed(
+                            stratum_success[stratum], static_cast<int64_t>(stratum));
+                        fixed_trustworthy = fixed_trustworthy and fixed_stratum.trustworthy;
+                        enabled =
+                            enabled and AdaptiveEfFixedGatePasses(
+                                            stratum_adaptive_cost[stratum], fixed_stratum, 0.0);
+                    }
+                }
+
+                head.alpha_enabled[alpha_index] = enabled;
+                if (enabled) {
+                    ++enabled_combinations;
+                    logger::info(
+                        "adaptive_ef gate passed: topk={} target={} alpha={} "
+                        "pass={:.3f} mean_cost={:.0f} matched_fixed_pass={:.3f} "
+                        "fixed_ef={} fixed_cost={:.0f} fixed_matched={} "
+                        "fixed_trustworthy={}",
+                        topk,
+                        target,
+                        alpha,
+                        static_cast<double>(adaptive_success) / static_cast<double>(gate_count),
+                        adaptive_mean_cost,
+                        static_cast<double>(fixed_match.success) / static_cast<double>(gate_count),
+                        fixed_match.ef,
+                        fixed_mean_cost,
+                        fixed_match.matched,
+                        fixed_trustworthy);
+                } else {
+                    logger::warn(
+                        "adaptive_ef gate rejected: topk={} target={} alpha={} "
+                        "pass={:.3f} mean_cost={:.0f} matched_fixed_pass={:.3f} "
+                        "fixed_ef={} fixed_cost={:.0f} fixed_matched={} "
+                        "fixed_trustworthy={}",
+                        topk,
+                        target,
+                        alpha,
+                        static_cast<double>(adaptive_success) / static_cast<double>(gate_count),
+                        adaptive_mean_cost,
+                        static_cast<double>(fixed_match.success) / static_cast<double>(gate_count),
+                        fixed_match.ef,
+                        fixed_mean_cost,
+                        fixed_match.matched,
+                        fixed_trustworthy);
+                }
+            }
+            state.heads.emplace_back(std::move(head));
         }
-        float sp = AdaptiveEfState::SpearmanCorrelation(preds, labels);
-        if (std::abs(target - state.targets[state.targets.size() / 2]) < 1e-4F) {
-            mid_spearman = sp;
-        }
-        state.heads.emplace_back(std::move(head));
+        // All target/alpha/stratum comparisons for this top-k are complete. Release the
+        // per-query direct-search cache before refining the next top-k.
+        fixed_gate_cache[topk_index].clear();
+        fixed_gate_cache[topk_index].rehash(0);
     }
-    state.spearman = mid_spearman;
-    if (mid_spearman < 0.5F) {
-        state.calibrated = false;
-        state.disabled_reason = fmt::format(
-            "difficulty not predictable on this index (spearman={:.3f} < 0.5)", mid_spearman);
-        state.heads.clear();
+
+    state.spearman = min_spearman;
+    state.calibrated = enabled_combinations > 0;
+    if (not state.calibrated) {
+        state.disabled_reason = "no topk/target/alpha combination passed the adaptive_ef gate";
         logger::warn("adaptive_ef disabled: {}", state.disabled_reason);
         return;
     }
-    state.calibrated = true;
-    logger::info("adaptive_ef calibrated: samples={}, spearman={:.3f}, targets={}",
-                 n,
-                 mid_spearman,
-                 state.targets.size());
+    logger::info(
+        "adaptive_ef calibrated: samples={}, topks={}, targets={}, enabled_combinations={}, "
+        "min_spearman={:.3f}",
+        n,
+        state.topks.size(),
+        state.targets.size(),
+        enabled_combinations,
+        state.spearman);
 }
 
 }  // namespace vsag

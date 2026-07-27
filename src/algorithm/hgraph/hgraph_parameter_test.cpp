@@ -138,6 +138,18 @@ generate_hgraph_param(const HGraphDefaultParam& param) {
                        param.support_force_remove);
 }
 
+vsag::JsonType
+generate_adaptive_hgraph_param() {
+    HGraphDefaultParam default_param;
+    auto json = vsag::JsonType::Parse(generate_hgraph_param(default_param));
+    json["adaptive_ef"]["enable"].SetBool(true);
+    json["adaptive_ef"]["sample_count"].SetUint64(100);
+    json["adaptive_ef"]["ef_cap"].SetUint64(5000);
+    json["adaptive_ef"]["targets"].SetString("0.9,0.95,0.99");
+    json["adaptive_ef"]["topks"].SetString("1,10,100");
+    return json;
+}
+
 // clang-format off
 TEST_CASE("HGraph Parameters CheckCompatibility", "[ut][HGraphParameter][CheckCompatibility]") {
     SECTION("wrong parameter type") {
@@ -298,6 +310,176 @@ TEST_CASE("HGraph Search Parameters reject ef_search integer overflow",
           "[ut][HGraphSearchParameters][ef_search]") {
     REQUIRE_THROWS(vsag::HGraphSearchParameters::FromJson(
         R"({"hgraph": {"ef_search": 9223372036854775808}})"));
+}
+
+TEST_CASE("HGraph adaptive ef build parameters parse and round trip",
+          "[ut][HGraphParameter][adaptive_ef]") {
+    const vsag::HGraphParameter defaults;
+    REQUIRE((defaults.adaptive_ef_topks == std::vector<uint64_t>{100}));
+
+    const auto json = generate_adaptive_hgraph_param();
+    const vsag::HGraphParameter param(json);
+
+    REQUIRE(param.adaptive_ef_enable);
+    REQUIRE(param.adaptive_ef_sample_count == 100);
+    REQUIRE(param.adaptive_ef_cap == 5000);
+    REQUIRE((param.adaptive_ef_targets == std::vector<float>{0.9F, 0.95F, 0.99F}));
+    REQUIRE((param.adaptive_ef_topks == std::vector<uint64_t>{1, 10, 100}));
+
+    const auto serialized = param.ToJson();
+    REQUIRE(serialized["adaptive_ef"]["targets"].GetString() == "0.900000,0.950000,0.990000");
+    REQUIRE(serialized["adaptive_ef"]["topks"].GetString() == "1,10,100");
+
+    const vsag::HGraphParameter round_trip(serialized);
+    REQUIRE(round_trip.adaptive_ef_targets == param.adaptive_ef_targets);
+    REQUIRE(round_trip.adaptive_ef_topks == param.adaptive_ef_topks);
+}
+
+TEST_CASE("HGraph adaptive ef build parameters validate bounds",
+          "[ut][HGraphParameter][adaptive_ef]") {
+    SECTION("sample_count must be at least 100") {
+        auto json = generate_adaptive_hgraph_param();
+        json["adaptive_ef"]["sample_count"].SetUint64(99);
+        REQUIRE_THROWS(vsag::HGraphParameter(json));
+    }
+
+    SECTION("ef_cap must be representable and at least 100") {
+        auto json = generate_adaptive_hgraph_param();
+        json["adaptive_ef"]["ef_cap"].SetUint64(99);
+        REQUIRE_THROWS(vsag::HGraphParameter(json));
+
+        json = generate_adaptive_hgraph_param();
+        json["adaptive_ef"]["ef_cap"].SetUint64(9223372036854775808ULL);
+        REQUIRE_THROWS(vsag::HGraphParameter(json));
+    }
+
+    SECTION("targets must be finite, in range, sorted, and unique") {
+        for (const auto* targets :
+             {"", "nan", "0", "1.01", "0.95,0.9", "0.9,0.9", "0.9,0.90001", "0.9,", "0.9,broken"}) {
+            DYNAMIC_SECTION("targets=" << targets) {
+                auto json = generate_adaptive_hgraph_param();
+                json["adaptive_ef"]["targets"].SetString(targets);
+                REQUIRE_THROWS(vsag::HGraphParameter(json));
+            }
+        }
+        auto json = generate_adaptive_hgraph_param();
+        std::string targets;
+        for (uint64_t i = 0; i < 65; ++i) {
+            targets += (i == 0 ? "" : ",") + std::to_string(0.90 + i * 0.001);
+        }
+        json["adaptive_ef"]["targets"].SetString(targets);
+        REQUIRE_THROWS(vsag::HGraphParameter(json));
+    }
+
+    SECTION("topks must be in range, sorted, and unique") {
+        for (const auto* topks : {"", "0", "101", "10,1", "10,10", "10,", "10,broken"}) {
+            DYNAMIC_SECTION("topks=" << topks) {
+                auto json = generate_adaptive_hgraph_param();
+                json["adaptive_ef"]["topks"].SetString(topks);
+                REQUIRE_THROWS(vsag::HGraphParameter(json));
+            }
+        }
+        auto json = generate_adaptive_hgraph_param();
+        std::string topks;
+        for (uint64_t i = 1; i <= 65; ++i) {
+            topks += (i == 1 ? "" : ",") + std::to_string(i);
+        }
+        json["adaptive_ef"]["topks"].SetString(topks);
+        REQUIRE_THROWS(vsag::HGraphParameter(json));
+    }
+}
+
+TEST_CASE("HGraph adaptive ef search parameters validate",
+          "[ut][HGraphSearchParameters][adaptive_ef]") {
+    SECTION("defaults preserve non-adaptive search") {
+        const auto params =
+            vsag::HGraphSearchParameters::FromJson(R"({"hgraph": {"ef_search": 100}})");
+        REQUIRE(params.adaptive_ef_target_recall == 0.0F);
+        REQUIRE(params.adaptive_ef_alpha == 0.05F);
+        REQUIRE(params.adaptive_ef_cap == 0);
+        REQUIRE(params.adaptive_ef_force == 0);
+    }
+
+    SECTION("supported target, alpha, cap, and force values parse") {
+        auto params = vsag::HGraphSearchParameters::FromJson(R"({
+            "hgraph": {
+                "ef_search": 100,
+                "adaptive_ef": {"target_recall": 1.0, "alpha": 0.2, "ef_cap": 100}
+            }
+        })");
+        REQUIRE(params.adaptive_ef_target_recall == 1.0F);
+        REQUIRE(params.adaptive_ef_alpha == 0.2F);
+        REQUIRE(params.adaptive_ef_cap == 100);
+
+        params = vsag::HGraphSearchParameters::FromJson(R"({
+            "hgraph": {
+                "ef_search": 100,
+                "adaptive_ef": {"target_recall": 0.9, "alpha": 0.1}
+            }
+        })");
+        REQUIRE(params.adaptive_ef_alpha == 0.1F);
+
+        params = vsag::HGraphSearchParameters::FromJson(R"({
+            "hgraph": {
+                "ef_search": 100,
+                "adaptive_ef": {"force_ef": 100, "ef_cap": 9223372036854775807}
+            }
+        })");
+        REQUIRE(params.adaptive_ef_force == 100);
+        REQUIRE(params.adaptive_ef_cap == 9223372036854775807ULL);
+    }
+
+    SECTION("target_recall must be finite and in range") {
+        for (const auto* target : {"0", "-0.1", "1.01", "1e39"}) {
+            DYNAMIC_SECTION("target_recall=" << target) {
+                REQUIRE_THROWS(vsag::HGraphSearchParameters::FromJson(fmt::format(
+                    R"({{"hgraph": {{"ef_search": 100, "adaptive_ef": {{"target_recall": {}}}}}}})",
+                    target)));
+            }
+        }
+    }
+
+    SECTION("alpha must be an explicitly supported value") {
+        for (const auto* alpha : {"0", "0.15", "1", "1e39"}) {
+            DYNAMIC_SECTION("alpha=" << alpha) {
+                REQUIRE_THROWS(vsag::HGraphSearchParameters::FromJson(fmt::format(
+                    R"({{"hgraph": {{"ef_search": 100, "adaptive_ef": {{"alpha": {}}}}}}})",
+                    alpha)));
+            }
+        }
+    }
+
+    SECTION("ef_cap and force_ef must be bounded unsigned integers") {
+        for (const auto* field : {"ef_cap", "force_ef"}) {
+            for (const auto* value : {"-1", "99", "9223372036854775808"}) {
+                DYNAMIC_SECTION(field << "=" << value) {
+                    REQUIRE_THROWS(vsag::HGraphSearchParameters::FromJson(fmt::format(
+                        R"({{"hgraph": {{"ef_search": 100, "adaptive_ef": {{"{}": {}}}}}}})",
+                        field,
+                        value)));
+                }
+            }
+        }
+    }
+
+    SECTION("target_recall and force_ef are mutually exclusive") {
+        REQUIRE_THROWS(vsag::HGraphSearchParameters::FromJson(R"({
+            "hgraph": {
+                "ef_search": 100,
+                "adaptive_ef": {"target_recall": 0.9, "force_ef": 100}
+            }
+        })"));
+    }
+
+    SECTION("adaptive_ef object must select a mode") {
+        for (const auto* adaptive_ef :
+             {R"({})", R"({"alpha": 0.05})", R"({"ef_cap": 100})", R"({"force_ef": 0})"}) {
+            DYNAMIC_SECTION("adaptive_ef=" << adaptive_ef) {
+                REQUIRE_THROWS(vsag::HGraphSearchParameters::FromJson(fmt::format(
+                    R"({{"hgraph":{{"ef_search":100,"adaptive_ef":{}}}}})", adaptive_ef)));
+            }
+        }
+    }
 }
 
 TEST_CASE("HGraph maps label_remap_type to inner index parameter", "[ut][HGraphParameter]") {

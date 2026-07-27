@@ -39,6 +39,7 @@ HGraph 的构建参数使用通用的 `index_param` 键（参见 `examples/cpp/1
 | `max_degree` | 16~48 | 每节点最大出边数 |
 | `ef_construction` | 200~500 | 构建阶段候选集大小，越大召回越高、构建越慢 |
 | `base_quantization_type` | `fp32` / `fp16` / `bf16` / `sq8` / `sq4` / `pq` | 主存储的量化策略 —— 支持的全部取值见[量化章节](../quantization/README.md) |
+| `adaptive_ef` | 关闭或 object | 兼容用的 Build 阶段校准入口；推荐对已构建或加载的图调用 `Index::EnableAdaptiveEf`，参数及受限支持域见[自适应 ef](../indexes/hgraph.md#自适应-ef) |
 
 搜索时：
 
@@ -50,6 +51,11 @@ HGraph 的构建参数使用通用的 `index_param` 键（参见 `examples/cpp/1
 默认 `0.0`）。当取值 `> 0` 且当前请求的 filter 的 `ValidRatio()` 不超过该
 阈值时，HGraph 会跳过图遍历，直接在通过过滤的 id 上做精确暴扫。详见
 [HGraph 索引文档](../indexes/hgraph.md#高选择性过滤下的暴搜回退brute_force_threshold)。
+
+`hgraph` 搜索参数也接受带有已校准 `target_recall` 与 `alpha` 的 `adaptive_ef`
+对象。索引必须通过 `Index::EnableAdaptiveEf` 或兼容用的 Build 自动入口训练出匹配的
+top-k 和 target；不受支持或未通过 gate 的组合会 fail-closed。详见
+[自适应 ef](../indexes/hgraph.md#自适应-ef)。
 
 ## LazyHGraph
 

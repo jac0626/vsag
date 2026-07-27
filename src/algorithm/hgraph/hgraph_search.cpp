@@ -82,6 +82,8 @@ HGraph::KnnSearch(const DatasetPtr& query,
 
     auto params = HGraphSearchParameters::FromJson(parameters);
     ctx.rabitq_error_rate = params.rabitq_error_rate;
+    CHECK_ARGUMENT(params.adaptive_ef_target_recall <= 0.0F and params.adaptive_ef_force == 0,
+                   "adaptive_ef is not supported by iterator KNN search");
     CHECK_ARGUMENT(  // NOLINT
         params.ef_search >= 1,
         fmt::format("ef_search({}) must be at least 1", params.ef_search));
@@ -393,6 +395,9 @@ HGraph::SearchWithRequest(const SearchRequest& request) const {
 
     auto params = HGraphSearchParameters::FromJson(request.params_str_);
     ctx.rabitq_error_rate = params.rabitq_error_rate;
+    const bool adaptive_requested = params.adaptive_ef_target_recall > 0.0F;
+    CHECK_ARGUMENT(not is_range or (not adaptive_requested and params.adaptive_ef_force == 0),
+                   "adaptive_ef is supported only by KNN search");
 
     CHECK_ARGUMENT(  // NOLINT
         params.ef_search >= 1,
@@ -400,11 +405,15 @@ HGraph::SearchWithRequest(const SearchRequest& request) const {
 
     std::shared_lock<std::shared_mutex> force_remove_rlock;
     std::shared_lock<std::shared_mutex> shared_lock;
+    std::shared_lock<std::shared_mutex> adaptive_ef_rlock;
     if (!this->immutable_.load(std::memory_order_acquire)) {
         if (this->support_force_remove()) {
             force_remove_rlock = std::shared_lock<std::shared_mutex>(this->force_remove_mutex_);
         }
         shared_lock = this->acquire_global_read_lock();
+    }
+    if (adaptive_requested or params.adaptive_ef_force > 0) {
+        adaptive_ef_rlock = std::shared_lock<std::shared_mutex>(this->adaptive_ef_mutex_);
     }
     k = std::min(k, GetNumElements());
 
@@ -487,6 +496,8 @@ HGraph::SearchWithRequest(const SearchRequest& request) const {
     } else {
         search_param.ef = std::max(params.ef_search, k);
         if (params.adaptive_ef_force > 0) {
+            CHECK_ARGUMENT(params.parallel_search_thread_count == 1,
+                           "adaptive_ef force_ef does not support parallel search");
             const uint64_t ef_min = search_param.ef;
             uint64_t cap = params.adaptive_ef_cap;
             if (cap == 0) {
@@ -494,44 +505,74 @@ HGraph::SearchWithRequest(const SearchRequest& request) const {
                                                     : params.adaptive_ef_force;
             }
             const uint64_t forced = std::min(std::max(params.adaptive_ef_force, ef_min), cap);
-            search_param.adaptive_ef_hook =
-                [forced](const std::vector<float>&) -> uint64_t { return forced; };
-        } else if (params.adaptive_ef_target_recall > 0.0F) {
+            search_param.adaptive_ef_hook = [forced](const std::vector<float>&) -> uint64_t {
+                return forced;
+            };
+        } else if (adaptive_requested) {
+            CHECK_ARGUMENT(request.filter_ == nullptr and not params.use_extra_info_filter and
+                               not request.enable_attribute_filter_,
+                           "adaptive_ef does not currently support filters");
+            CHECK_ARGUMENT(params.parallel_search_thread_count == 1,
+                           "adaptive_ef does not currently support parallel search");
+            CHECK_ARGUMENT(params.hops_limit == std::numeric_limits<uint32_t>::max(),
+                           "adaptive_ef does not currently support hops_limit");
+            CHECK_ARGUMENT(not params.enable_time_record,
+                           "adaptive_ef does not currently support search timeout");
+            CHECK_ARGUMENT(not params.rabitq_one_bit_search,
+                           "adaptive_ef does not currently support rabitq one-bit search");
+            CHECK_ARGUMENT(params.topk_factor <= 0.0F,
+                           "adaptive_ef does not currently support topk_factor");
+            CHECK_ARGUMENT(params.brute_force_threshold == 0.0F,
+                           "adaptive_ef does not currently support brute_force_threshold");
             if (adaptive_ef_state_ == nullptr or not adaptive_ef_state_->calibrated) {
-                throw VsagException(
-                    ErrorType::INVALID_ARGUMENT,
-                    fmt::format("adaptive_ef is not available on this index: {}",
-                                adaptive_ef_state_ == nullptr
-                                    ? "index was not built with adaptive_ef enabled"
-                                    : adaptive_ef_state_->disabled_reason));
+                throw VsagException(ErrorType::INVALID_ARGUMENT,
+                                    fmt::format("adaptive_ef is not available on this index: {}",
+                                                adaptive_ef_state_ == nullptr
+                                                    ? "adaptive_ef has not been trained"
+                                                    : adaptive_ef_state_->disabled_reason));
             }
-            const auto* head =
-                adaptive_ef_state_->FindHead(params.adaptive_ef_target_recall);
+            const auto* head = adaptive_ef_state_->FindHead(static_cast<uint64_t>(k),
+                                                            params.adaptive_ef_target_recall);
             if (head == nullptr) {
                 throw VsagException(
                     ErrorType::INVALID_ARGUMENT,
-                    fmt::format("adaptive_ef target_recall {} is not calibrated on this index",
+                    fmt::format("adaptive_ef topk {} target_recall {} is not calibrated",
+                                k,
                                 params.adaptive_ef_target_recall));
             }
+            const int alpha_index = AdaptiveEfState::AlphaIndex(params.adaptive_ef_alpha);
+            CHECK_ARGUMENT(alpha_index >= 0 and head->alpha_enabled[alpha_index],
+                           fmt::format("adaptive_ef topk {} target_recall {} alpha {} is not "
+                                       "calibrated",
+                                       k,
+                                       params.adaptive_ef_target_recall,
+                                       params.adaptive_ef_alpha));
+            CHECK_ARGUMENT(not adaptive_ef_state_->ef_grid.empty(),
+                           "adaptive_ef calibration has no ef grid");
+            const uint64_t probe_ef = adaptive_ef_state_->ef_grid.front();
+            CHECK_ARGUMENT(static_cast<uint64_t>(k) <= probe_ef and
+                               static_cast<uint64_t>(params.ef_search) <= probe_ef,
+                           fmt::format("adaptive_ef requires topk and ef_search <= {}", probe_ef));
+            CHECK_ARGUMENT(
+                params.adaptive_ef_cap == 0 or params.adaptive_ef_cap == adaptive_ef_state_->ef_cap,
+                "adaptive_ef runtime ef_cap override is not calibrated");
+            search_param.ef = probe_ef;
             float mu_q = 0;
             float sigma_q = 0;
             float q_norm = 0;
-            adaptive_ef_state_->QueryMoments(static_cast<const float*>(raw_query),
-                                             this->dim_,
-                                             &mu_q,
-                                             &sigma_q,
-                                             &q_norm);
+            adaptive_ef_state_->QueryMoments(
+                static_cast<const float*>(raw_query), this->dim_, &mu_q, &sigma_q, &q_norm);
             // calibration queries are stored (normalized) vectors, so the norm
             // feature carries no signal; keep it constant on both sides
             q_norm = 1.0F;
             const float alpha = params.adaptive_ef_alpha;
             const uint64_t ef_min = search_param.ef;
-            const uint64_t ef_cap =
-                params.adaptive_ef_cap > 0 ? params.adaptive_ef_cap : adaptive_ef_state_->ef_cap;
+            const uint64_t ef_cap = adaptive_ef_state_->ef_cap;
+            const auto* adaptive_state = adaptive_ef_state_.get();
             search_param.adaptive_ef_hook =
-                [head, mu_q, sigma_q, q_norm, alpha, ef_min, ef_cap](
+                [adaptive_state, head, mu_q, sigma_q, q_norm, alpha, ef_min, ef_cap](
                     const std::vector<float>& dists_asc) -> uint64_t {
-                return AdaptiveEfState::Predict(
+                return adaptive_state->Predict(
                     *head, dists_asc, mu_q, sigma_q, q_norm, alpha, ef_min, ef_cap);
             };
         }

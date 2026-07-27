@@ -101,6 +101,11 @@ public:
         SAFE_CALL(return this->inner_index_->Tune(parameters, disable_future_tuning));
     }
 
+    tl::expected<bool, Error>
+    EnableAdaptiveEf(const std::string& parameters) override {
+        SAFE_CALL(return this->inner_index_->EnableAdaptiveEf(parameters));
+    }
+
     tl::expected<float, Error>
     CalcDistanceById(const DatasetPtr& vector,
                      int64_t id,

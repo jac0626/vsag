@@ -74,10 +74,11 @@ public:
 
     std::string name;
 
-    // adaptive ef (declarative recall): calibrated inside Build() when enabled
+    // adaptive ef (declarative recall): trained explicitly or by the Build() compatibility path
     bool adaptive_ef_enable{false};
     uint64_t adaptive_ef_sample_count{1000};
     std::vector<float> adaptive_ef_targets{0.90F, 0.95F, 0.99F};
+    std::vector<uint64_t> adaptive_ef_topks{100};
     uint64_t adaptive_ef_cap{5000};
 };
 
@@ -102,8 +103,7 @@ public:
     FilterSearchSkipStrategyType skip_strategy_type{
         FilterSearchSkipStrategyType::DETERMINISTIC_ACCUMULATIVE};
 
-    // adaptive ef (declarative recall): requires an index built with the
-    // adaptive_ef build parameter; see adaptive_ef.h
+    // adaptive ef (declarative recall): requires a trained adaptive_ef state; see adaptive_ef.h
     float adaptive_ef_target_recall{0.0F};
     float adaptive_ef_alpha{0.05F};
     uint64_t adaptive_ef_cap{0};  // 0: use the calibrated default

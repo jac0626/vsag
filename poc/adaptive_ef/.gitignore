@@ -1,0 +1,10 @@
+/adaptive_ef_poc
+/cosine_matrix_eval
+/full_eval
+/glove_matrix_eval
+/smoke_formal
+/xdata_eval
+/*.csv
+/*.idx
+/work/
+/work_md64/

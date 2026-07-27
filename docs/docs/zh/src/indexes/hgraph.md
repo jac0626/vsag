@@ -73,6 +73,7 @@ auto result = index->KnnSearch(
 | `support_force_remove` | bool | `false` | 是否启用 `RemoveMode::FORCE_REMOVE` 及其额外同步 |
 | `store_raw_vector` | bool | `false` | 除量化副本外再保留原始向量（`cosine` 场景有用） |
 | `use_elp_optimizer` | bool | `false` | 构建完成后自动调优检索参数 |
+| `adaptive_ef` | object | 关闭 | 兼容用的 `Build` 阶段自动校准入口；推荐显式后训练，见[自适应 ef](#自适应-ef) |
 | `base_io_type` / `precise_io_type` | string | `"block_memory_io"` | 存储后端（`memory_io`、`block_memory_io`、`buffer_io`、`async_io`、`mmap_io`） |
 | `base_file_path` / `precise_file_path` | string | — | 磁盘后端时的文件路径（使用 `mmap_io` / `async_io` / `buffer_io` 时必填） |
 | `hgraph_init_capacity` | int | `100` | 初始容量提示（不会限制最终规模） |
@@ -213,11 +214,90 @@ base->NumElements(num_vectors)->Dim(dim)->Ids(ids)
 | `brute_force_threshold` | float | `0.0` | 选择率感知的暴搜回退开关。当取值 `> 0` 且当前 filter 的 `ValidRatio()` 小于等于 `brute_force_threshold` 时，搜索会**完全跳过图遍历**，直接在通过过滤的 id 上用最佳精度的 flatten 编码做一次暴力扫描（细节见下一节）。取值范围 `[0.0, 1.0]`；默认 `0.0` 表示关闭，保持原有行为。 |
 | `rabitq_one_bit_search` | bool | `false` | 启用 RaBitQ filter/lower-bound 路径；对 x+y split 索引会使用全部 x 个 filter bits，详见 [RaBitQ x+y Split](../quantization/rabitq_split.md)。 |
 | `rabitq_error_rate` | float | 索引默认值 | 本次搜索使用的正数 lower-bound 误差倍率；调整它不需要重建 split 索引。 |
+| `adaptive_ef` | object | 关闭 | 请求已校准的召回目标和风险水平，见[自适应 ef](#自适应-ef) |
 
 ```cpp
 auto result = index->KnnSearch(
     query, topk, R"({"hgraph": {"ef_search": 200}})").value();
 ```
+
+### 自适应 ef
+
+自适应 ef 先用前 100 个搜索候选预测当前查询还需扩展多远，再从同一次图遍历继续到
+校准后的 `ef`。推荐先构建或反序列化一次图索引，再在现有索引上显式训练：
+
+```cpp
+auto trained = index->EnableAdaptiveEf(R"({
+    "sample_count": 1000,
+    "ef_cap": 5000,
+    "targets": "0.90,0.95,0.99",
+    "topks": "10,50,100"
+})");
+if (!trained.has_value()) {
+    // 配置无效、索引不支持或训练失败。
+}
+// 至少一个 top-k/target/alpha 组合通过时，trained.value() 为 true。
+```
+
+该调用不会重建图，因此可以加载已序列化的基础索引，训练后再保存带 adaptive 状态的
+索引。为保持兼容，也可以继续把相同配置放在 `index_param.adaptive_ef` 下，让
+`Build` 自动训练：
+
+```json
+{
+    "dtype": "float32",
+    "metric_type": "cosine",
+    "dim": 128,
+    "index_param": {
+        "base_quantization_type": "fp32",
+        "adaptive_ef": {
+            "enable": true,
+            "sample_count": 1000,
+            "ef_cap": 5000,
+            "targets": "0.90,0.95,0.99",
+            "topks": "10,50,100"
+        }
+    }
+}
+```
+
+查询时，`target_recall` 选择上述召回目标，`alpha` 选择允许的校准失配概率
+（`0.2`、`0.1` 或 `0.05`）：
+
+```json
+{
+    "hgraph": {
+        "ef_search": 100,
+        "adaptive_ef": {"target_recall": 0.95, "alpha": 0.05}
+    }
+}
+```
+
+每个 top-k、target 与 alpha 组合独立启用。在未参与拟合的 gate 数据上，校准会对
+稀疏训练网格做整数级细化，并直接测量达到至少相同目标达标率的固定-ef 策略，避免
+粗粒度 ef 档位高估固定基线成本。adaptive ef 的距离计算数必须至少降低 10%，并且
+在每个合成查询难度分层中，相同达标率下都不能发生计算成本退化。如果测得的固定-ef
+达标数或工作量违背细化所需的单调趋势，该组合会 fail-closed；如果 `ef_cap` 内没有
+固定 ef 达到 adaptive 的达标数，同样直接拒绝，绝不跨达标率比较成本。任一条件失败
+时，该组合会返回参数错误，不会静默回退。校准查询来自对存储向量的扰动，因此通过
+这一相对性能门禁并不保证另一种线上查询分布也满足目标；上线前仍需用有代表性的
+真实查询验证。
+
+当前实现刻意限制在以下支持域：
+
+- `dtype: "float32"`、`metric_type: "cosine"`、FP32 基础量化，且不启用精排；
+- 仅支持非迭代器 KNN；top-k 必须列在 `topks` 中，且 top-k 与 `ef_search` 均不得超过 100；
+- 不支持 filter、属性或 extra-info 过滤、并行搜索、`hops_limit`、超时、
+  `rabitq_one_bit_search`、`topk_factor` 或 `brute_force_threshold`。
+
+校准会在配置的样本、top-k 与目标上执行精确搜索和图搜索，还会评估稀疏 ef 网格，
+并在 gate 行上执行带缓存的直接搜索细化，因此 `EnableAdaptiveEf` 是同步且可能耗时
+的操作。细化在每段稀疏档位间采用对数级搜索，不会密集扫描每个整数 ef。不要让它与
+索引写操作并发执行，并且当前不支持带已删除向量的索引。`Add`、`Remove`、
+`UpdateVector`、`Merge` 和 `Tune` 会使校准策略失效；索引稳定后再次调用
+`EnableAdaptiveEf` 即可，无需重建图。失效后仍可使用固定 `ef_search`。旧版
+version-1 自适应模型会以 fail-closed 方式加载，也可直接调用 `EnableAdaptiveEf`
+升级。adaptive 状态只能使用当前序列化格式持久化；旧版 v0.14 序列化会明确拒绝。
 
 ### 高选择性过滤下的暴搜回退（`brute_force_threshold`）
 

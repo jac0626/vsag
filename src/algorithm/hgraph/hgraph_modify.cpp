@@ -22,6 +22,9 @@ uint32_t
 HGraph::Remove(const std::vector<int64_t>& ids, RemoveMode mode) {
     uint32_t delete_count = 0;
     if (mode == RemoveMode::MARK_REMOVE) {
+        if (not ids.empty()) {
+            this->invalidate_adaptive_ef("index changed after adaptive_ef calibration");
+        }
         std::scoped_lock label_lock(this->label_lookup_mutex_);
         delete_count = this->label_table_->MarkRemove(ids);
         delete_count_ += delete_count;
@@ -32,6 +35,9 @@ HGraph::Remove(const std::vector<int64_t>& ids, RemoveMode mode) {
         CHECK_ARGUMENT(this->support_force_remove(),
                        "force remove requires index_param.support_force_remove to be true");
         std::unique_lock<std::shared_mutex> wlock(this->force_remove_mutex_);
+        if (not ids.empty()) {
+            this->invalidate_adaptive_ef("index changed after adaptive_ef calibration");
+        }
         for (const auto& id : ids) {
             delete_count += this->force_remove_one(id);
         }

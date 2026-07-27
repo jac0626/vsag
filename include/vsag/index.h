@@ -141,6 +141,21 @@ public:
     }
 
     /**
+     * @brief Calibrate and enable query-dependent ef selection on an existing index.
+     *
+     * This is a synchronous, potentially expensive operation. Call it after Build() or
+     * Deserialize(), and do not run it concurrently with index mutations.
+     *
+     * @param parameters Adaptive-ef training parameters.
+     * @return true if at least one requested top-k/recall/risk combination passed calibration.
+     */
+    virtual tl::expected<bool, Error>
+    EnableAdaptiveEf(const std::string& parameters) {
+        return tl::unexpected(Error(ErrorType::UNSUPPORTED_INDEX_OPERATION,
+                                    "Index does not support EnableAdaptiveEf"));
+    }
+
+    /**
       * @brief Training index with given vectors
       *
       * @param datas should contains dim, num_elements, ids and vectors

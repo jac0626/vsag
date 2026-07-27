@@ -29,6 +29,7 @@
 #include "storage/stream_reader.h"
 #include "storage/tlv_section.h"
 #include "typing.h"
+#include "utils/slow_task_timer.h"
 #include "utils/util_functions.h"
 #include "vsag/options.h"
 
@@ -187,6 +188,12 @@ HGraph::deserialize_basic_info_v0_14(StreamReader& reader) {
 
 JsonType
 HGraph::serialize_basic_info() const {
+    std::shared_lock<std::shared_mutex> adaptive_ef_lock(this->adaptive_ef_mutex_);
+    return this->serialize_basic_info_locked();
+}
+
+JsonType
+HGraph::serialize_basic_info_locked() const {
     JsonType jsonify_basic_info;
     jsonify_basic_info["use_reorder"].SetBool(this->use_reorder_);
     jsonify_basic_info["reorder_by_base"].SetBool(this->reorder_by_base_);
@@ -202,11 +209,28 @@ HGraph::serialize_basic_info() const {
     jsonify_basic_info["max_capacity"].SetUint64(this->max_capacity_.load());
     jsonify_basic_info["total_count"].SetUint64(this->total_count_.load());
     jsonify_basic_info["max_level"].SetUint64(this->route_graphs_.size());
-    jsonify_basic_info[INDEX_PARAM].SetString(this->create_param_ptr_->ToString());
+    auto persisted_param_json = this->create_param_ptr_->ToJson();
     if (this->adaptive_ef_state_ != nullptr) {
+        this->adaptive_ef_state_->Validate(this->dim_);
+        persisted_param_json["adaptive_ef"]["enable"].SetBool(this->adaptive_ef_state_->enabled);
+        persisted_param_json["adaptive_ef"]["sample_count"].SetUint64(
+            this->adaptive_ef_state_->sample_count);
+        persisted_param_json["adaptive_ef"]["ef_cap"].SetUint64(this->adaptive_ef_state_->ef_cap);
+        std::string targets;
+        for (uint64_t i = 0; i < this->adaptive_ef_state_->targets.size(); ++i) {
+            targets += (i == 0 ? "" : ",") + std::to_string(this->adaptive_ef_state_->targets[i]);
+        }
+        persisted_param_json["adaptive_ef"]["targets"].SetString(targets);
+        std::string topks;
+        for (uint64_t i = 0; i < this->adaptive_ef_state_->topks.size(); ++i) {
+            topks += (i == 0 ? "" : ",") + std::to_string(this->adaptive_ef_state_->topks[i]);
+        }
+        persisted_param_json["adaptive_ef"]["topks"].SetString(topks);
         jsonify_basic_info["adaptive_ef_state"].SetString(
             base64_encode(this->adaptive_ef_state_->SerializeToString()));
     }
+    const HGraphParameter persisted_param(persisted_param_json);
+    jsonify_basic_info[INDEX_PARAM].SetString(persisted_param.ToString());
 
     return jsonify_basic_info;
 }
@@ -223,16 +247,18 @@ HGraph::serialize_basic_info() const {
 
 void
 HGraph::deserialize_basic_info(const JsonType& jsonify_basic_info) {
+    std::unique_lock<std::shared_mutex> adaptive_ef_lock(this->adaptive_ef_mutex_);
     logger::debug("jsonify_basic_info:\n{}", dump_basic_info_for_log(jsonify_basic_info));
-    if (jsonify_basic_info.Contains("adaptive_ef_state")) {
-        this->adaptive_ef_state_ = std::make_shared<AdaptiveEfState>();
-        this->adaptive_ef_state_->DeserializeFromString(
-            base64_decode(jsonify_basic_info["adaptive_ef_state"].GetString()));
-    }
     FROM_JSON(jsonify_basic_info, use_reorder, Bool);
     this->reorder_by_base_ = false;
     FROM_JSON(jsonify_basic_info, reorder_by_base, Bool);
     FROM_JSON(jsonify_basic_info, dim, Int);
+    if (jsonify_basic_info.Contains("adaptive_ef_state")) {
+        this->adaptive_ef_state_ = std::make_shared<AdaptiveEfState>();
+        this->adaptive_ef_state_->DeserializeFromString(
+            base64_decode(jsonify_basic_info["adaptive_ef_state"].GetString()));
+        this->adaptive_ef_state_->Validate(this->dim_);
+    }
     if (jsonify_basic_info.Contains("metric")) {
         this->metric_ = static_cast<MetricType>(jsonify_basic_info["metric"].GetInt());
     }
@@ -362,12 +388,45 @@ HGraph::deserialize_label_info(StreamReader& reader) const {
 
 void
 HGraph::Serialize(StreamWriter& writer) const {
+    std::shared_lock<std::shared_mutex> adaptive_ef_lock(this->adaptive_ef_mutex_);
+    this->serialize_locked(writer);
+}
+
+BinarySet
+HGraph::Serialize() const {
+    SlowTaskTimer timer(this->GetName() + " Serialize");
+    std::shared_lock<std::shared_mutex> adaptive_ef_lock(this->adaptive_ef_mutex_);
+
+    CountingStreamWriter counting_writer;
+    this->serialize_locked(counting_writer);
+    const uint64_t num_bytes = counting_writer.GetCursor();
+
+    std::shared_ptr<int8_t[]> bin(new int8_t[num_bytes]);
+    auto* buffer = reinterpret_cast<char*>(bin.get());
+    BufferStreamWriter writer(buffer);
+    this->serialize_locked(writer);
+    if (writer.GetCursor() != num_bytes) {
+        throw VsagException(ErrorType::INTERNAL_ERROR,
+                            "HGraph serialization size changed between counting and writing");
+    }
+
+    BinarySet binary_set;
+    binary_set.Set(this->GetName(), Binary{.data = std::move(bin), .size = num_bytes});
+    return binary_set;
+}
+
+void
+HGraph::serialize_locked(StreamWriter& writer) const {
     if (this->ignore_reorder_) {
         this->use_reorder_ = false;
     }
 
     // FIXME(wxyu): this option is used for special purposes, like compatibility testing
     if (this->use_old_serial_format_) {
+        if (this->adaptive_ef_state_ != nullptr) {
+            throw VsagException(ErrorType::INVALID_ARGUMENT,
+                                "adaptive_ef does not support v0.14 serialization");
+        }
         if (this->using_dedup_storage()) {
             throw VsagException(ErrorType::INVALID_ARGUMENT,
                                 "HGraph duplicate code slot mapping does not support v0.14 "
@@ -414,7 +473,7 @@ HGraph::Serialize(StreamWriter& writer) const {
     }
 
     // serialize footer (introduced since v0.15)
-    auto jsonify_basic_info = this->serialize_basic_info();
+    auto jsonify_basic_info = this->serialize_basic_info_locked();
     auto metadata = std::make_shared<Metadata>();
     metadata->Set(BASIC_INFO, jsonify_basic_info);
     if (this->support_duplicate_) {

@@ -40,6 +40,7 @@ HGraph places its build parameters under the generic `index_param` key (see
 | `max_degree` | 16–48 | Maximum out-degree per node |
 | `ef_construction` | 200–500 | Candidate set size during build; larger = higher recall, slower build |
 | `base_quantization_type` | `fp32` / `fp16` / `bf16` / `sq8` / `sq4` / `pq` | Quantization of the base storage — see the [Quantization chapter](../quantization/README.md) for all supported values |
+| `adaptive_ef` | disabled or object | Backward-compatible Build-time calibration shortcut; prefer `Index::EnableAdaptiveEf` on a built or loaded graph — see [Adaptive ef](../indexes/hgraph.md#adaptive-ef) |
 
 At search time:
 
@@ -53,6 +54,12 @@ filter whose `ValidRatio()` is at most this threshold, HGraph skips the graph
 traversal and runs an exact scan over the surviving ids. See the
 [HGraph index page](../indexes/hgraph.md#brute-force-fallback-under-highly-selective-filters-brute_force_threshold)
 for details.
+
+It also accepts an `adaptive_ef` object with a calibrated `target_recall` and
+`alpha`. The index must have been trained with matching top-k and target entries,
+either through `Index::EnableAdaptiveEf` or the Build-time compatibility shortcut;
+unsupported or rejected combinations fail closed. See
+[Adaptive ef](../indexes/hgraph.md#adaptive-ef).
 
 ## LazyHGraph
 

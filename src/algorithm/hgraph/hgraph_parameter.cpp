@@ -15,7 +15,10 @@
 
 #include "hgraph_parameter.h"
 
+#include <algorithm>
+#include <cctype>
 #include <cmath>
+#include <exception>
 #include <sstream>
 
 #include "datacell/extra_info_datacell_parameter.h"
@@ -30,6 +33,137 @@
 #include "vsag/constants.h"
 
 namespace vsag {
+
+namespace {
+
+constexpr uint64_t ADAPTIVE_EF_MIN_SAMPLE_COUNT = 100;
+constexpr uint64_t ADAPTIVE_EF_MIN_CAP = 100;
+constexpr uint64_t ADAPTIVE_EF_MAX_TOPK = 100;
+constexpr uint64_t ADAPTIVE_EF_MAX_TARGET_COUNT = 64;
+constexpr uint64_t ADAPTIVE_EF_MAX_TOPK_COUNT = 64;
+constexpr uint64_t ADAPTIVE_EF_MAX_VALUE =
+    static_cast<uint64_t>(std::numeric_limits<int64_t>::max());
+
+std::string
+trim(const std::string& value) {
+    const auto first = value.find_first_not_of(" \t\n\r");
+    if (first == std::string::npos) {
+        return {};
+    }
+    const auto last = value.find_last_not_of(" \t\n\r");
+    return value.substr(first, last - first + 1);
+}
+
+std::vector<float>
+parse_adaptive_ef_targets(const JsonType& json) {
+    CHECK_ARGUMENT(json.IsString(), "adaptive_ef targets must be a comma-separated string");
+    const auto values = trim(json.GetString());
+    CHECK_ARGUMENT(values.empty() or values.back() != ',',
+                   "adaptive_ef targets must not contain empty values");
+    std::vector<float> result;
+    std::stringstream ss(values);
+    std::string token;
+    while (std::getline(ss, token, ',')) {
+        token = trim(token);
+        CHECK_ARGUMENT(not token.empty(), "adaptive_ef targets must not contain empty values");
+        float value = 0.0F;
+        std::string::size_type consumed = 0;
+        try {
+            value = std::stof(token, &consumed);
+        } catch (const std::exception&) {
+            throw VsagException(ErrorType::INVALID_ARGUMENT,
+                                fmt::format("invalid adaptive_ef target: {}", token));
+        }
+        CHECK_ARGUMENT(consumed == token.size(),
+                       fmt::format("invalid adaptive_ef target: {}", token));
+        result.push_back(value);
+    }
+    return result;
+}
+
+std::vector<uint64_t>
+parse_adaptive_ef_topks(const JsonType& json) {
+    CHECK_ARGUMENT(json.IsString(), "adaptive_ef topks must be a comma-separated string");
+    const auto values = trim(json.GetString());
+    CHECK_ARGUMENT(values.empty() or values.back() != ',',
+                   "adaptive_ef topks must not contain empty values");
+    std::vector<uint64_t> result;
+    std::stringstream ss(values);
+    std::string token;
+    while (std::getline(ss, token, ',')) {
+        token = trim(token);
+        CHECK_ARGUMENT(not token.empty(), "adaptive_ef topks must not contain empty values");
+        CHECK_ARGUMENT(
+            std::all_of(
+                token.begin(), token.end(), [](unsigned char ch) { return std::isdigit(ch) != 0; }),
+            fmt::format("invalid adaptive_ef topk: {}", token));
+        uint64_t value = 0;
+        try {
+            value = std::stoull(token);
+        } catch (const std::exception&) {
+            throw VsagException(ErrorType::INVALID_ARGUMENT,
+                                fmt::format("invalid adaptive_ef topk: {}", token));
+        }
+        result.push_back(value);
+    }
+    return result;
+}
+
+void
+validate_adaptive_ef_build_parameters(const HGraphParameter& params) {
+    CHECK_ARGUMENT(
+        params.adaptive_ef_sample_count >= ADAPTIVE_EF_MIN_SAMPLE_COUNT,
+        fmt::format("adaptive_ef sample_count must be at least {}", ADAPTIVE_EF_MIN_SAMPLE_COUNT));
+    CHECK_ARGUMENT(params.adaptive_ef_cap >= ADAPTIVE_EF_MIN_CAP,
+                   fmt::format("adaptive_ef ef_cap must be at least {}", ADAPTIVE_EF_MIN_CAP));
+    CHECK_ARGUMENT(params.adaptive_ef_cap <= ADAPTIVE_EF_MAX_VALUE,
+                   "adaptive_ef ef_cap exceeds int64_t range");
+    CHECK_ARGUMENT(not params.adaptive_ef_targets.empty(), "adaptive_ef targets must not be empty");
+    CHECK_ARGUMENT(params.adaptive_ef_targets.size() <= ADAPTIVE_EF_MAX_TARGET_COUNT,
+                   "adaptive_ef has too many targets");
+    for (uint64_t i = 0; i < params.adaptive_ef_targets.size(); ++i) {
+        const float target = params.adaptive_ef_targets[i];
+        CHECK_ARGUMENT(std::isfinite(target) and target > 0.0F and target <= 1.0F,
+                       fmt::format("adaptive_ef target {} must be finite and in (0, 1]", target));
+        if (i > 0) {
+            CHECK_ARGUMENT(target - params.adaptive_ef_targets[i - 1] >= 1e-4F,
+                           "adaptive_ef targets must be sorted and at least 0.0001 apart");
+        }
+    }
+    CHECK_ARGUMENT(not params.adaptive_ef_topks.empty(), "adaptive_ef topks must not be empty");
+    CHECK_ARGUMENT(params.adaptive_ef_topks.size() <= ADAPTIVE_EF_MAX_TOPK_COUNT,
+                   "adaptive_ef has too many topks");
+    for (uint64_t i = 0; i < params.adaptive_ef_topks.size(); ++i) {
+        const uint64_t topk = params.adaptive_ef_topks[i];
+        CHECK_ARGUMENT(
+            topk >= 1 and topk <= ADAPTIVE_EF_MAX_TOPK,
+            fmt::format("adaptive_ef topk {} must be in [1, {}]", topk, ADAPTIVE_EF_MAX_TOPK));
+        if (i > 0) {
+            CHECK_ARGUMENT(topk > params.adaptive_ef_topks[i - 1],
+                           "adaptive_ef topks must be sorted and unique");
+        }
+    }
+}
+
+uint64_t
+parse_adaptive_ef_search_value(const JsonType& json, const std::string& name) {
+    CHECK_ARGUMENT(json.IsNumberUnsigned(),
+                   fmt::format("adaptive_ef {} must be an unsigned integer", name));
+    const uint64_t value = json.GetUint64();
+    CHECK_ARGUMENT(value <= ADAPTIVE_EF_MAX_VALUE,
+                   fmt::format("adaptive_ef {} exceeds int64_t range", name));
+    CHECK_ARGUMENT(
+        value == 0 or value >= ADAPTIVE_EF_MIN_CAP,
+        fmt::format("adaptive_ef {} must be 0 or at least {}", name, ADAPTIVE_EF_MIN_CAP));
+    return value;
+}
+
+bool
+is_supported_adaptive_ef_alpha(float alpha) {
+    return alpha == 0.20F or alpha == 0.10F or alpha == 0.05F;
+}
+
+}  // namespace
 
 HGraphParameter::HGraphParameter(const JsonType& json) : HGraphParameter() {
     this->FromJson(json);
@@ -158,21 +292,24 @@ HGraphParameter::FromJson(const JsonType& json) {
             this->adaptive_ef_enable = ada["enable"].GetBool();
         }
         if (ada.Contains("sample_count")) {
+            CHECK_ARGUMENT(ada["sample_count"].IsNumberUnsigned(),
+                           "adaptive_ef sample_count must be an unsigned integer");
             this->adaptive_ef_sample_count = ada["sample_count"].GetUint64();
         }
         if (ada.Contains("ef_cap")) {
+            CHECK_ARGUMENT(ada["ef_cap"].IsNumberUnsigned(),
+                           "adaptive_ef ef_cap must be an unsigned integer");
             this->adaptive_ef_cap = ada["ef_cap"].GetUint64();
         }
         if (ada.Contains("targets")) {
-            this->adaptive_ef_targets.clear();
-            std::stringstream ss(ada["targets"].GetString());
-            std::string token;
-            while (std::getline(ss, token, ',')) {
-                if (!token.empty()) {
-                    this->adaptive_ef_targets.push_back(std::stof(token));
-                }
-            }
+            this->adaptive_ef_targets = parse_adaptive_ef_targets(ada["targets"]);
         }
+        if (ada.Contains("topks")) {
+            this->adaptive_ef_topks = parse_adaptive_ef_topks(ada["topks"]);
+        }
+    }
+    if (this->adaptive_ef_enable) {
+        validate_adaptive_ef_build_parameters(*this);
     }
 }
 
@@ -203,6 +340,13 @@ HGraphParameter::ToJson() const {
             ts += (i ? "," : "") + std::to_string(this->adaptive_ef_targets[i]);
         }
         json["adaptive_ef"]["targets"].SetString(ts);
+    }
+    {
+        std::string topks;
+        for (uint64_t i = 0; i < this->adaptive_ef_topks.size(); ++i) {
+            topks += (i ? "," : "") + std::to_string(this->adaptive_ef_topks[i]);
+        }
+        json["adaptive_ef"]["topks"].SetString(topks);
     }
     return json;
 }
@@ -269,16 +413,26 @@ HGraphSearchParameters::FromJson(const std::string& json_string) {
         const auto& ada = params[INDEX_TYPE_HGRAPH]["adaptive_ef"];
         if (ada.Contains("target_recall")) {
             obj.adaptive_ef_target_recall = ada["target_recall"].GetFloat();
+            CHECK_ARGUMENT(std::isfinite(obj.adaptive_ef_target_recall) and
+                               obj.adaptive_ef_target_recall > 0.0F and
+                               obj.adaptive_ef_target_recall <= 1.0F,
+                           "adaptive_ef target_recall must be finite and in (0, 1]");
         }
         if (ada.Contains("alpha")) {
             obj.adaptive_ef_alpha = ada["alpha"].GetFloat();
         }
+        CHECK_ARGUMENT(is_supported_adaptive_ef_alpha(obj.adaptive_ef_alpha),
+                       "adaptive_ef alpha must be one of 0.2, 0.1, or 0.05");
         if (ada.Contains("ef_cap")) {
-            obj.adaptive_ef_cap = ada["ef_cap"].GetInt();
+            obj.adaptive_ef_cap = parse_adaptive_ef_search_value(ada["ef_cap"], "ef_cap");
         }
         if (ada.Contains("force_ef")) {
-            obj.adaptive_ef_force = ada["force_ef"].GetInt();
+            obj.adaptive_ef_force = parse_adaptive_ef_search_value(ada["force_ef"], "force_ef");
         }
+        CHECK_ARGUMENT(obj.adaptive_ef_target_recall == 0.0F or obj.adaptive_ef_force == 0,
+                       "adaptive_ef target_recall and force_ef are mutually exclusive");
+        CHECK_ARGUMENT(obj.adaptive_ef_target_recall > 0.0F or obj.adaptive_ef_force > 0,
+                       "adaptive_ef requires target_recall or force_ef");
     }
     if (params[INDEX_TYPE_HGRAPH].Contains(HGRAPH_USE_EXTRA_INFO_FILTER)) {
         obj.use_extra_info_filter =

@@ -190,6 +190,12 @@ public:
         throw VsagException(ErrorType::UNSUPPORTED_INDEX_OPERATION, "Index doesn't support Tune");
     }
 
+    virtual bool
+    EnableAdaptiveEf(const std::string& parameters) {
+        throw VsagException(ErrorType::UNSUPPORTED_INDEX_OPERATION,
+                            "Index doesn't support EnableAdaptiveEf");
+    }
+
     virtual void
     Deserialize(const BinarySet& binary_set);
 

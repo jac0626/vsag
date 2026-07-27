@@ -268,6 +268,140 @@ TEST_CASE("HGraph deduplicate_storage rejects non-dense vector representations",
     }
 }
 
+TEST_CASE("HGraph adaptive ef accepts only its calibrated support domain",
+          "[ut][hgraph][adaptive_ef][config]") {
+    constexpr int64_t dim = 16;
+    auto common_param = MakeCommonParam(dim);
+    common_param.metric_ = vsag::MetricType::METRIC_TYPE_COSINE;
+    auto hgraph_json = MakeFp32HGraphJson(false);
+    hgraph_json["adaptive_ef"]["enable"].SetBool(true);
+
+    SECTION("supported fp32 cosine configuration") {
+        REQUIRE_NOTHROW(MakeHGraphIndex(hgraph_json, common_param));
+    }
+
+    SECTION("non-cosine metric") {
+        common_param.metric_ = vsag::MetricType::METRIC_TYPE_L2SQR;
+        REQUIRE_THROWS(MakeHGraphIndex(hgraph_json, common_param));
+    }
+
+    SECTION("non-float input") {
+        common_param.data_type_ = vsag::DataTypes::DATA_TYPE_INT8;
+        REQUIRE_THROWS(MakeHGraphIndex(hgraph_json, common_param));
+    }
+
+    SECTION("reorder") {
+        hgraph_json["use_reorder"].SetBool(true);
+        REQUIRE_THROWS(MakeHGraphIndex(hgraph_json, common_param));
+    }
+
+    SECTION("non-fp32 base quantization") {
+        hgraph_json["base_quantization_type"].SetString("sq8");
+        REQUIRE_THROWS(MakeHGraphIndex(hgraph_json, common_param));
+    }
+}
+
+TEST_CASE("HGraph explicit adaptive ef training validates configuration and support",
+          "[ut][hgraph][adaptive_ef][train]") {
+    constexpr int64_t dim = 16;
+    auto common_param = MakeCommonParam(dim);
+    common_param.metric_ = vsag::MetricType::METRIC_TYPE_COSINE;
+    auto hgraph_json = MakeFp32HGraphJson(false);
+
+    SECTION("valid configuration reaches the non-empty index check") {
+        auto index = MakeHGraphIndex(hgraph_json, common_param);
+        auto result = index->EnableAdaptiveEf(R"({
+            "sample_count": 100,
+            "ef_cap": 100,
+            "targets": "0.90",
+            "topks": "10"
+        })");
+        REQUIRE_FALSE(result.has_value());
+        REQUIRE(result.error().message.find("non-empty") != std::string::npos);
+    }
+
+    SECTION("training parameters are validated") {
+        auto index = MakeHGraphIndex(hgraph_json, common_param);
+        auto result = index->EnableAdaptiveEf(R"({"sample_count":99})");
+        REQUIRE_FALSE(result.has_value());
+        REQUIRE(result.error().message.find("sample_count") != std::string::npos);
+    }
+
+    SECTION("malformed JSON is an invalid argument") {
+        auto index = MakeHGraphIndex(hgraph_json, common_param);
+        auto result = index->EnableAdaptiveEf("{");
+        REQUIRE_FALSE(result.has_value());
+        REQUIRE(result.error().type == vsag::ErrorType::INVALID_ARGUMENT);
+        REQUIRE(result.error().message.find("JSON object") != std::string::npos);
+    }
+
+    SECTION("actual metric is validated") {
+        common_param.metric_ = vsag::MetricType::METRIC_TYPE_L2SQR;
+        auto index = MakeHGraphIndex(hgraph_json, common_param);
+        auto result = index->EnableAdaptiveEf("{}");
+        REQUIRE_FALSE(result.has_value());
+        REQUIRE(result.error().message.find("cosine") != std::string::npos);
+    }
+
+    SECTION("actual base quantization is validated") {
+        hgraph_json["base_quantization_type"].SetString("sq8");
+        auto index = MakeHGraphIndex(hgraph_json, common_param);
+        auto result = index->EnableAdaptiveEf("{}");
+        REQUIRE_FALSE(result.has_value());
+        REQUIRE(result.error().message.find("fp32 base quantization") != std::string::npos);
+    }
+}
+
+TEST_CASE("HGraph trains adaptive ef after Build and persists the resulting state",
+          "[ut][hgraph][adaptive_ef][train][serialize]") {
+    constexpr int64_t dim = 16;
+    constexpr int64_t count = 400;
+    auto common_param = MakeCommonParam(dim);
+    common_param.metric_ = vsag::MetricType::METRIC_TYPE_COSINE;
+    auto hgraph_json = MakeFp32HGraphJson(false);
+    auto index = MakeHGraphIndex(hgraph_json, common_param);
+
+    std::vector<float> vectors(static_cast<uint64_t>(dim * count));
+    std::vector<int64_t> ids(count);
+    for (int64_t i = 0; i < count; ++i) {
+        ids[i] = i;
+        for (int64_t d = 0; d < dim; ++d) {
+            vectors[static_cast<uint64_t>(i * dim + d)] =
+                static_cast<float>(((i + 1) * (d + 3)) % 997 + d + 1);
+        }
+    }
+    auto base = MakeFloatDataset(vectors, ids, dim, count);
+    auto built = index->Build(base);
+    REQUIRE(built.has_value());
+    REQUIRE(built.value().empty());
+
+    auto trained = index->EnableAdaptiveEf(R"({
+        "sample_count": 100,
+        "ef_cap": 100,
+        "targets": "0.90",
+        "topks": "10"
+    })");
+    REQUIRE(trained.has_value());
+    REQUIRE_FALSE(trained.value());
+
+    auto serialized = index->Serialize();
+    REQUIRE(serialized.has_value());
+    auto restored = MakeHGraphIndex(hgraph_json, common_param);
+    REQUIRE(restored->Deserialize(serialized.value()).has_value());
+
+    auto retrained = restored->EnableAdaptiveEf("{}");
+    REQUIRE(retrained.has_value());
+    REQUIRE_FALSE(retrained.value());
+    REQUIRE(restored->Serialize().has_value());
+
+    auto query = MakeFloatQuery(vectors, dim);
+    auto adaptive_result = restored->KnnSearch(
+        query, 10, R"({"hgraph":{"ef_search":100,"adaptive_ef":{"target_recall":0.90}}})");
+    REQUIRE_FALSE(adaptive_result.has_value());
+    REQUIRE(adaptive_result.error().message.find("no topk/target/alpha combination passed") !=
+            std::string::npos);
+}
+
 TEST_CASE("HGraph Add exact duplicate keeps duplicate label searchable",
           "[ut][hgraph][duplicate][add]") {
     constexpr int64_t dim = 2;

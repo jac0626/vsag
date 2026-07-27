@@ -73,7 +73,7 @@ public:
     // time record
     std::shared_ptr<Timer> time_cost{nullptr};
 
-    // Adaptive ef (PoC): invoked once at the moment a KNN search would terminate
+    // Adaptive ef: invoked once at the moment a KNN search would terminate
     // with the initial ef. Receives the current top-candidate distances in
     // ascending order; if the returned value is larger than the current ef, the
     // search resumes in place (visited set and frontier are preserved).

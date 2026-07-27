@@ -15,6 +15,7 @@
 
 #include "basic_searcher.h"
 
+#include <algorithm>
 #include <set>
 #include <vector>
 
@@ -516,4 +517,84 @@ TEST_CASE("BasicSearcher iterator drain path handles sign and lower_bound correc
     }
 
     delete iter_ctx;
+}
+
+TEST_CASE("BasicSearcher adaptive ef hook resumes search with a larger ef",
+          "[ut][BasicSearcher][adaptive_ef_hook]") {
+    auto allocator = SafeAllocator::FactoryDefaultAllocator();
+    IndexCommonParam common;
+    common.dim_ = 1;
+    common.allocator_ = allocator;
+    common.metric_ = vsag::MetricType::METRIC_TYPE_L2SQR;
+
+    constexpr const char* param_temp = R"({{"type": "{}"}})";
+    auto fp32_param = QuantizerParameter::GetQuantizerParameterByJson(
+        JsonType::Parse(fmt::format(param_temp, "fp32")));
+    auto io_param =
+        IOParameter::GetIOParameterByJson(JsonType::Parse(fmt::format(param_temp, "memory_io")));
+    auto vector_data_cell = std::make_shared<
+        FlattenDataCell<FP32Quantizer<vsag::MetricType::METRIC_TYPE_L2SQR>, MemoryIO>>(
+        fp32_param, io_param, common);
+    vector_data_cell->SetQuantizer(
+        std::make_shared<FP32Quantizer<vsag::MetricType::METRIC_TYPE_L2SQR>>(common.dim_,
+                                                                             allocator.get()));
+    vector_data_cell->SetIO(std::make_unique<MemoryIO>(allocator.get()));
+
+    std::vector<float> base_vectors = {0.0F, 2.0F, 10.0F, 1.0F, 3.0F};
+    std::vector<InnerIdType> ids = {0, 1, 2, 3, 4};
+    vector_data_cell->Train(base_vectors.data(), ids.size());
+    vector_data_cell->BatchInsertVector(base_vectors.data(), ids.size(), ids.data());
+
+    // Node 2 is initially evicted by the nearer node 1 but remains in the search frontier.
+    // Expanding ef lets the search visit node 2 and discover its nearer child, node 3.
+    auto graph_data_cell = std::make_shared<MockGraphDataCell>(
+        std::vector<std::vector<InnerIdType>>{{2, 1}, {}, {3, 4}, {}, {}});
+    auto pool = std::make_shared<VisitedListPool>(
+        1, allocator.get(), vector_data_cell->TotalCount(), allocator.get());
+    auto searcher = std::make_shared<BasicSearcher>(common);
+    constexpr uint64_t initial_ef = 2;
+    constexpr uint64_t expanded_ef = 4;
+    const float query = 0.0F;
+
+    auto run_search = [&](InnerSearchParam search_param, SearchStatistics& stats) {
+        auto vl = pool->TakeOne();
+        QueryContext ctx{.stats = &stats};
+        auto result = searcher->Search(
+            graph_data_cell, vector_data_cell, vl, &query, search_param, LabelTablePtr{}, &ctx);
+        pool->ReturnOne(vl);
+
+        std::set<InnerIdType> result_ids;
+        while (not result->Empty()) {
+            result_ids.insert(result->Top().second);
+            result->Pop();
+        }
+        return result_ids;
+    };
+
+    InnerSearchParam baseline_param;
+    baseline_param.ep = 0;
+    baseline_param.ef = initial_ef;
+    baseline_param.topk = initial_ef;
+    SearchStatistics baseline_stats;
+    const auto baseline_ids = run_search(baseline_param, baseline_stats);
+    REQUIRE(baseline_ids == std::set<InnerIdType>{0, 1});
+
+    uint64_t hook_calls = 0;
+    std::vector<float> observed_distances;
+    InnerSearchParam adaptive_param = baseline_param;
+    adaptive_param.adaptive_ef_hook = [&](const std::vector<float>& distances) {
+        ++hook_calls;
+        observed_distances = distances;
+        return expanded_ef;
+    };
+    SearchStatistics adaptive_stats;
+    const auto adaptive_ids = run_search(adaptive_param, adaptive_stats);
+
+    REQUIRE(hook_calls == 1);
+    REQUIRE(observed_distances.size() == initial_ef);
+    REQUIRE(std::is_sorted(observed_distances.begin(), observed_distances.end()));
+    REQUIRE(observed_distances == std::vector<float>{0.0F, 4.0F});
+    REQUIRE(adaptive_ids == std::set<InnerIdType>{0, 3});
+    REQUIRE(adaptive_stats.dist_cmp.load() > baseline_stats.dist_cmp.load());
+    REQUIRE(adaptive_stats.hops.load() > baseline_stats.hops.load());
 }

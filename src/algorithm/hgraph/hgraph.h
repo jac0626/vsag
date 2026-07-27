@@ -25,6 +25,7 @@
 #include <unordered_map>
 
 #include "../inner_index_interface.h"
+#include "adaptive_ef.h"
 #include "common.h"
 #include "datacell/attribute_inverted_interface.h"
 #include "datacell/code_slot_flatten_adapter.h"
@@ -33,7 +34,6 @@
 #include "datacell/graph_interface.h"
 #include "datacell/sparse_graph_datacell_parameter.h"
 #include "hgraph_cache.h"
-#include "adaptive_ef.h"
 #include "hgraph_parameter.h"
 #include "impl/basic_optimizer.h"
 #include "impl/heap/distance_heap.h"
@@ -89,6 +89,9 @@ public:
 
     bool
     Tune(const std::string& parameters, bool disable_future_tuning) override;
+
+    bool
+    EnableAdaptiveEf(const std::string& parameters) override;
 
     float
     CalcDistanceById(const float* query,
@@ -154,7 +157,16 @@ public:
     GetVectorByInnerId(InnerIdType inner_id, float* data) const override;
 
     void
-    calibrate_adaptive_ef();
+    calibrate_adaptive_ef(AdaptiveEfState& state);
+
+    bool
+    train_adaptive_ef(std::shared_ptr<AdaptiveEfState> candidate);
+
+    bool
+    train_adaptive_ef_locked(std::shared_ptr<AdaptiveEfState> candidate);
+
+    void
+    invalidate_adaptive_ef(const std::string& reason);
 
     IndexType
     GetIndexType() const override {
@@ -209,6 +221,9 @@ public:
 
     void
     Serialize(StreamWriter& writer) const override;
+
+    [[nodiscard]] BinarySet
+    Serialize() const override;
 
     /// Set the number of threads used during Build().
     void
@@ -543,6 +558,14 @@ private:
     JsonType
     serialize_basic_info() const;
 
+    // Serialize basic metadata while adaptive_ef_mutex_ is already held.
+    JsonType
+    serialize_basic_info_locked() const;
+
+    // Serialize the index while adaptive_ef_mutex_ is already held.
+    void
+    serialize_locked(StreamWriter& writer) const;
+
     /// Restore basic index metadata from JSON.
     void
     deserialize_basic_info(const JsonType& jsonify_basic_info);
@@ -781,9 +804,12 @@ private:
     mutable MutexArrayPtr neighbors_mutex_;         // per-node locks for neighbor lists
     mutable std::shared_mutex add_mutex_;           // serializes Add() operations
     mutable std::shared_mutex force_remove_mutex_;  // serializes force-remove operations
+    mutable std::shared_mutex adaptive_ef_mutex_;   // guards adaptive_ef_state_
+    std::mutex adaptive_ef_training_mutex_;         // serializes adaptive-ef training
     // Single-flights physical code growth before taking the global writer lock.
     mutable std::mutex physical_code_resize_mutex_;
     std::atomic<bool> physical_code_resize_pending_{false};
+    std::atomic<uint64_t> adaptive_ef_generation_{0};
 
     std::atomic<InnerIdType> max_capacity_{0};               // allocated storage capacity
     std::atomic<CodeSlotIdType> physical_code_capacity_{0};  // physical flatten slot capacity
