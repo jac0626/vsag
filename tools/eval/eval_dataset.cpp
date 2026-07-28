@@ -602,57 +602,87 @@ EvalDataset::Load(const std::string& filename) {
     // Structure: /paths/<hierarchy_name>/train  (1D variable-length strings, size N)
     //            /paths/<hierarchy_name>/test   (1D variable-length strings, size Q)
     try {
-        H5::Group paths_group = file.openGroup("/paths");
-        hsize_t num_hierarchies = paths_group.getNumObjs();
-        for (hsize_t i = 0; i < num_hierarchies; ++i) {
-            std::string hname = paths_group.getObjnameByIdx(i);
-            H5O_info_t info;
-            paths_group.getObjinfo(hname, info);
-            if (info.type != H5O_type_t::H5O_TYPE_GROUP) {
-                continue;
-            }
-            H5::Group h_group = paths_group.openGroup(hname);
-
-            auto read_string_dataset = [](H5::Group& group,
-                                          const std::string& dsname,
-                                          int64_t expected_count) -> std::vector<std::string> {
-                try {
-                    H5::DataSet ds = group.openDataSet(dsname);
-                    H5::DataSpace space = ds.getSpace();
-                    hsize_t dims[1];
-                    space.getSimpleExtentDims(dims, NULL);
-                    if (static_cast<int64_t>(dims[0]) != expected_count) {
-                        // Missing path datasets are optional, but present datasets must match
-                        // the base/query split they describe.
-                        throw std::runtime_error("paths dataset size mismatch: expected " +
-                                                 std::to_string(expected_count) + ", got " +
-                                                 std::to_string(dims[0]));
-                    }
-                    std::vector<const char*> raw(dims[0]);
-                    H5::StrType str_type(H5::PredType::C_S1, H5T_VARIABLE);
-                    ds.read(raw.data(), str_type);
-                    std::vector<std::string> result(dims[0]);
-                    for (hsize_t j = 0; j < dims[0]; ++j) {
-                        result[j] = raw[j] ? raw[j] : "";
-                    }
-                    H5::DataSet::vlenReclaim(raw.data(), str_type, space);
-                    return result;
-                } catch (H5::Exception&) {
-                    return {};
+        if (!file.nameExists("/paths")) {
+            logger::debug("no /paths group in HDF5 file");
+        } else {
+            H5::Group paths_group = file.openGroup("/paths");
+            hsize_t num_hierarchies = paths_group.getNumObjs();
+            for (hsize_t i = 0; i < num_hierarchies; ++i) {
+                std::string hname = paths_group.getObjnameByIdx(i);
+                const std::string hierarchy_path = "/paths/" + hname;
+                H5O_info_t info;
+                paths_group.getObjinfo(hname, info);
+                if (info.type != H5O_type_t::H5O_TYPE_GROUP) {
+                    throw std::runtime_error("Pyramid path hierarchy '" + hierarchy_path +
+                                             "' must be an HDF5 group");
                 }
-            };
+                H5::Group h_group = paths_group.openGroup(hname);
 
-            auto train_paths = read_string_dataset(h_group, "train", obj->number_of_base_);
-            auto test_paths = read_string_dataset(h_group, "test", obj->number_of_query_);
-            auto train_count = train_paths.size();
-            auto test_count = test_paths.size();
+                auto read_string_dataset = [&filename](
+                                               H5::Group& group,
+                                               const std::string& dsname,
+                                               const std::string& dataset_path,
+                                               int64_t expected_count) -> std::vector<std::string> {
+                    try {
+                        H5::DataSet ds = group.openDataSet(dsname);
+                        H5::DataSpace space = ds.getSpace();
+                        const int rank = space.getSimpleExtentNdims();
+                        if (rank != 1) {
+                            throw std::runtime_error(
+                                "Pyramid path dataset '" + dataset_path + "' in '" + filename +
+                                "' must be one-dimensional, got rank " + std::to_string(rank));
+                        }
+                        hsize_t dim = 0;
+                        space.getSimpleExtentDims(&dim, nullptr);
+                        if (static_cast<int64_t>(dim) != expected_count) {
+                            throw std::runtime_error("Pyramid path dataset '" + dataset_path +
+                                                     "' in '" + filename + "' has size " +
+                                                     std::to_string(dim) + ", expected " +
+                                                     std::to_string(expected_count));
+                        }
+                        const auto count = static_cast<uint64_t>(dim);
+                        if (count == 0) {
+                            return {};
+                        }
+                        std::vector<char*> raw(count);
+                        H5::StrType str_type(H5::PredType::C_S1, H5T_VARIABLE);
+                        ds.read(raw.data(), str_type);
+                        std::vector<std::string> result(count);
+                        for (uint64_t j = 0; j < count; ++j) {
+                            result[j] = raw[j] ? raw[j] : "";
+                        }
+                        H5::DataSet::vlenReclaim(raw.data(), str_type, space);
+                        return result;
+                    } catch (const H5::Exception& e) {
+                        throw std::runtime_error("failed to load Pyramid path dataset '" +
+                                                 dataset_path + "' from '" + filename +
+                                                 "': " + e.getDetailMsg());
+                    }
+                };
 
-            if (!train_paths.empty() || !test_paths.empty()) {
-                obj->hierarchy_names_.push_back(hname);
-                if (!train_paths.empty()) {
+                const bool has_train = h_group.nameExists("train");
+                const bool has_test = h_group.nameExists("test");
+                if (!has_train && !has_test) {
+                    continue;
+                }
+
+                std::vector<std::string> train_paths;
+                if (has_train) {
+                    train_paths = read_string_dataset(
+                        h_group, "train", hierarchy_path + "/train", obj->number_of_base_);
+                }
+                std::vector<std::string> test_paths;
+                if (has_test) {
+                    test_paths = read_string_dataset(
+                        h_group, "test", hierarchy_path + "/test", obj->number_of_query_);
+                }
+                const auto train_count = train_paths.size();
+                const auto test_count = test_paths.size();
+
+                if (has_train) {
                     obj->train_paths_[hname] = std::move(train_paths);
                 }
-                if (!test_paths.empty()) {
+                if (has_test) {
                     obj->test_paths_[hname] = std::move(test_paths);
                 }
                 logger::debug("loaded paths hierarchy '{}': {} train, {} test",
@@ -661,8 +691,9 @@ EvalDataset::Load(const std::string& filename) {
                               test_count);
             }
         }
-    } catch (H5::Exception& e) {
-        logger::debug("no /paths/ group in HDF5 file (not a Pyramid dataset)");
+    } catch (const H5::Exception& e) {
+        throw std::runtime_error("failed to load Pyramid paths from '" + filename +
+                                 "': " + e.getDetailMsg());
     }
 
     try {
@@ -841,6 +872,20 @@ serialize_token_sequences(const std::vector<SparseVector>& vectors,
 
 void
 EvalDataset::Save(const EvalDatasetPtr& dataset, const std::string& filename) {
+    auto validate_path_sizes =
+        [](const auto& paths_by_hierarchy, int64_t expected_count, const std::string& split) {
+            for (const auto& [hierarchy_name, paths] : paths_by_hierarchy) {
+                if (static_cast<int64_t>(paths.size()) != expected_count) {
+                    const std::string dataset_path = "/paths/" + hierarchy_name + "/" + split;
+                    throw std::runtime_error("Pyramid path dataset '" + dataset_path +
+                                             "' has size " + std::to_string(paths.size()) +
+                                             ", expected " + std::to_string(expected_count));
+                }
+            }
+        };
+    validate_path_sizes(dataset->train_paths_, dataset->number_of_base_, "train");
+    validate_path_sizes(dataset->test_paths_, dataset->number_of_query_, "test");
+
     H5File file(filename, H5F_ACC_TRUNC);
 
     // write vector type attribute
@@ -991,22 +1036,20 @@ EvalDataset::Save(const EvalDatasetPtr& dataset, const std::string& filename) {
             for (uint64_t i = 0; i < values.size(); ++i) {
                 ptrs[i] = values[i].c_str();
             }
-            ds.write(ptrs.data(), str_type);
+            if (!ptrs.empty()) {
+                ds.write(ptrs.data(), str_type);
+            }
         };
-        for (const auto& [hname, train_vec] : dataset->train_paths_) {
+        for (const auto& hname : dataset->GetHierarchyNames()) {
             H5::Group h_group = paths_group.createGroup(hname);
-            write_string_dataset(h_group, "train", train_vec);
+            auto train_it = dataset->train_paths_.find(hname);
+            if (train_it != dataset->train_paths_.end()) {
+                write_string_dataset(h_group, "train", train_it->second);
+            }
             auto test_it = dataset->test_paths_.find(hname);
             if (test_it != dataset->test_paths_.end()) {
                 write_string_dataset(h_group, "test", test_it->second);
             }
-        }
-        for (const auto& [hname, test_vec] : dataset->test_paths_) {
-            if (dataset->train_paths_.count(hname) != 0) {
-                continue;
-            }
-            H5::Group h_group = paths_group.createGroup(hname);
-            write_string_dataset(h_group, "test", test_vec);
         }
     }
 

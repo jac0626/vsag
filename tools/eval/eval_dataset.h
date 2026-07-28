@@ -15,6 +15,7 @@
 
 #pragma once
 
+#include <algorithm>
 #include <memory>
 #include <unordered_set>
 
@@ -344,9 +345,20 @@ public:
         return !train_paths_.empty() || !test_paths_.empty();
     }
 
-    [[nodiscard]] const std::vector<std::string>&
+    [[nodiscard]] std::vector<std::string>
     GetHierarchyNames() const {
-        return hierarchy_names_;
+        std::vector<std::string> hierarchy_names;
+        hierarchy_names.reserve(train_paths_.size() + test_paths_.size());
+        for (const auto& entry : train_paths_) {
+            hierarchy_names.push_back(entry.first);
+        }
+        for (const auto& entry : test_paths_) {
+            if (train_paths_.count(entry.first) == 0) {
+                hierarchy_names.push_back(entry.first);
+            }
+        }
+        std::sort(hierarchy_names.begin(), hierarchy_names.end());
+        return hierarchy_names;
     }
 
     [[nodiscard]] const std::string*
@@ -360,8 +372,5 @@ public:
         auto it = test_paths_.find(hierarchy_name);
         return it != test_paths_.end() ? it->second.data() : nullptr;
     }
-
-private:
-    std::vector<std::string> hierarchy_names_;
 };
 }  // namespace vsag::eval
