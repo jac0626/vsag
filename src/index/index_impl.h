@@ -534,6 +534,18 @@ public:
         SAFE_CALL(return this->inner_index_->UpdateVector(id, new_base, force_update));
     }
 
+    [[nodiscard]] tl::expected<std::vector<RecallSearchResult>, Error>
+    CalibrateRecallSearch(const std::vector<RecallTarget>& targets,
+                          const DatasetPtr& calibration_queries) override {
+        SAFE_CALL(return this->inner_index_->CalibrateRecallSearch(targets, calibration_queries));
+    }
+
+    [[nodiscard]] tl::expected<DatasetPtr, Error>
+    KnnSearch(const DatasetPtr& query, int64_t k, float target_recall) const override {
+        CHECK_QUERY_RETURN_EMPTY_DATASET(query);
+        SAFE_CALL(return this->inner_index_->KnnSearch(query, k, target_recall));
+    }
+
 public:
     [[nodiscard]] inline InnerIndexPtr
     GetInnerIndex() const {

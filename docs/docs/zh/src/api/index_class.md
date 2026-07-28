@@ -63,6 +63,24 @@ struct MergeUnit {
 对每个源 id，`id_map_func` 返回 `{keep, new_id}`：`keep == true` 表示将该向量以目标 id `new_id` 纳入。
 由 [`Merge`](#merge) 使用。
 
+### `RecallTarget` 与 `RecallSearchResult`
+
+```cpp
+struct RecallTarget {
+    int64_t top_k{0};
+    float recall{0.0F};
+};
+
+struct RecallSearchResult {
+    int64_t top_k{0};
+    float recall{0.0F};
+    std::string search_parameters;
+};
+```
+
+`RecallTarget` 声明一个工作负载平均估计召回率目标，`RecallSearchResult` 返回该目标最终选择的
+具体搜索参数。
+
 ### `Checkpoint`
 
 ```cpp
@@ -142,6 +160,26 @@ SearchWithRequest(const SearchRequest& request) const;
 
 由 [`SearchRequest`](search.md#searchrequest) 驱动的统一 KNN 或范围搜索。这是新代码首选的 API；它通过
 一个结构体即可支持属性过滤、回调过滤、bitset 过滤、逐次搜索 allocator 以及迭代式搜索。
+
+### 召回率目标搜索
+
+```cpp
+tl::expected<std::vector<RecallSearchResult>, Error>
+CalibrateRecallSearch(const std::vector<RecallTarget>& targets,
+                      const DatasetPtr& calibration_queries);
+
+tl::expected<DatasetPtr, Error>
+KnnSearch(const DatasetPtr& query, int64_t k, float target_recall) const;
+```
+
+`CalibrateRecallSearch` 同步为每个已声明档位选择索引实现特有的搜索参数，并返回具体映射。
+必填的 `calibration_queries` 必须非空、与索引的维度和输入类型一致，并能代表预期负载。
+校准成功后会原子替换当前映射；校准失败时继续保留旧映射。再次显式调用该接口即可重新校准。
+
+`target_recall` 表示相对于具体索引 reference 的工作负载平均召回率，不一定等同于精确暴搜召回率。
+新增的 `KnnSearch` 重载只能使用已校准的 `(k, target_recall)` 档位，并且不接受过滤条件。
+未实现该能力的索引返回 `UNSUPPORTED_INDEX_OPERATION`。首个实现及当前限制见
+[HGraph](../indexes/hgraph.md#召回率目标搜索)。
 
 ### KnnSearch 重载
 

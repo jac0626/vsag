@@ -211,6 +211,13 @@ public:
     [[nodiscard]] DatasetPtr
     SearchWithRequest(const SearchRequest& request) const override;
 
+    std::vector<RecallSearchResult>
+    CalibrateRecallSearch(const std::vector<RecallTarget>& targets,
+                          const DatasetPtr& calibration_queries) override;
+
+    [[nodiscard]] DatasetPtr
+    KnnSearch(const DatasetPtr& query, int64_t k, float target_recall) const override;
+
     uint32_t
     Remove(const std::vector<int64_t>& ids, RemoveMode mode = RemoveMode::MARK_REMOVE) override;
 
@@ -376,6 +383,12 @@ public:
                      DistanceRecordVector* rabitq_lower_bound_candidates = nullptr) const;
 
 private:
+    std::string
+    resolve_recall_search_parameters(int64_t top_k, float recall) const;
+
+    DatasetPtr
+    make_calibration_query(const DatasetPtr& queries, uint64_t index) const;
+
     [[nodiscard]] std::shared_lock<std::shared_mutex>
     acquire_global_read_lock() const {
         if (not this->physical_code_resize_pending_.load(std::memory_order_acquire)) {
@@ -845,5 +858,8 @@ private:
     float build_cache_hit_rate_{-1.0F};     // cache hit rate from last cache-based build
     uint64_t build_cache_hit_nodes_{0};     // number of nodes with cache hit
     uint64_t build_cache_missed_nodes_{0};  // number of nodes without cache hit
+
+    std::mutex recall_search_calibration_mutex_;
+    std::shared_ptr<const std::vector<RecallSearchResult>> recall_search_profile_{nullptr};
 };
 }  // namespace vsag

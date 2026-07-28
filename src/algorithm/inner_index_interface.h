@@ -545,6 +545,19 @@ public:
                             "Index doesn't support UpdateVector");
     }
 
+    virtual std::vector<RecallSearchResult>
+    CalibrateRecallSearch(const std::vector<RecallTarget>& targets,
+                          const DatasetPtr& calibration_queries) {
+        throw VsagException(ErrorType::UNSUPPORTED_INDEX_OPERATION,
+                            "Index doesn't support recall search");
+    }
+
+    [[nodiscard]] virtual DatasetPtr
+    KnnSearch(const DatasetPtr& query, int64_t k, float target_recall) const {
+        throw VsagException(ErrorType::UNSUPPORTED_INDEX_OPERATION,
+                            "Index doesn't support recall search");
+    }
+
 protected:
     virtual MetadataPtr
     collect_streaming_header() const;

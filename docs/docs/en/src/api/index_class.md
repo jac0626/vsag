@@ -65,6 +65,24 @@ struct MergeUnit {
 For each source id, `id_map_func` returns `{keep, new_id}`: `keep == true` includes the vector under
 target id `new_id`. Used by [`Merge`](#merge).
 
+### `RecallTarget` and `RecallSearchResult`
+
+```cpp
+struct RecallTarget {
+    int64_t top_k{0};
+    float recall{0.0F};
+};
+
+struct RecallSearchResult {
+    int64_t top_k{0};
+    float recall{0.0F};
+    std::string search_parameters;
+};
+```
+
+`RecallTarget` declares one workload-average estimated-recall target.
+`RecallSearchResult` contains the concrete search parameters selected for that target.
+
 ### `Checkpoint`
 
 ```cpp
@@ -146,6 +164,29 @@ SearchWithRequest(const SearchRequest& request) const;
 Unified KNN or range search driven by [`SearchRequest`](search.md#searchrequest). This is the
 preferred API for new code; it supports attribute filters, callback filters, bitset filters, a
 per-search allocator, and iterator search through one struct.
+
+### Recall-target search
+
+```cpp
+tl::expected<std::vector<RecallSearchResult>, Error>
+CalibrateRecallSearch(const std::vector<RecallTarget>& targets,
+                      const DatasetPtr& calibration_queries);
+
+tl::expected<DatasetPtr, Error>
+KnnSearch(const DatasetPtr& query, int64_t k, float target_recall) const;
+```
+
+`CalibrateRecallSearch` synchronously selects implementation-specific search parameters for every
+declared target and returns the concrete mapping. The required `calibration_queries` must be
+non-empty, match the index dimension and input type, and represent the intended workload. A
+successful call atomically replaces the current mapping; a failed call leaves the previous mapping
+unchanged. Calling it again explicitly recalibrates the mapping.
+
+`target_recall` is workload-average recall relative to an implementation-specific reference, not
+necessarily exact brute-force recall. The `KnnSearch` overload selects one calibrated
+`(k, target_recall)` pair and does not accept a filter. Unsupported indexes return
+`UNSUPPORTED_INDEX_OPERATION`; see [HGraph](../indexes/hgraph.md#recall-target-search) for the first
+implementation and its current restrictions.
 
 ### `KnnSearch` overloads
 

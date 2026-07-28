@@ -233,6 +233,42 @@ auto result = index->KnnSearch(
     query, topk, R"({"hgraph": {"ef_search": 200}})").value();
 ```
 
+### 召回率目标搜索
+
+HGraph 可以针对有限个工作负载平均召回率档位显式校准 `ef_search`：
+
+```cpp
+assert(index->SetImmutable().has_value());
+
+std::vector<vsag::RecallTarget> targets = {{10, 0.95F}, {100, 0.90F}};
+auto calibration = index->CalibrateRecallSearch(targets, calibration_queries).value();
+
+auto result = index->KnnSearch(query, 10, 0.95F).value();
+```
+
+校准同步执行，并使用全部 `calibration_queries`。对于每个不同的 `top_k`，HGraph 先获得一个高
+`ef_search` 的 reference，再二分选择相对于该 reference 满足各档位的较小 `ef_search`。内部评估
+上限保证校准过程能够结束。该方法避免扫描整个索引，但这里的 recall 是相对 HGraph 近似 reference
+的估计值，不是精确暴搜保证。
+
+调用方必须提供能代表预期负载的查询；库内向量不能替代真实查询分布，否则可能得到过于乐观的低
+`ef_search`。估计召回率是在整批校准查询上取平均值，并非逐查询保证。
+
+返回的 `RecallSearchResult` 包含具体 JSON `search_parameters`，调用方可以检查、保存或直接传给
+普通 `KnnSearch`。校准成功后会原子替换完整映射；校准失败时继续保留并使用旧映射。需要更新时，
+由调用方收集新的代表性查询并再次显式调用 `CalibrateRecallSearch`。
+
+首版刻意保持较窄的契约：
+
+- 非空、immutable，且搜索路径能够处理所提供查询类型的 HGraph；
+- 仅支持无过滤的 `KnnSearch(query, k, target_recall)`，其 `(k, target_recall)` 必须匹配已配置
+  档位；
+- 映射只存在于运行期；加载或克隆索引后，需要时先将新索引设为 immutable，再重新校准。
+
+重复的相同档位会被合并。如果没有具有代表性的查询，应继续通过普通 `KnnSearch` 显式传入
+`ef_search`。完整示例见
+[`326_feature_hgraph_recall_search.cpp`](https://github.com/antgroup/vsag/blob/main/examples/cpp/326_feature_hgraph_recall_search.cpp)。
+
 ### 高选择性过滤下的暴搜回退（`brute_force_threshold`）
 
 图搜索在大多数候选都能通过过滤时是最优策略——图遍历能很快进入查询邻域。但是当

@@ -52,6 +52,31 @@ struct MergeUnit {
     IdMapFunction id_map_func = nullptr;
 };
 
+/**
+ * @brief One workload target supported by recall-based search.
+ */
+struct RecallTarget {
+    /** Number of neighbors requested by this workload target. */
+    int64_t top_k{0};
+
+    /** Required workload-average estimated recall, in the range (0, 1]. */
+    float recall{0.0F};
+};
+
+/**
+ * @brief One calibrated recall-search mapping entry.
+ */
+struct RecallSearchResult {
+    /** Number of neighbors requested by this workload target. */
+    int64_t top_k{0};
+
+    /** Workload-average estimated recall target, in the range (0, 1]. */
+    float recall{0.0F};
+
+    /** Concrete parameters accepted by the regular KnnSearch API. */
+    std::string search_parameters;
+};
+
 enum class IndexType {
     HNSW,
     DISKANN,
@@ -1137,6 +1162,38 @@ public:
 #elif defined(_MSC_VER)
 #pragma warning(pop)
 #endif
+    }
+
+    /**
+     * @brief Calibrate search parameters for a finite set of workload recall targets.
+     *
+     * Calibration is synchronous. A successful call atomically replaces the active mapping;
+     * a failed call leaves the previous mapping unchanged.
+     *
+     * @param targets Finite set of supported (top-k, recall) pairs.
+     * @param calibration_queries Non-empty workload queries matching the index dimension and
+     *        input type. The caller is responsible for their representativeness.
+     * @return The calibrated mapping, or an error if recall search is unsupported or invalid.
+     */
+    [[nodiscard]] virtual tl::expected<std::vector<RecallSearchResult>, Error>
+    CalibrateRecallSearch(const std::vector<RecallTarget>& targets,
+                          const DatasetPtr& calibration_queries) {
+        return tl::unexpected(
+            Error(ErrorType::UNSUPPORTED_INDEX_OPERATION, "Index does not support recall search"));
+    }
+
+    /**
+     * @brief Run unfiltered KNN search using the calibrated parameter for a recall target.
+     *
+     * @param query One query vector.
+     * @param k Number of nearest neighbors.
+     * @param target_recall Configured workload-average estimated recall target.
+     * @return Search results, or an error if the pair has not been calibrated or is unsupported.
+     */
+    [[nodiscard]] virtual tl::expected<DatasetPtr, Error>
+    KnnSearch(const DatasetPtr& query, int64_t k, float target_recall) const {
+        return tl::unexpected(
+            Error(ErrorType::UNSUPPORTED_INDEX_OPERATION, "Index does not support recall search"));
     }
 };
 

@@ -225,6 +225,8 @@ TEST_CASE("InnerIndexInterface NOT Implemented", "[ut][InnerIndexInterface]") {
     REQUIRE_THROWS(empty_index->GetExtraInfoByIds(nullptr, 1, nullptr));
     REQUIRE_THROWS(empty_index->GetVectorByInnerId(1, nullptr));
     REQUIRE_THROWS(empty_index->SetImmutable());
+    REQUIRE_THROWS(empty_index->CalibrateRecallSearch({}, nullptr));
+    REQUIRE_THROWS(empty_index->KnnSearch(nullptr, 1, 0.9F));
 
     AttributeSet old_attrs;
     AttributeSet new_attrs;

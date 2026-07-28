@@ -251,6 +251,48 @@ auto result = index->KnnSearch(
     query, topk, R"({"hgraph": {"ef_search": 200}})").value();
 ```
 
+### Recall-target search
+
+HGraph can explicitly calibrate `ef_search` for a finite set of workload-average recall targets:
+
+```cpp
+assert(index->SetImmutable().has_value());
+
+std::vector<vsag::RecallTarget> targets = {{10, 0.95F}, {100, 0.90F}};
+auto calibration = index->CalibrateRecallSearch(targets, calibration_queries).value();
+
+auto result = index->KnnSearch(query, 10, 0.95F).value();
+```
+
+Calibration is synchronous and uses all supplied queries. For each distinct `top_k`, HGraph obtains
+a high-`ef_search` reference and then binary-searches a lower `ef_search` that reaches each target
+relative to that reference. Internal effort limits keep calibration finite. This avoids scanning
+the entire index, but the reported recall is an estimate relative to an approximate HGraph
+reference, not an exact brute-force guarantee.
+
+The caller must supply queries representative of the intended workload; indexed vectors are not a
+substitute because they can produce an optimistically low `ef_search`. Estimated recall is averaged
+over the calibration queries; it is not a per-query guarantee.
+
+The returned `RecallSearchResult` entries contain concrete JSON `search_parameters`, so callers can
+inspect, persist, or pass them to the regular `KnnSearch` API. A successful calibration atomically
+replaces the complete mapping. A failed calibration leaves the previous mapping unchanged, and
+searches continue to use it. Call `CalibrateRecallSearch` again with a new representative query
+batch when explicit recalibration is needed.
+
+The first implementation intentionally has a narrow contract:
+
+- immutable, non-empty HGraph whose search path can evaluate the supplied query type;
+- only unfiltered `KnnSearch(query, k, target_recall)`; its `(k, target_recall)` pair must match a
+  calibrated target;
+- the mapping is runtime-only; after loading or cloning an index, mark the new index immutable if
+  needed and calibrate it again.
+
+Repeated identical target pairs are coalesced. If representative queries are unavailable, keep
+using the regular `KnnSearch` overload with an explicit `ef_search`. See
+[`326_feature_hgraph_recall_search.cpp`](https://github.com/antgroup/vsag/blob/main/examples/cpp/326_feature_hgraph_recall_search.cpp)
+for a complete example.
+
 ### Brute-force fallback under highly selective filters (`brute_force_threshold`)
 
 Graph traversal is the right strategy when most candidates pass the filter — the
