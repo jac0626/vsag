@@ -154,3 +154,17 @@ target_link_libraries(324_feature_lazy_hgraph_extra_info vsag)
 
 add_executable(325_feature_uring_io 325_feature_uring_io.cpp)
 target_link_libraries(325_feature_uring_io vsag)
+
+if (TARGET vsag::autotune)
+    add_executable (326_feature_create_index_with_constraints
+        326_feature_create_index_with_constraints.cpp)
+    target_link_libraries (326_feature_create_index_with_constraints vsag::autotune)
+
+    add_executable (327_feature_autotune_existing_index
+        327_feature_autotune_existing_index.cpp)
+    target_link_libraries (327_feature_autotune_existing_index vsag::autotune)
+
+    add_executable (328_feature_autotune_existing_pyramid
+        328_feature_autotune_existing_pyramid.cpp)
+    target_link_libraries (328_feature_autotune_existing_pyramid vsag::autotune)
+endif ()
