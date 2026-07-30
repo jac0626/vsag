@@ -327,34 +327,11 @@ Pyramid::build_by_nsw(const DatasetPtr& base) {
     Vector<int64_t> data_biases(allocator_);
     auto failed_ids = prepare_build_data(base, data_biases);
 
-    if (thread_pool_ != nullptr && hierarchies_.size() > 1) {
-        Vector<std::future<void>> futures(allocator_);
-        futures.reserve(hierarchies_.size());
-        std::exception_ptr enqueue_exception;
-        try {
-            for (auto& [hname, hierarchy] : hierarchies_) {
-                const auto* paths = base->GetPaths(hname);
-                if (paths != nullptr) {
-                    futures.push_back(thread_pool_->GeneralEnqueue(
-                        [&hierarchy = *hierarchy, paths, &data_biases]() {
-                            populate_path_tree(hierarchy,
-                                               paths,
-                                               static_cast<int64_t>(data_biases.size()),
-                                               &data_biases);
-                        }));
-                }
-            }
-        } catch (...) {
-            enqueue_exception = std::current_exception();
-        }
-        wait_all_futures(futures, enqueue_exception);
-    } else {
-        for (auto& [hname, hierarchy] : hierarchies_) {
-            const auto* paths = base->GetPaths(hname);
-            if (paths != nullptr) {
-                populate_path_tree(
-                    *hierarchy, paths, static_cast<int64_t>(data_biases.size()), &data_biases);
-            }
+    for (auto& [hname, hierarchy] : hierarchies_) {
+        const auto* paths = base->GetPaths(hname);
+        if (paths != nullptr) {
+            populate_path_tree(
+                *hierarchy, paths, static_cast<int64_t>(data_biases.size()), &data_biases);
         }
     }
 
@@ -363,7 +340,8 @@ Pyramid::build_by_nsw(const DatasetPtr& base) {
         (void)hname;
         collect_nsw_build_jobs(*hierarchy, hierarchy->root.get(), build_jobs);
     }
-    const bool use_parallel_build = thread_pool_ != nullptr && build_thread_count_ > 1;
+    const bool use_parallel_build =
+        thread_pool_ != nullptr && build_thread_count_ > 1 && build_jobs.size() > 1;
     if (not use_parallel_build) {
         for (const auto& job : build_jobs) {
             build_nsw_graph(job, data_vectors, data_biases);
@@ -373,14 +351,10 @@ Pyramid::build_by_nsw(const DatasetPtr& base) {
         std::exception_ptr enqueue_exception;
         try {
             for (const auto& job : build_jobs) {
-                for (const auto inner_id : job.node->ids_) {
-                    const auto data_bias = data_biases[inner_id];
-                    const auto* vector = data_vectors + dim_ * data_bias;
-                    futures.push_back(thread_pool_->GeneralEnqueue(
-                        [this, hierarchy = job.hierarchy, node = job.node, inner_id, vector]() {
-                            add_one_point(*hierarchy, node, inner_id, vector);
-                        }));
-                }
+                futures.push_back(
+                    thread_pool_->GeneralEnqueue([this, job, data_vectors, &data_biases]() {
+                        build_nsw_graph(job, data_vectors, data_biases);
+                    }));
             }
         } catch (...) {
             enqueue_exception = std::current_exception();
