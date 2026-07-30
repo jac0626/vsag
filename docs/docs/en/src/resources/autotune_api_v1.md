@@ -141,8 +141,15 @@ mode uses the conservative generic values above. Values rejected by the loaded i
 failed trials; callers can avoid them by providing an explicit `scan_buckets_count` space.
 
 Candidates with the same normalized index name and identical concrete `create_params` belong to
-one build group. AutoTune builds that group once, serializes it once as evidence, and evaluates
-every associated search candidate against the same in-memory index instance.
+one build group. AutoTune builds that group once and evaluates every associated search candidate
+against the same in-memory index instance.
+
+Eligible HGraph candidates that differ only in `max_degree` also share a build group. AutoTune
+builds the largest degree normally, then materializes smaller, compact graphs in descending degree
+order. Each projected graph is serialized as independent evidence and uses the normal HGraph
+search path. Unsupported configurations and projection failures transparently fall back to
+independent builds. Requests that use `build_seconds` or `build_and_search_seconds` as a constraint
+or objective also use independent builds so those metrics retain native `Build()` semantics.
 
 ### Existing-Index Mode
 
@@ -223,8 +230,13 @@ Thresholds must be finite and non-negative. `recall_at_k` must also be at most `
 
 Metric meanings in V1:
 
-- `build_seconds` measures the index `Build` operation reported by the evaluation tool.
-- It excludes index serialization, dataset loading, and candidate orchestration.
+- For a `full_build` record, `build_seconds` measures the index `Build` operation reported by the
+  evaluation tool.
+- For a `degree_projection` record, `build_seconds` is the source full-build time plus the
+  cumulative projection time needed to materialize that artifact. It is not an estimate of an
+  independent build with the smaller `max_degree`.
+- `build_seconds` excludes index serialization, dataset loading, and other candidate
+  orchestration.
 - `search_seconds` measures the wall time of a complete in-memory search evaluation trial. It
   excludes index deserialization, but includes all search passes and metric collection. Use
   latency or QPS for serving-performance goals.
@@ -298,7 +310,7 @@ A completed evaluation writes and returns this top-level shape:
 | `status` | `success`, `no_feasible_candidate`, or `failed`. |
 | `recommendation` | Best feasible trial, otherwise `null`. |
 | `best_effort` | Closest successful trial when constraints are infeasible, otherwise `null`. |
-| `builds` | One record per concrete generated build group; empty in search-only mode. |
+| `builds` | One record per concrete evaluated artifact; empty in search-only mode. |
 | `trials` | One record per executed concrete search candidate. |
 | `request` | Effective normalized request used by the tuning engine. |
 | `elapsed_seconds` | AutoTune wall time through selection, excluding report writing and cleanup. |
@@ -351,13 +363,16 @@ then by normalized violation magnitude. It is only explanatory.
 | Field | Meaning |
 | --- | --- |
 | `build_id` | Stable ID referenced by trials. |
+| `strategy` | `full_build` or `degree_projection`. |
+| `source_build_id` | Source full build; present only for a projected graph. |
+| `projection_seconds` | Cumulative projection time; present only for a projected graph. |
 | `index_name` | Concrete index type. |
 | `create_params` | Concrete create parameters. |
 | `status` | `success` or `failed`. |
 | `metrics` | Available build-shared metrics. |
 | `artifacts` | `source`, `index_path`, `use_existing_index`, and `retained`. |
 | `failure` | Structured failure or `null`. |
-| `elapsed_seconds` | Build-group preparation time. |
+| `elapsed_seconds` | Work unique to this record, including its artifact serialization. |
 | `raw_eval_result` | Present only when requested and a native build eval ran. |
 
 ### Trial Records
@@ -386,15 +401,19 @@ in the normalized request. Every recorded trial evaluates the full query workloa
 A constraint violation contains `metric`, `comparison`, `expected`, and `actual`. `actual` is
 `null` when the required metric is missing or non-finite.
 
-Search trials in one build group reuse the same loaded index instance. A generated index is built
-once and serialized once. In search-only mode the caller's index, or the index deserialized by the
-CLI adapter, is reused directly for every trial.
+Search trials associated with one `build_id` reuse the same loaded index instance. A projected
+degree is serialized as its own compact, loadable artifact. In search-only mode the caller's index,
+or the index deserialized by the CLI adapter, is reused directly for every trial.
 
 ### Artifact Semantics
 
-Artifact fields appear only in build-and-search records in V1. `artifacts.source` is `generated`,
-and `artifacts.index_path` is evidence of where the evaluated index was stored, not a promise that
-the path still exists. Check `artifacts.retained`:
+Artifact fields appear only in build-and-search records in V1. `artifacts.source` is `generated`
+for a normal build and `degree_projection` for a projected graph. A projected artifact has the
+requested compact degree and is directly loadable with its reported `create_params`, but its
+topology and hierarchy originate from the larger source graph; it is not identical to an
+independently built graph with the same `max_degree`. `artifacts.index_path` is evidence of where
+the evaluated index was stored, not a promise that the path still exists. Check
+`artifacts.retained`:
 
 - `true`: this is the selected artifact returned by typed `TuneIndex`, or retention was requested;
 - `false`: AutoTune planned to remove or already removed the generated artifact.

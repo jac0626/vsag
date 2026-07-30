@@ -928,6 +928,119 @@ TEST_CASE("TuneIndex returns a queryable selected index") {
     REQUIRE(report["request"]["config"]["workspace_path"] == workspace.Get());
 }
 
+TEST_CASE("AutoTune projects descending HGraph degrees from one full build") {
+    vsag::Options::Instance().logger()->SetLevel(vsag::Logger::kOFF);
+    ScopedBlockSizeLimit block_size_limit(256UL * 1024);
+    ScopedPath workspace(temp_path("autotune-degree-projection-workspace"));
+    MemoryFixture fixture;
+    auto input = fixture.Request(workspace.Get());
+    input.index_spaces[0].create_parameter_space =
+        R"({"index_param":{"base_quantization_type":"fp32","max_degree":[8,12,16],)"
+        R"("ef_construction":40,"build_thread_count":2}})";
+    input.objective = vsag::autotune::Metric::INDEX_SIZE_MB;
+    input.constraints = {{vsag::autotune::Metric::RECALL_AT_K, 0.0}};
+    input.config.keep_intermediate = true;
+    input.config.max_trials = 3;
+
+    const auto tuned = vsag::autotune::TuneIndex(input);
+    REQUIRE(tuned.has_value());
+    const auto report = JsonType::parse(tuned.value().report);
+    INFO(report.dump(2));
+    REQUIRE(report["status"] == "success");
+    REQUIRE(report["builds"].size() == 3);
+    REQUIRE(report["trials"].size() == 3);
+    REQUIRE(report["recommendation"]["create_params"]["index_param"]["max_degree"] == 8);
+
+    const auto full_builds =
+        std::count_if(report["builds"].begin(), report["builds"].end(), [](const auto& build) {
+            return build["strategy"] == "full_build";
+        });
+    const auto projections =
+        std::count_if(report["builds"].begin(), report["builds"].end(), [](const auto& build) {
+            return build["strategy"] == "degree_projection";
+        });
+    REQUIRE(full_builds == 1);
+    REQUIRE(projections == 2);
+
+    const auto artifact_size = [&report](int64_t degree) {
+        const auto build = std::find_if(
+            report["builds"].begin(), report["builds"].end(), [degree](const auto& item) {
+                return item["create_params"]["index_param"]["max_degree"] == degree;
+            });
+        REQUIRE(build != report["builds"].end());
+        return std::filesystem::file_size(
+            (*build)["artifacts"]["index_path"].template get<std::string>());
+    };
+    REQUIRE(artifact_size(8) < artifact_size(12));
+    REQUIRE(artifact_size(12) < artifact_size(16));
+
+    auto query = vsag::Dataset::Make()
+                     ->NumElements(1)
+                     ->Dim(MemoryFixture::DIM)
+                     ->Float32Vectors(fixture.test.data())
+                     ->Owner(false);
+    for (const auto& build : report["builds"]) {
+        REQUIRE(build["status"] == "success");
+        const auto path = build["artifacts"]["index_path"].template get<std::string>();
+        REQUIRE(std::filesystem::is_regular_file(path));
+        if (build["strategy"] == "degree_projection") {
+            REQUIRE(build.contains("source_build_id"));
+            REQUIRE(build.contains("projection_seconds"));
+            REQUIRE_FALSE(build["metrics"].contains("projection_seconds"));
+        }
+
+        auto restored = vsag::Factory::CreateIndex("hgraph", build["create_params"].dump());
+        REQUIRE(restored.has_value());
+        std::ifstream artifact(path, std::ios::binary);
+        REQUIRE(artifact.good());
+        REQUIRE(restored.value()->Deserialize(artifact).has_value());
+        REQUIRE(
+            restored.value()->KnnSearch(query, 3, R"({"hgraph":{"ef_search":16}})").has_value());
+    }
+}
+
+TEST_CASE("AutoTune falls back to full builds for unsupported HGraph projections") {
+    vsag::Options::Instance().logger()->SetLevel(vsag::Logger::kOFF);
+    ScopedBlockSizeLimit block_size_limit(256UL * 1024);
+    ScopedPath workspace(temp_path("autotune-degree-projection-fallback-workspace"));
+    MemoryFixture fixture;
+    auto input = fixture.Request(workspace.Get());
+    input.index_spaces[0].create_parameter_space =
+        R"({"index_param":{"base_quantization_type":"fp32","graph_type":"odescent",)"
+        R"("max_degree":[8,12],"ef_construction":40,"build_thread_count":2}})";
+    input.constraints = {{vsag::autotune::Metric::RECALL_AT_K, 0.0}};
+
+    const auto tuned = vsag::autotune::TuneIndex(input);
+    REQUIRE(tuned.has_value());
+    const auto report = JsonType::parse(tuned.value().report);
+    INFO(report.dump(2));
+    REQUIRE(report["builds"].size() == 2);
+    REQUIRE(std::all_of(report["builds"].begin(), report["builds"].end(), [](const auto& build) {
+        return build["strategy"] == "full_build";
+    }));
+}
+
+TEST_CASE("AutoTune keeps native HGraph builds for build-cost objectives") {
+    vsag::Options::Instance().logger()->SetLevel(vsag::Logger::kOFF);
+    ScopedBlockSizeLimit block_size_limit(256UL * 1024);
+    ScopedPath workspace(temp_path("autotune-degree-projection-build-cost-workspace"));
+    MemoryFixture fixture;
+    auto input = fixture.Request(workspace.Get());
+    input.index_spaces[0].create_parameter_space =
+        R"({"index_param":{"base_quantization_type":"fp32","max_degree":[8,12],)"
+        R"("ef_construction":40,"build_thread_count":2}})";
+    input.objective = vsag::autotune::Metric::BUILD_SECONDS;
+
+    const auto tuned = vsag::autotune::TuneIndex(input);
+    REQUIRE(tuned.has_value());
+    const auto report = JsonType::parse(tuned.value().report);
+    INFO(report.dump(2));
+    REQUIRE(report["builds"].size() == 2);
+    REQUIRE(std::all_of(report["builds"].begin(), report["builds"].end(), [](const auto& build) {
+        return build["strategy"] == "full_build";
+    }));
+}
+
 TEST_CASE("TuneIndex rejects an infeasible recommendation") {
     vsag::Options::Instance().logger()->SetLevel(vsag::Logger::kOFF);
     ScopedBlockSizeLimit block_size_limit(256UL * 1024);

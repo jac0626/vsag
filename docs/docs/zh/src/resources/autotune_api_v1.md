@@ -133,7 +133,13 @@ bucket 数量。AutoTune 无法推断已有 IVF 的 bucket 数量，因此 searc
 `scan_buckets_count` 候选以避免这些 trial。
 
 规范化索引名和具体 `create_params` 相同的候选属于同一个 build group。AutoTune 对该组
-只构建一次、序列化一次作为证据，再使用同一个内存索引实例执行所有关联的 search 候选。
+只构建一次，再使用同一个内存索引实例执行所有关联的 search 候选。
+
+符合条件且只有 `max_degree` 不同的 HGraph 候选也会共享 build group。AutoTune 正常构建
+最大度数的图，再按度数降序物化更小的紧凑图；每个投影图都会独立序列化为证据，并继续走
+普通 HGraph 查询路径。不支持的配置或投影失败会透明回退为独立构建。请求将
+`build_seconds` 或 `build_and_search_seconds` 作为约束或目标时也使用独立构建，从而保持
+这些指标的原生 `Build()` 语义。
 
 ### 已有索引模式
 
@@ -212,8 +218,10 @@ V1 始终评测 HDF5 文件中的全量 query，并且只支持 KNN。benchmark 
 
 V1 指标口径：
 
-- `build_seconds` 是 eval 工具报告的索引 `Build` 操作耗时。
-- 它不包含索引序列化、数据集加载和候选编排。
+- 对 `full_build` 记录，`build_seconds` 是 eval 工具报告的索引 `Build` 操作耗时。
+- 对 `degree_projection` 记录，`build_seconds` 是源图完整构建耗时加上物化当前产物所需的
+  累计投影耗时；它不表示使用较小 `max_degree` 独立构建的估算耗时。
+- `build_seconds` 不包含索引序列化、数据集加载和其他候选编排。
 - `search_seconds` 是完整内存 search eval trial 的墙钟时间，不包含索引反序列化，但包含
   所有 search pass 和指标采集；线上查询性能目标应使用 latency 或 QPS。
 - `build_and_search_seconds` 是一次 build-and-search trial 中前两项之和。
@@ -281,7 +289,7 @@ V1 指标口径：
 | `status` | `success`、`no_feasible_candidate` 或 `failed`。 |
 | `recommendation` | 最优可行 trial；不存在时为 `null`。 |
 | `best_effort` | 约束不可行时最接近的成功 trial，否则为 `null`。 |
-| `builds` | 每组具体生成 build 一条记录；search-only 模式为空数组。 |
+| `builds` | 每个被评测的具体产物一条记录；search-only 模式为空数组。 |
 | `trials` | 每组已执行的具体 search 候选一条记录。 |
 | `request` | 调优引擎实际使用的有效规范化请求。 |
 | `elapsed_seconds` | 截止结果选择的 AutoTune 墙钟时间，不含报告写入和清理。 |
@@ -331,13 +339,16 @@ search-only 模式的 `builds` 为空。build-and-search 模式下，每个 `bui
 | 字段 | 含义 |
 | --- | --- |
 | `build_id` | 被 trial 引用的稳定 ID。 |
+| `strategy` | `full_build` 或 `degree_projection`。 |
+| `source_build_id` | 源完整 build；仅投影图存在。 |
+| `projection_seconds` | 累计投影耗时；仅投影图存在。 |
 | `index_name` | 具体索引类型。 |
 | `create_params` | 具体创建参数。 |
 | `status` | `success` 或 `failed`。 |
 | `metrics` | 可用的 build 共享指标。 |
 | `artifacts` | `source`、`index_path`、`use_existing_index` 和 `retained`。 |
 | `failure` | 结构化失败或 `null`。 |
-| `elapsed_seconds` | build group 准备耗时。 |
+| `elapsed_seconds` | 本记录独有工作的耗时，包括该产物的序列化。 |
 | `raw_eval_result` | 请求原始输出且真实 build eval 成功时出现。 |
 
 ### Trial 记录
@@ -366,15 +377,17 @@ query workload。
 每条 constraint violation 包含 `metric`、`comparison`、`expected` 和 `actual`。指标缺失或
 非有限数时，`actual` 为 `null`。
 
-同一 build group 的 search trial 复用同一个已加载索引实例。新生成的索引只构建和序列化
-一次。search-only 模式直接为所有 trial 复用调用方索引，或复用 CLI 适配器反序列化得到的
-索引。
+关联同一 `build_id` 的 search trial 复用同一个已加载索引实例。每个投影度数都会序列化成
+独立、紧凑且可加载的产物。search-only 模式直接为所有 trial 复用调用方索引，或复用 CLI
+适配器反序列化得到的索引。
 
 ### Artifact 语义
 
-V1 只在 build-and-search 记录中提供 artifact 字段。`artifacts.source` 为 `generated`；
-`artifacts.index_path` 用于说明被评测索引曾存放在哪里，不保证响应返回时路径仍然存在。
-需要检查 `artifacts.retained`：
+V1 只在 build-and-search 记录中提供 artifact 字段。普通构建的 `artifacts.source` 为
+`generated`，投影图为 `degree_projection`。投影产物具有请求的紧凑度数，可以使用报告的
+`create_params` 直接加载，但其拓扑和层级来自更大的源图，不等同于使用同一 `max_degree`
+独立构建的图。`artifacts.index_path` 用于说明被评测索引曾存放在哪里，不保证响应返回时
+路径仍然存在。需要检查 `artifacts.retained`：
 
 - `true`：这是 typed `TuneIndex` 返回的推荐产物，或者请求保留；
 - `false`：AutoTune 计划删除或已经删除生成产物。
