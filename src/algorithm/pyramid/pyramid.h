@@ -106,6 +106,10 @@ public:
     Status status_{Status::NO_INDEX};  // current build state
 
 private:
+    /// Get or create a child while Build exclusively owns the path tree.
+    IndexNode*
+    GetOrCreateChildForBuild(const std::string& key);
+
     UnorderedMap<std::string, std::unique_ptr<IndexNode>> children_;  // keyed by path segment
     Allocator* allocator_{nullptr};
     GraphInterfaceParamPtr graph_param_{nullptr};

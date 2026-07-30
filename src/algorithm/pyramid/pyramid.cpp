@@ -138,6 +138,17 @@ IndexNode::GetChild(const std::string& key, bool need_init) {
     return children_[key].get();
 }
 
+IndexNode*
+IndexNode::GetOrCreateChildForBuild(const std::string& key) {
+    auto [result, inserted] = children_.try_emplace(key);
+    auto& child = result.value();
+    if (inserted) {
+        child = std::make_unique<IndexNode>(allocator_, graph_param_, index_min_size_);
+        child->level_ = level_ + 1;
+    }
+    return child.get();
+}
+
 void
 IndexNode::Deserialize(StreamReader& reader) {
     // deserialize `entry_point_`
@@ -1279,19 +1290,34 @@ Pyramid::populate_path_tree(Hierarchy& h,
                             const Vector<int64_t>* data_biases) {
     for (int64_t inner_id = 0; inner_id < count; ++inner_id) {
         const int64_t data_bias = data_biases == nullptr ? inner_id : (*data_biases)[inner_id];
-        std::string current_path = paths[data_bias];
-        auto path_slices = split(current_path, PART_SLASH);
+        const auto& current_path = paths[data_bias];
         IndexNode* node = h.root.get();
         if (std::find(h.no_build_levels.begin(), h.no_build_levels.end(), node->level_) ==
             h.no_build_levels.end()) {
             node->ids_.push_back(static_cast<InnerIdType>(inner_id));
         }
-        for (auto& path_slice : path_slices) {
-            node = node->GetChild(path_slice, true);
-            if (std::find(h.no_build_levels.begin(), h.no_build_levels.end(), node->level_) ==
-                h.no_build_levels.end()) {
-                node->ids_.push_back(static_cast<InnerIdType>(inner_id));
+
+        uint64_t slice_begin = 0;
+        while (slice_begin < current_path.size()) {
+            const auto delimiter_pos = current_path.find(PART_SLASH, slice_begin);
+            const uint64_t slice_end =
+                delimiter_pos == std::string::npos ? current_path.size() : delimiter_pos;
+            if (slice_end > slice_begin) {
+                if (slice_begin == 0 && slice_end == current_path.size()) {
+                    node = node->GetOrCreateChildForBuild(current_path);
+                } else {
+                    node = node->GetOrCreateChildForBuild(
+                        current_path.substr(slice_begin, slice_end - slice_begin));
+                }
+                if (std::find(h.no_build_levels.begin(), h.no_build_levels.end(), node->level_) ==
+                    h.no_build_levels.end()) {
+                    node->ids_.push_back(static_cast<InnerIdType>(inner_id));
+                }
             }
+            if (delimiter_pos == std::string::npos) {
+                break;
+            }
+            slice_begin = slice_end + 1;
         }
     }
 }

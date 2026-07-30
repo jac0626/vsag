@@ -162,6 +162,27 @@ TEST_CASE("Split function tests", "[ut][pyramid]") {
     }
 }
 
+TEST_CASE("Pyramid NSW Build ignores empty path segments", "[ut][pyramid][build]") {
+    constexpr int64_t count = 8;
+    auto test_index = MakePyramidIndex(count + 1);
+    const auto& index = test_index.index;
+
+    std::vector<float> vectors(count * PYRAMID_TEST_DIM);
+    FillPyramidTestVectors(vectors, count);
+    std::vector<int64_t> ids(count);
+    std::iota(ids.begin(), ids.end(), 5000);
+    std::vector<std::string> paths = {"", "/", "///", "a", "/a/", "//a//", "a/b", "/a//b/"};
+
+    REQUIRE(
+        index->Build(MakePyramidDataset(vectors.data(), ids.data(), paths.data(), count)).empty());
+    REQUIRE(GetPyramidTotalNodes(index) == 3);
+    REQUIRE(GetPyramidNodeStatusCount(index, "NO_INDEX") == 1);
+    REQUIRE(GetPyramidNodeStatusCount(index, "FLAT") == 2);
+
+    std::string canonical_path = "a/b";
+    RequirePyramidSelfMatch(index, vectors, ids, &canonical_path, count - 1);
+}
+
 TEST_CASE("Pyramid promotes flat node at index minimum size", "[ut][pyramid]") {
     auto test_index = MakePyramidIndex(3);
     const auto& index = test_index.index;
