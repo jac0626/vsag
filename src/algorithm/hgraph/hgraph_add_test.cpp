@@ -21,6 +21,7 @@
 #include <string>
 #include <thread>
 #include <tuple>
+#include <unordered_set>
 #include <vector>
 
 #include "hgraph.h"
@@ -120,12 +121,12 @@ MakeFp32ReorderHGraphJson() {
 }
 
 vsag::JsonType
-MakeRabitQRawVectorHGraphJson() {
+MakeRabitQHGraphJson(bool store_raw_vector = true) {
     auto hgraph_json = MakeFp32HGraphJson();
     hgraph_json["base_quantization_type"].SetString("rabitq");
     hgraph_json["rabitq_bits_per_dim_base"].SetInt(1);
     hgraph_json["rabitq_bits_per_dim_query"].SetInt(32);
-    hgraph_json["store_raw_vector"].SetBool(true);
+    hgraph_json["store_raw_vector"].SetBool(store_raw_vector);
     return hgraph_json;
 }
 
@@ -785,7 +786,7 @@ TEST_CASE("HGraph deduplicate_storage supports RabitQ raw-vector graph read path
           "[ut][hgraph][duplicate][raw_vector][add]") {
     constexpr int64_t dim = 960;
     auto common_param = MakeCommonParam(dim);
-    auto hgraph_json = MakeRabitQRawVectorHGraphJson();
+    auto hgraph_json = MakeRabitQHGraphJson();
     auto index = MakeHGraphIndex(hgraph_json, common_param);
 
     std::vector<float> base_vectors(dim * 3);
@@ -830,7 +831,7 @@ TEST_CASE("HGraph deduplicate_storage Tune keeps physical slots isolated",
           "[ut][hgraph][duplicate][tune]") {
     constexpr int64_t dim = 960;
     auto common_param = MakeCommonParam(dim);
-    auto hgraph_json = MakeRabitQRawVectorHGraphJson();
+    auto hgraph_json = MakeRabitQHGraphJson();
     auto index = MakeHGraphIndex(hgraph_json, common_param);
 
     std::vector<float> base_vectors(dim * 2);
@@ -874,20 +875,230 @@ TEST_CASE("HGraph deduplicate_storage Tune keeps physical slots isolated",
     REQUIRE(duplicate_base_distance.value() == 0.0F);
 }
 
-TEST_CASE("HGraph deduplicate_storage rejects Merge", "[ut][hgraph][duplicate][merge]") {
+TEST_CASE("HGraph deduplicate_storage Merge preserves groups and physical slots",
+          "[ut][hgraph][duplicate][merge]") {
     constexpr int64_t dim = 2;
     auto common_param = MakeCommonParam(dim);
     auto hgraph_json = MakeFp32HGraphJson();
 
     auto target = MakeHGraphIndex(hgraph_json, common_param);
-    REQUIRE_FALSE(target->CheckFeature(vsag::IndexFeature::SUPPORT_MERGE_INDEX));
+    REQUIRE(target->CheckFeature(vsag::IndexFeature::SUPPORT_MERGE_INDEX));
+    std::vector<float> target_vectors = {
+        0.0F,
+        0.0F,
+        0.0F,
+        0.0F,
+        10.0F,
+        0.0F,
+    };
+    std::vector<int64_t> target_ids = {10, 11, 12};
+    auto target_data = MakeFloatDataset(target_vectors, target_ids, dim, 3);
+    REQUIRE(target->Build(target_data).has_value());
+
+    auto source1 = MakeHGraphIndex(hgraph_json, common_param);
+    std::vector<float> source1_vectors = {
+        20.0F,
+        0.0F,
+        20.0F,
+        0.0F,
+        30.0F,
+        0.0F,
+    };
+    std::vector<int64_t> source1_ids = {20, 21, 22};
+    auto source1_data = MakeFloatDataset(source1_vectors, source1_ids, dim, 3);
+    REQUIRE(source1->Build(source1_data).has_value());
+
+    auto source2 = MakeHGraphIndex(hgraph_json, common_param);
+    std::vector<float> source2_vectors = {
+        40.0F,
+        0.0F,
+        40.0F,
+        0.0F,
+        50.0F,
+        0.0F,
+    };
+    std::vector<int64_t> source2_ids = {30, 31, 32};
+    auto source2_data = MakeFloatDataset(source2_vectors, source2_ids, dim, 3);
+    REQUIRE(source2->Build(source2_data).has_value());
+
+    vsag::IdMapFunction source1_map = [](int64_t id) -> std::tuple<bool, int64_t> {
+        return std::make_tuple(true, id + 100);
+    };
+    vsag::IdMapFunction source2_map = [](int64_t id) -> std::tuple<bool, int64_t> {
+        return std::make_tuple(true, id + 200);
+    };
+    auto merge_result = target->Merge(
+        {vsag::MergeUnit{source1, source1_map}, vsag::MergeUnit{source2, source2_map}});
+    REQUIRE(merge_result.has_value());
+    REQUIRE(target->GetNumElements() == 9);
+
+    auto target_hgraph = std::dynamic_pointer_cast<vsag::HGraph>(target->GetInnerIndex());
+    REQUIRE(target_hgraph != nullptr);
+    REQUIRE(target_hgraph->GetCodeStorageCounts() ==
+            (std::pair<vsag::InnerIdType, vsag::CodeSlotIdType>{9, 6}));
+
+    struct DuplicateGroup {
+        std::vector<float> vector;
+        std::vector<int64_t> labels;
+    };
+    const std::vector<DuplicateGroup> duplicate_groups = {
+        {{0.0F, 0.0F}, {10, 11}},
+        {{20.0F, 0.0F}, {120, 121}},
+        {{40.0F, 0.0F}, {230, 231}},
+    };
+    for (const auto& group : duplicate_groups) {
+        auto query_vector = group.vector;
+        auto query = MakeFloatQuery(query_vector, dim);
+        RequireRangeContains(
+            target, query, {group.labels[0], group.labels[1]}, 2, 0.01F, kBruteForceSearchParams);
+
+        auto graph_result = target->RangeSearch(query, 0.01F, R"({"hgraph": {"ef_search": 64}})");
+        REQUIRE(graph_result.has_value());
+        REQUIRE(graph_result.value()->GetDim() > 0);
+        std::unordered_set<int64_t> seen_labels;
+        for (int64_t i = 0; i < graph_result.value()->GetDim(); ++i) {
+            REQUIRE(seen_labels.insert(graph_result.value()->GetIds()[i]).second);
+        }
+    }
+
+    std::vector<float> added_duplicate_vector = {20.0F, 0.0F};
+    std::vector<int64_t> added_duplicate_id = {999};
+    auto added_duplicate = MakeFloatDataset(added_duplicate_vector, added_duplicate_id, dim, 1);
+    REQUIRE(target->Add(added_duplicate).has_value());
+    REQUIRE(target_hgraph->GetCodeStorageCounts() ==
+            (std::pair<vsag::InnerIdType, vsag::CodeSlotIdType>{10, 6}));
+
+    std::vector<float> added_unique_vector = {60.0F, 0.0F};
+    std::vector<int64_t> added_unique_id = {1000};
+    auto added_unique = MakeFloatDataset(added_unique_vector, added_unique_id, dim, 1);
+    REQUIRE(target->Add(added_unique).has_value());
+    REQUIRE(target_hgraph->GetCodeStorageCounts() ==
+            (std::pair<vsag::InnerIdType, vsag::CodeSlotIdType>{11, 7}));
+
+    auto merged_group_query = MakeFloatQuery(added_duplicate_vector, dim);
+    RequireRangeContains(
+        target, merged_group_query, {120, 121, 999}, 3, 0.01F, kBruteForceSearchParams);
+
+    auto binary = target->Serialize();
+    REQUIRE(binary.has_value());
+    auto restored = MakeHGraphIndex(hgraph_json, common_param);
+    REQUIRE(restored->Deserialize(binary.value()).has_value());
+    auto restored_hgraph = std::dynamic_pointer_cast<vsag::HGraph>(restored->GetInnerIndex());
+    REQUIRE(restored_hgraph != nullptr);
+    REQUIRE(restored_hgraph->GetCodeStorageCounts() ==
+            (std::pair<vsag::InnerIdType, vsag::CodeSlotIdType>{11, 7}));
+    RequireRangeContains(
+        restored, merged_group_query, {120, 121, 999}, 3, 0.01F, kBruteForceSearchParams);
+}
+
+TEST_CASE("HGraph deduplicate_storage Merge does not deduplicate across indexes",
+          "[ut][hgraph][duplicate][merge]") {
+    constexpr int64_t dim = 2;
+    auto common_param = MakeCommonParam(dim);
+    auto hgraph_json = MakeFp32HGraphJson();
+    auto target = MakeHGraphIndex(hgraph_json, common_param);
+    auto source = MakeHGraphIndex(hgraph_json, common_param);
+
+    std::vector<float> target_vectors = {1.0F, 1.0F};
+    std::vector<int64_t> target_ids = {10};
+    auto target_data = MakeFloatDataset(target_vectors, target_ids, dim, 1);
+    REQUIRE(target->Build(target_data).has_value());
+
+    std::vector<float> source_vectors = {1.0F, 1.0F};
+    std::vector<int64_t> source_ids = {20};
+    auto source_data = MakeFloatDataset(source_vectors, source_ids, dim, 1);
+    REQUIRE(source->Build(source_data).has_value());
+
+    vsag::IdMapFunction id_map = [](int64_t id) -> std::tuple<bool, int64_t> {
+        return std::make_tuple(true, id);
+    };
+    REQUIRE(target->Merge({vsag::MergeUnit{source, id_map}}).has_value());
+
+    auto target_hgraph = std::dynamic_pointer_cast<vsag::HGraph>(target->GetInnerIndex());
+    REQUIRE(target_hgraph != nullptr);
+    REQUIRE(target_hgraph->GetCodeStorageCounts() ==
+            (std::pair<vsag::InnerIdType, vsag::CodeSlotIdType>{2, 2}));
+    auto query = MakeFloatQuery(target_vectors, dim);
+    RequireRangeContains(target, query, {10, 20}, 2, 0.01F, kBruteForceSearchParams);
+}
+
+TEST_CASE("HGraph deduplicate_storage Merge supports compressed graph storage",
+          "[ut][hgraph][duplicate][merge]") {
+    constexpr int64_t dim = 2;
+    auto common_param = MakeCommonParam(dim);
+    auto hgraph_json = MakeFp32HGraphJson();
+    hgraph_json["graph_storage_type"].SetString("compressed");
+    auto target = MakeHGraphIndex(hgraph_json, common_param);
+    auto source = MakeHGraphIndex(hgraph_json, common_param);
+
+    std::vector<float> target_vectors = {
+        0.0F,
+        0.0F,
+        0.0F,
+        0.0F,
+        1.0F,
+        0.0F,
+    };
+    std::vector<int64_t> target_ids = {10, 11, 12};
+    auto target_data = MakeFloatDataset(target_vectors, target_ids, dim, 3);
+    REQUIRE(target->Build(target_data).has_value());
+
+    std::vector<float> source_vectors = {
+        2.0F,
+        0.0F,
+        2.0F,
+        0.0F,
+        3.0F,
+        0.0F,
+    };
+    std::vector<int64_t> source_ids = {20, 21, 22};
+    auto source_data = MakeFloatDataset(source_vectors, source_ids, dim, 3);
+    REQUIRE(source->Build(source_data).has_value());
+
+    vsag::IdMapFunction id_map = [](int64_t id) -> std::tuple<bool, int64_t> {
+        return std::make_tuple(true, id);
+    };
+    REQUIRE(target->Merge({vsag::MergeUnit{source, id_map}}).has_value());
+
+    auto target_hgraph = std::dynamic_pointer_cast<vsag::HGraph>(target->GetInnerIndex());
+    REQUIRE(target_hgraph != nullptr);
+    REQUIRE(target_hgraph->GetCodeStorageCounts() ==
+            (std::pair<vsag::InnerIdType, vsag::CodeSlotIdType>{6, 4}));
+    auto query = MakeFloatQuery(source_vectors, dim);
+    RequireRangeContains(target, query, {20, 21}, 2, 0.01F, kBruteForceSearchParams);
+}
+
+TEST_CASE("HGraph deduplicate_storage Merge treats empty input as a no-op",
+          "[ut][hgraph][duplicate][merge]") {
+    constexpr int64_t dim = 2;
+    auto common_param = MakeCommonParam(dim);
+    auto hgraph_json = MakeFp32HGraphJson();
+    auto target = MakeHGraphIndex(hgraph_json, common_param);
+
+    REQUIRE(target->Merge({}).has_value());
+    REQUIRE(target->GetNumElements() == 0);
+
+    auto empty_source = MakeHGraphIndex(hgraph_json, common_param);
+    vsag::IdMapFunction id_map = [](int64_t id) -> std::tuple<bool, int64_t> {
+        return std::make_tuple(true, id);
+    };
+    REQUIRE(target->Merge({vsag::MergeUnit{empty_source, id_map}}).has_value());
+    REQUIRE(target->GetNumElements() == 0);
+}
+
+TEST_CASE("HGraph deduplicate_storage Merge validates storage settings before mutation",
+          "[ut][hgraph][duplicate][merge]") {
+    constexpr int64_t dim = 2;
+    auto common_param = MakeCommonParam(dim);
+    auto target = MakeHGraphIndex(MakeFp32HGraphJson(), common_param);
+    auto source = MakeHGraphIndex(MakeFp32HGraphJson(false), common_param);
+
     std::vector<float> target_vectors = {0.0F, 0.0F};
     std::vector<int64_t> target_ids = {10};
     auto target_data = MakeFloatDataset(target_vectors, target_ids, dim, 1);
     REQUIRE(target->Build(target_data).has_value());
 
-    auto source = MakeHGraphIndex(hgraph_json, common_param);
-    std::vector<float> source_vectors = {4.0F, 0.0F};
+    std::vector<float> source_vectors = {1.0F, 0.0F};
     std::vector<int64_t> source_ids = {20};
     auto source_data = MakeFloatDataset(source_vectors, source_ids, dim, 1);
     REQUIRE(source->Build(source_data).has_value());
@@ -899,6 +1110,139 @@ TEST_CASE("HGraph deduplicate_storage rejects Merge", "[ut][hgraph][duplicate][m
     REQUIRE_FALSE(merge_result.has_value());
     REQUIRE(merge_result.error().message.find("deduplicate_storage") != std::string::npos);
     REQUIRE(target->GetNumElements() == 1);
+    auto target_hgraph = std::dynamic_pointer_cast<vsag::HGraph>(target->GetInnerIndex());
+    REQUIRE(target_hgraph != nullptr);
+    REQUIRE(target_hgraph->GetCodeStorageCounts() ==
+            (std::pair<vsag::InnerIdType, vsag::CodeSlotIdType>{1, 1}));
+}
+
+TEST_CASE("HGraph deduplicate_storage Merge rejects RabitQ without stored rebuild vectors",
+          "[ut][hgraph][duplicate][merge]") {
+    constexpr int64_t dim = 960;
+    auto common_param = MakeCommonParam(dim);
+    auto hgraph_json = MakeRabitQHGraphJson(false);
+    auto target = MakeHGraphIndex(hgraph_json, common_param);
+    auto source = MakeHGraphIndex(hgraph_json, common_param);
+
+    std::vector<float> target_vectors(dim * 3);
+    std::vector<float> source_vectors(dim * 3);
+    for (int64_t d = 0; d < dim; ++d) {
+        target_vectors[d] = static_cast<float>(d % 17) * 0.01F;
+        target_vectors[dim + d] = 1.0F + static_cast<float>(d % 13) * 0.01F;
+        target_vectors[2 * dim + d] = target_vectors[dim + d];
+        source_vectors[d] = 2.0F + static_cast<float>(d % 11) * 0.01F;
+        source_vectors[dim + d] = source_vectors[d];
+        source_vectors[2 * dim + d] = 3.0F + static_cast<float>(d % 7) * 0.01F;
+    }
+    std::vector<int64_t> target_ids = {10, 11, 12};
+    std::vector<int64_t> source_ids = {20, 21, 22};
+    REQUIRE(target->Build(MakeFloatDataset(target_vectors, target_ids, dim, 3)).has_value());
+    REQUIRE(source->Build(MakeFloatDataset(source_vectors, source_ids, dim, 3)).has_value());
+
+    vsag::IdMapFunction id_map = [](int64_t id) -> std::tuple<bool, int64_t> {
+        return std::make_tuple(true, id);
+    };
+    auto merge_result = target->Merge({vsag::MergeUnit{source, id_map}});
+    REQUIRE_FALSE(merge_result.has_value());
+    REQUIRE(merge_result.error().message.find("store_raw_vector") != std::string::npos);
+
+    auto target_hgraph = std::dynamic_pointer_cast<vsag::HGraph>(target->GetInnerIndex());
+    REQUIRE(target_hgraph != nullptr);
+    REQUIRE(target_hgraph->GetCodeStorageCounts() ==
+            (std::pair<vsag::InnerIdType, vsag::CodeSlotIdType>{3, 2}));
+}
+
+TEST_CASE("HGraph deduplicate_storage Merge appends every physical code layer",
+          "[ut][hgraph][duplicate][merge]") {
+    vsag::IdMapFunction id_map = [](int64_t id) -> std::tuple<bool, int64_t> {
+        return std::make_tuple(true, id);
+    };
+
+    SECTION("precise reorder codes") {
+        constexpr int64_t dim = 4;
+        auto common_param = MakeCommonParam(dim);
+        auto hgraph_json = MakeFp32ReorderHGraphJson();
+        auto target = MakeHGraphIndex(hgraph_json, common_param);
+
+        std::vector<float> target_vectors = {
+            0.0F,
+            0.0F,
+            0.0F,
+            0.0F,
+            0.0F,
+            0.0F,
+            0.0F,
+            0.0F,
+        };
+        std::vector<int64_t> target_ids = {10, 11};
+        auto target_data = MakeFloatDataset(target_vectors, target_ids, dim, 2);
+        REQUIRE(target->Build(target_data).has_value());
+
+        auto model = target->ExportModel();
+        REQUIRE(model.has_value());
+        auto source = model.value();
+        std::vector<float> source_vectors = {
+            2.0F,
+            0.0F,
+            0.0F,
+            0.0F,
+            2.0F,
+            0.0F,
+            0.0F,
+            0.0F,
+        };
+        std::vector<int64_t> source_ids = {20, 21};
+        auto source_data = MakeFloatDataset(source_vectors, source_ids, dim, 2);
+        REQUIRE(source->Build(source_data).has_value());
+
+        REQUIRE(target->Merge({vsag::MergeUnit{source, id_map}}).has_value());
+        auto target_hgraph = std::dynamic_pointer_cast<vsag::HGraph>(target->GetInnerIndex());
+        REQUIRE(target_hgraph != nullptr);
+        REQUIRE(target_hgraph->GetCodeStorageCounts() ==
+                (std::pair<vsag::InnerIdType, vsag::CodeSlotIdType>{4, 2}));
+        REQUIRE(target->CalcDistanceById(source_vectors.data(), 20).value() == 0.0F);
+        auto query = MakeFloatQuery(source_vectors, dim);
+        RequireRangeContains(target, query, {20, 21}, 2, 0.01F, kBruteForceSearchParams);
+    }
+
+    SECTION("separate raw vectors") {
+        constexpr int64_t dim = 960;
+        auto common_param = MakeCommonParam(dim);
+        auto hgraph_json = MakeRabitQHGraphJson();
+        auto target = MakeHGraphIndex(hgraph_json, common_param);
+
+        std::vector<float> target_vectors(dim * 3);
+        for (int64_t d = 0; d < dim; ++d) {
+            target_vectors[d] = static_cast<float>(d % 17) * 0.01F;
+            target_vectors[dim + d] = 1.0F + static_cast<float>(d % 13) * 0.01F;
+            target_vectors[2 * dim + d] = target_vectors[dim + d];
+        }
+        std::vector<int64_t> target_ids = {10, 11, 12};
+        auto target_data = MakeFloatDataset(target_vectors, target_ids, dim, 3);
+        REQUIRE(target->Build(target_data).has_value());
+
+        auto model = target->ExportModel();
+        REQUIRE(model.has_value());
+        auto source = model.value();
+        std::vector<float> source_vectors(dim * 3);
+        for (int64_t d = 0; d < dim; ++d) {
+            source_vectors[d] = 2.0F + static_cast<float>(d % 11) * 0.01F;
+            source_vectors[dim + d] = source_vectors[d];
+            source_vectors[2 * dim + d] = 3.0F + static_cast<float>(d % 7) * 0.01F;
+        }
+        std::vector<int64_t> source_ids = {20, 21, 22};
+        auto source_data = MakeFloatDataset(source_vectors, source_ids, dim, 3);
+        REQUIRE(source->Build(source_data).has_value());
+
+        REQUIRE(target->Merge({vsag::MergeUnit{source, id_map}}).has_value());
+        auto target_hgraph = std::dynamic_pointer_cast<vsag::HGraph>(target->GetInnerIndex());
+        REQUIRE(target_hgraph != nullptr);
+        REQUIRE(target_hgraph->GetCodeStorageCounts() ==
+                (std::pair<vsag::InnerIdType, vsag::CodeSlotIdType>{6, 4}));
+        REQUIRE(target->CalcDistanceById(source_vectors.data(), 20).value() == 0.0F);
+        auto query = MakeFloatQuery(source_vectors, dim);
+        RequireRangeContains(target, query, {20, 21}, 2, 0.01F, kBruteForceSearchParams);
+    }
 }
 
 TEST_CASE("HGraph deduplicate_storage ExportModel keeps an empty reusable model",

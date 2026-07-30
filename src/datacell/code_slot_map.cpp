@@ -50,6 +50,109 @@ CodeSlotMap::AllocateSlot() {
     return slot_id;
 }
 
+CodeSlotIdType
+CodeSlotMap::Append(const CodeSlotMap& source, InnerIdType source_logical_count) {
+    CHECK_ARGUMENT(this != &source, "cannot append a code slot map to itself");
+
+    std::unique_lock target_lock(mutex_, std::defer_lock);
+    std::shared_lock source_lock(source.mutex_, std::defer_lock);
+    std::lock(target_lock, source_lock);
+
+    const auto logical_bias = published_logical_count_.load(std::memory_order_acquire);
+    const auto physical_bias = physical_count_.load(std::memory_order_acquire);
+    const auto source_published = source.published_logical_count_.load(std::memory_order_acquire);
+    const auto source_physical_count = source.physical_count_.load(std::memory_order_acquire);
+
+    CHECK_ARGUMENT(source_published == source_logical_count,
+                   fmt::format("source published logical count mismatch: {} != {}",
+                               source_published,
+                               source_logical_count));
+    CHECK_ARGUMENT(logical_bias <= logical_capacity_,
+                   fmt::format("destination published logical count {} exceeds capacity {}",
+                               logical_bias,
+                               logical_capacity_));
+    CHECK_ARGUMENT(source_logical_count <= source.logical_capacity_,
+                   fmt::format("source logical count {} exceeds capacity {}",
+                               source_logical_count,
+                               source.logical_capacity_));
+    CHECK_ARGUMENT(
+        physical_bias <= logical_bias,
+        fmt::format(
+            "destination physical count {} exceeds logical count {}", physical_bias, logical_bias));
+    CHECK_ARGUMENT(source_physical_count <= source_logical_count,
+                   fmt::format("source physical count {} exceeds logical count {}",
+                               source_physical_count,
+                               source_logical_count));
+    CHECK_ARGUMENT(source_logical_count <= std::numeric_limits<InnerIdType>::max() - logical_bias,
+                   "appended logical count exceeds the inner ID range");
+    CHECK_ARGUMENT(
+        source_physical_count <= std::numeric_limits<CodeSlotIdType>::max() - physical_bias,
+        "appended physical count exceeds the code slot ID range");
+
+    Vector<bool> target_referenced(physical_bias, false, allocator_);
+    for (InnerIdType inner_id = 0; inner_id < logical_bias; ++inner_id) {
+        const auto slot = inner_to_slot_[inner_id].load(std::memory_order_acquire);
+        CHECK_ARGUMENT(
+            slot != INVALID_CODE_SLOT,
+            fmt::format("destination logical ID {} is not continuously bound", inner_id));
+        CHECK_ARGUMENT(
+            slot < physical_bias,
+            fmt::format(
+                "destination logical ID {} references invalid physical slot {}", inner_id, slot));
+        target_referenced[slot] = true;
+    }
+    for (CodeSlotIdType slot = 0; slot < physical_bias; ++slot) {
+        CHECK_ARGUMENT(target_referenced[slot],
+                       fmt::format("destination physical slot {} is not referenced", slot));
+    }
+    for (InnerIdType inner_id = logical_bias; inner_id < logical_capacity_; ++inner_id) {
+        const auto slot = inner_to_slot_[inner_id].load(std::memory_order_acquire);
+        CHECK_ARGUMENT(slot == INVALID_CODE_SLOT,
+                       fmt::format("destination logical ID {} is bound after the continuous "
+                                   "published prefix",
+                                   inner_id));
+    }
+
+    Vector<CodeSlotIdType> source_slots(source_logical_count, allocator_);
+    Vector<bool> source_referenced(source_physical_count, false, allocator_);
+    for (InnerIdType inner_id = 0; inner_id < source_logical_count; ++inner_id) {
+        const auto slot = source.inner_to_slot_[inner_id].load(std::memory_order_acquire);
+        CHECK_ARGUMENT(slot != INVALID_CODE_SLOT,
+                       fmt::format("source logical ID {} is not continuously bound", inner_id));
+        CHECK_ARGUMENT(
+            slot < source_physical_count,
+            fmt::format(
+                "source logical ID {} references invalid physical slot {}", inner_id, slot));
+        source_slots[inner_id] = slot;
+        source_referenced[slot] = true;
+    }
+    for (CodeSlotIdType slot = 0; slot < source_physical_count; ++slot) {
+        CHECK_ARGUMENT(source_referenced[slot],
+                       fmt::format("source physical slot {} is not referenced", slot));
+    }
+    for (InnerIdType inner_id = source_logical_count; inner_id < source.logical_capacity_;
+         ++inner_id) {
+        const auto slot = source.inner_to_slot_[inner_id].load(std::memory_order_acquire);
+        CHECK_ARGUMENT(
+            slot == INVALID_CODE_SLOT,
+            fmt::format("source logical ID {} is bound after the requested continuous prefix",
+                        inner_id));
+    }
+
+    const auto new_logical_count = static_cast<InnerIdType>(logical_bias + source_logical_count);
+    const auto new_physical_count =
+        static_cast<CodeSlotIdType>(physical_bias + source_physical_count);
+    this->EnsureLogicalSize(new_logical_count);
+
+    physical_count_.store(new_physical_count, std::memory_order_release);
+    for (InnerIdType inner_id = 0; inner_id < source_logical_count; ++inner_id) {
+        inner_to_slot_[logical_bias + inner_id].store(physical_bias + source_slots[inner_id],
+                                                      std::memory_order_release);
+    }
+    published_logical_count_.store(new_logical_count, std::memory_order_release);
+    return physical_bias;
+}
+
 void
 // NOLINTNEXTLINE(readability-make-member-function-const): publishing mutates slot bindings.
 CodeSlotMap::PublishSlot(InnerIdType inner_id, CodeSlotIdType code_slot_id) {

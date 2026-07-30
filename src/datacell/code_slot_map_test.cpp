@@ -237,6 +237,109 @@ TEST_CASE("CodeSlotMap rejects invalid mappings", "[ut][datacell][code_slot_map]
     REQUIRE_THROWS(mapping.PublishSlot(1, slot + 1));
 }
 
+TEST_CASE("CodeSlotMap appends continuous logical and physical slots",
+          "[ut][datacell][code_slot_map]") {
+    auto allocator = vsag::SafeAllocator::FactoryDefaultAllocator();
+    vsag::CodeSlotMap target(allocator.get());
+    target.ReserveLogicalSize(3);
+    target.PublishSlot(0, target.AllocateSlot());
+    auto target_shared_slot = target.AllocateSlot();
+    target.PublishSlot(1, target_shared_slot);
+    target.PublishSlot(2, target_shared_slot);
+
+    vsag::CodeSlotMap source(allocator.get());
+    source.ReserveLogicalSize(4);
+    auto source_shared_slot_0 = source.AllocateSlot();
+    source.PublishSlot(0, source_shared_slot_0);
+    source.PublishSlot(1, source_shared_slot_0);
+    auto source_shared_slot_1 = source.AllocateSlot();
+    source.PublishSlot(2, source_shared_slot_1);
+    source.PublishSlot(3, source_shared_slot_1);
+
+    const auto physical_bias = target.Append(source, 4);
+
+    REQUIRE(physical_bias == 2);
+    REQUIRE(target.PublishedLogicalCount() == 7);
+    REQUIRE(target.PhysicalCount() == 4);
+    REQUIRE(target.Resolve(0) == 0);
+    REQUIRE(target.Resolve(1) == 1);
+    REQUIRE(target.Resolve(2) == 1);
+    REQUIRE(target.Resolve(3) == 2);
+    REQUIRE(target.Resolve(4) == 2);
+    REQUIRE(target.Resolve(5) == 3);
+    REQUIRE(target.Resolve(6) == 3);
+}
+
+TEST_CASE("CodeSlotMap validates append before changing the destination",
+          "[ut][datacell][code_slot_map]") {
+    auto allocator = vsag::SafeAllocator::FactoryDefaultAllocator();
+    vsag::CodeSlotMap target(allocator.get());
+    target.ReserveLogicalSize(2);
+    target.PublishSlot(0, target.AllocateSlot());
+
+    SECTION("source logical prefix must be fully published") {
+        vsag::CodeSlotMap source(allocator.get());
+        source.ReserveLogicalSize(2);
+        source.PublishSlot(0, source.AllocateSlot());
+
+        REQUIRE_THROWS(target.Append(source, 2));
+    }
+
+    SECTION("every source physical slot must be referenced") {
+        vsag::CodeSlotMap source(allocator.get());
+        source.ReserveLogicalSize(2);
+        auto referenced_slot = source.AllocateSlot();
+        source.AllocateSlot();
+        source.PublishSlot(0, referenced_slot);
+        source.PublishSlot(1, referenced_slot);
+
+        REQUIRE_THROWS(target.Append(source, 2));
+    }
+
+    SECTION("source bindings must form a continuous logical prefix") {
+        vsag::CodeSlotMap source(allocator.get());
+        source.ReserveLogicalSize(3);
+        source.PublishSlot(2, source.AllocateSlot());
+
+        REQUIRE_THROWS(target.Append(source, 1));
+    }
+
+    REQUIRE(target.PublishedLogicalCount() == 1);
+    REQUIRE(target.PhysicalCount() == 1);
+    REQUIRE(target.Resolve(0) == 0);
+    REQUIRE_THROWS(target.Resolve(1));
+}
+
+TEST_CASE("CodeSlotMap rejects self append", "[ut][datacell][code_slot_map]") {
+    auto allocator = vsag::SafeAllocator::FactoryDefaultAllocator();
+    vsag::CodeSlotMap mapping(allocator.get());
+    mapping.ReserveLogicalSize(1);
+    mapping.PublishSlot(0, mapping.AllocateSlot());
+
+    REQUIRE_THROWS(mapping.Append(mapping, 1));
+    REQUIRE(mapping.PublishedLogicalCount() == 1);
+    REQUIRE(mapping.PhysicalCount() == 1);
+    REQUIRE(mapping.Resolve(0) == 0);
+}
+
+TEST_CASE("CodeSlotMap requires a continuous destination before append",
+          "[ut][datacell][code_slot_map]") {
+    auto allocator = vsag::SafeAllocator::FactoryDefaultAllocator();
+    vsag::CodeSlotMap target(allocator.get());
+    target.ReserveLogicalSize(3);
+    target.PublishSlot(2, target.AllocateSlot());
+
+    vsag::CodeSlotMap source(allocator.get());
+    source.ReserveLogicalSize(1);
+    source.PublishSlot(0, source.AllocateSlot());
+
+    REQUIRE_THROWS(target.Append(source, 1));
+    REQUIRE(target.PublishedLogicalCount() == 1);
+    REQUIRE(target.PhysicalCount() == 1);
+    REQUIRE(target.Resolve(2) == 0);
+    REQUIRE_THROWS(target.Resolve(0));
+}
+
 TEST_CASE("CodeSlotMap serializes logical to physical slots", "[ut][datacell][code_slot_map]") {
     auto allocator = vsag::SafeAllocator::FactoryDefaultAllocator();
     vsag::CodeSlotMap mapping(allocator.get());

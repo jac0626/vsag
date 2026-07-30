@@ -56,12 +56,26 @@ public:
 
     virtual void
     MergeOther(const DuplicateInterface& other, InnerIdType bias, InnerIdType count) {
+        std::vector<bool> visited(count, false);
         for (InnerIdType id = 0; id < count; ++id) {
-            if (other.GetGroupId(id) != id) {
+            if (visited[id]) {
                 continue;
             }
-            for (auto duplicate_id : other.GetDuplicateIds(id)) {
-                this->SetDuplicateId(id + bias, duplicate_id + bias);
+
+            const auto group_id = other.GetGroupId(id);
+            if (group_id >= count || visited[group_id]) {
+                visited[id] = true;
+                continue;
+            }
+
+            visited[id] = true;
+            visited[group_id] = true;
+            for (auto duplicate_id : other.GetDuplicateIds(group_id)) {
+                if (duplicate_id >= count || visited[duplicate_id]) {
+                    continue;
+                }
+                visited[duplicate_id] = true;
+                this->SetDuplicateId(group_id + bias, duplicate_id + bias);
             }
         }
     }

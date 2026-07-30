@@ -17,9 +17,12 @@
 #include <datacell/compressed_graph_datacell_parameter.h>
 #include <fmt/format.h>
 
+#include <algorithm>
+#include <limits>
 #include <memory>
 #include <mutex>
 #include <stdexcept>
+#include <typeinfo>
 #include <utility>
 
 #include "algorithm/inner_index_interface.h"
@@ -467,41 +470,257 @@ HGraph::GetCodeByInnerId(InnerIdType inner_id, uint8_t* data) const {
 
 void
 HGraph::Merge(const std::vector<MergeUnit>& merge_units) {
-    CHECK_ARGUMENT(not this->using_dedup_storage(),
-                   "HGraph deduplicate_storage does not support Merge");
+    if (merge_units.empty()) {
+        return;
+    }
+
+    const bool merge_deduplicated_storage = this->using_dedup_storage();
+    std::vector<std::shared_ptr<HGraph>> deduplicated_sources;
+
     int64_t total_count = this->GetNumElements();
-    for (const auto& unit : merge_units) {
-        total_count += unit.index->GetNumElements();
+    CodeSlotIdType merged_physical_count = 0;
+    if (merge_deduplicated_storage) {
+        auto validate_deduplicated_index = [](const HGraph* index) {
+            CHECK_ARGUMENT(index->GetNumberRemoved() == 0,
+                           "HGraph deduplicate_storage does not support merging an index with "
+                           "removed vectors");
+            CHECK_ARGUMENT(index->code_slot_map_ != nullptr,
+                           "HGraph deduplicate_storage merge requires a code slot map");
+            CHECK_ARGUMENT(index->bottom_graph_->GetDuplicateTracker() != nullptr,
+                           "HGraph deduplicate_storage merge requires a duplicate tracker");
+
+            const auto logical_count = index->total_count_.load(std::memory_order_acquire);
+            CHECK_ARGUMENT(
+                logical_count <= std::numeric_limits<InnerIdType>::max(),
+                fmt::format("HGraph logical count({}) exceeds the supported limit", logical_count));
+            CHECK_ARGUMENT(
+                index->code_slot_map_->PublishedLogicalCount() == logical_count,
+                fmt::format("HGraph code slot map logical count({}) does not match index count({})",
+                            index->code_slot_map_->PublishedLogicalCount(),
+                            logical_count));
+            CHECK_ARGUMENT(index->label_table_->GetTotalCount() == logical_count,
+                           fmt::format("HGraph label count({}) does not match index count({})",
+                                       index->label_table_->GetTotalCount(),
+                                       logical_count));
+            CHECK_ARGUMENT(index->bottom_graph_->TotalCount() <= logical_count,
+                           fmt::format("HGraph bottom graph count({}) exceeds index count({})",
+                                       index->bottom_graph_->TotalCount(),
+                                       logical_count));
+
+            const auto physical_count = index->code_slot_map_->PhysicalCount();
+            auto validate_flatten = [physical_count](const FlattenInterfacePtr& flatten,
+                                                     const char* name) {
+                CHECK_ARGUMENT(flatten != nullptr,
+                               fmt::format("HGraph deduplicate_storage merge requires {}", name));
+                const auto stored_count = GetCodeSlotPhysicalFlatten(flatten)->TotalCount();
+                CHECK_ARGUMENT(
+                    stored_count == physical_count,
+                    fmt::format("HGraph {} physical count({}) does not match code slot count({})",
+                                name,
+                                stored_count,
+                                physical_count));
+            };
+            validate_flatten(index->basic_flatten_codes_, "base codes");
+            if (index->has_precise_reorder()) {
+                validate_flatten(index->high_precise_codes_, "precise codes");
+            }
+            if (index->create_new_raw_vector_) {
+                validate_flatten(index->raw_vector_, "raw vectors");
+            }
+            if (index->need_temporary_sq8_build_data_for_add()) {
+                CHECK_ARGUMENT(
+                    index->raw_vector_ != nullptr,
+                    "HGraph deduplicate_storage Merge requires store_raw_vector for RabitQ "
+                    "without precise reorder");
+            }
+        };
+        auto validate_flatten_pair = [](const FlattenInterfacePtr& target,
+                                        const FlattenInterfacePtr& source,
+                                        const char* name) {
+            const auto target_physical = GetCodeSlotPhysicalFlatten(target);
+            const auto source_physical = GetCodeSlotPhysicalFlatten(source);
+            // MergeOther casts to the concrete quantizer/IO flatten type, so the dynamic types
+            // must match even when their public quantizer names and code sizes are equal.
+            // NOLINTNEXTLINE(clang-diagnostic-potentially-evaluated-expression)
+            const auto& target_storage_type = typeid(*target_physical);
+            // NOLINTNEXTLINE(clang-diagnostic-potentially-evaluated-expression)
+            const auto& source_storage_type = typeid(*source_physical);
+            CHECK_ARGUMENT(
+                target_storage_type == source_storage_type,
+                fmt::format("cannot merge HGraph indexes with different {} storage types", name));
+            CHECK_ARGUMENT(
+                target_physical->code_size_ == source_physical->code_size_,
+                fmt::format("cannot merge HGraph indexes with different {} code sizes", name));
+        };
+
+        validate_deduplicated_index(this);
+        uint64_t merged_count = this->total_count_.load(std::memory_order_acquire);
+        merged_physical_count = this->code_slot_map_->PhysicalCount();
+        deduplicated_sources.reserve(merge_units.size());
+        for (const auto& unit : merge_units) {
+            CHECK_ARGUMENT(unit.index != nullptr, "HGraph cannot merge a null index");
+            CHECK_ARGUMENT(unit.id_map_func != nullptr,
+                           "HGraph deduplicate_storage merge requires an ID map function");
+            const auto index_impl = std::dynamic_pointer_cast<IndexImpl<HGraph>>(unit.index);
+            CHECK_ARGUMENT(index_impl != nullptr,
+                           "HGraph deduplicate_storage can only merge another HGraph index");
+            const auto other_index = std::dynamic_pointer_cast<HGraph>(index_impl->GetInnerIndex());
+            CHECK_ARGUMENT(other_index != nullptr,
+                           "HGraph deduplicate_storage can only merge another HGraph index");
+            CHECK_ARGUMENT(other_index.get() != this,
+                           "HGraph deduplicate_storage cannot merge an index into itself");
+            CHECK_ARGUMENT(this->support_duplicate_ == other_index->support_duplicate_,
+                           "cannot merge HGraph with different support_duplicate settings");
+            CHECK_ARGUMENT(this->using_dedup_storage() == other_index->using_dedup_storage(),
+                           "cannot merge HGraph with different deduplicate_storage settings");
+            CHECK_ARGUMENT(this->dim_ == other_index->dim_,
+                           "cannot merge HGraph indexes with different dimensions");
+            CHECK_ARGUMENT(this->data_type_ == other_index->data_type_,
+                           "cannot merge HGraph indexes with different data types");
+            CHECK_ARGUMENT(this->metric_ == other_index->metric_,
+                           "cannot merge HGraph indexes with different metrics");
+            CHECK_ARGUMENT(
+                this->create_param_ptr_->CheckCompatibility(other_index->create_param_ptr_),
+                "cannot merge HGraph indexes with incompatible parameters");
+            CHECK_ARGUMENT(this->has_precise_reorder() == other_index->has_precise_reorder(),
+                           "cannot merge HGraph indexes with different reorder settings");
+            CHECK_ARGUMENT(
+                this->create_new_raw_vector_ == other_index->create_new_raw_vector_,
+                "cannot merge HGraph indexes with different raw vector storage settings");
+            validate_deduplicated_index(other_index.get());
+            validate_flatten_pair(
+                this->basic_flatten_codes_, other_index->basic_flatten_codes_, "base code");
+            if (this->has_precise_reorder()) {
+                validate_flatten_pair(
+                    this->high_precise_codes_, other_index->high_precise_codes_, "precise code");
+            }
+            if (this->create_new_raw_vector_) {
+                validate_flatten_pair(this->raw_vector_, other_index->raw_vector_, "raw vector");
+            }
+            CHECK_ARGUMENT(
+                this->bottom_graph_->MaximumDegree() == other_index->bottom_graph_->MaximumDegree(),
+                "cannot merge HGraph indexes with different bottom graph degrees");
+
+            const auto source_logical_count =
+                other_index->total_count_.load(std::memory_order_acquire);
+            CHECK_ARGUMENT(
+                source_logical_count <= std::numeric_limits<InnerIdType>::max() - merged_count,
+                "merged HGraph count exceeds the supported limit");
+            merged_count += source_logical_count;
+            const auto source_physical_count = other_index->code_slot_map_->PhysicalCount();
+            CHECK_ARGUMENT(source_physical_count <=
+                               std::numeric_limits<CodeSlotIdType>::max() - merged_physical_count,
+                           "merged HGraph physical code count exceeds the supported limit");
+            merged_physical_count += source_physical_count;
+            deduplicated_sources.emplace_back(other_index);
+        }
+        total_count = static_cast<int64_t>(merged_count);
+    } else {
+        for (const auto& unit : merge_units) {
+            total_count += unit.index->GetNumElements();
+        }
     }
     if (max_capacity_ < total_count) {
         this->resize(total_count);
     }
-    for (const auto& merge_unit : merge_units) {
-        const auto other_index = std::dynamic_pointer_cast<HGraph>(
-            std::dynamic_pointer_cast<IndexImpl<HGraph>>(merge_unit.index)->GetInnerIndex());
+    if (merge_deduplicated_storage) {
+        this->ensure_physical_code_capacity(merged_physical_count);
+    }
+    for (uint64_t unit_id = 0; unit_id < merge_units.size(); ++unit_id) {
+        const auto& merge_unit = merge_units[unit_id];
+        const auto other_index =
+            merge_deduplicated_storage
+                ? deduplicated_sources[unit_id]
+                : std::dynamic_pointer_cast<HGraph>(
+                      std::dynamic_pointer_cast<IndexImpl<HGraph>>(merge_unit.index)
+                          ->GetInnerIndex());
         CHECK_ARGUMENT(this->support_duplicate_ == other_index->support_duplicate_,
                        "cannot merge HGraph with different support_duplicate settings");
-        CHECK_ARGUMENT(not other_index->using_dedup_storage(),
-                       "HGraph deduplicate_storage does not support Merge");
+        CHECK_ARGUMENT(this->using_dedup_storage() == other_index->using_dedup_storage(),
+                       "cannot merge HGraph with different deduplicate_storage settings");
 
         auto logical_bias = this->total_count_.load(std::memory_order_acquire);
+        auto physical_bias = static_cast<CodeSlotIdType>(logical_bias);
+        auto source_logical_count =
+            static_cast<InnerIdType>(other_index->total_count_.load(std::memory_order_acquire));
+        if (merge_deduplicated_storage) {
+            physical_bias = this->code_slot_map_->PhysicalCount();
+        }
         if (total_count_ == 0) {
             this->entry_point_id_ = other_index->entry_point_id_;
         }
-        basic_flatten_codes_->MergeOther(other_index->basic_flatten_codes_, logical_bias);
+        if (merge_deduplicated_storage) {
+            GetCodeSlotPhysicalFlatten(basic_flatten_codes_)
+                ->MergeOther(GetCodeSlotPhysicalFlatten(other_index->basic_flatten_codes_),
+                             physical_bias);
+        } else {
+            basic_flatten_codes_->MergeOther(other_index->basic_flatten_codes_, logical_bias);
+        }
         label_table_->MergeOther(other_index->label_table_, merge_unit.id_map_func);
         if (has_precise_reorder()) {
-            high_precise_codes_->MergeOther(other_index->high_precise_codes_, logical_bias);
+            if (merge_deduplicated_storage) {
+                GetCodeSlotPhysicalFlatten(high_precise_codes_)
+                    ->MergeOther(GetCodeSlotPhysicalFlatten(other_index->high_precise_codes_),
+                                 physical_bias);
+            } else {
+                high_precise_codes_->MergeOther(other_index->high_precise_codes_, logical_bias);
+            }
         }
-        bottom_graph_->MergeOther(other_index->bottom_graph_, logical_bias);
+        if (merge_deduplicated_storage) {
+            // Preserve each source index's existing slot sharing. Merge intentionally does not
+            // rerun duplicate detection across independently built indexes.
+            if (create_new_raw_vector_) {
+                GetCodeSlotPhysicalFlatten(raw_vector_)
+                    ->MergeOther(GetCodeSlotPhysicalFlatten(other_index->raw_vector_),
+                                 physical_bias);
+            }
+            const auto appended_physical_bias =
+                this->code_slot_map_->Append(*other_index->code_slot_map_, source_logical_count);
+            CHECK_ARGUMENT(appended_physical_bias == physical_bias,
+                           "HGraph code slot map changed while merging physical codes");
+            this->bottom_graph_->GetDuplicateTracker()->MergeOther(
+                *other_index->bottom_graph_->GetDuplicateTracker(),
+                logical_bias,
+                source_logical_count);
+        }
+        if (merge_deduplicated_storage) {
+            // GraphInterface::MergeOther is not implemented by every supported NSW storage.
+            // Copying through the common neighbor API also keeps this path valid for compressed
+            // graphs; removed-node versions do not apply because deduplicated Merge rejects them.
+            Vector<InnerIdType> neighbors(this->allocator_);
+            const auto source_graph_count = other_index->bottom_graph_->TotalCount();
+            for (InnerIdType inner_id = 0; inner_id < source_graph_count; ++inner_id) {
+                other_index->bottom_graph_->GetNeighbors(inner_id, neighbors);
+                for (auto& neighbor_id : neighbors) {
+                    CHECK_ARGUMENT(neighbor_id < source_logical_count,
+                                   fmt::format("source graph neighbor {} exceeds logical count {}",
+                                               neighbor_id,
+                                               source_logical_count));
+                    neighbor_id += logical_bias;
+                }
+                bottom_graph_->InsertNeighborsById(inner_id + logical_bias, neighbors);
+            }
+        } else {
+            bottom_graph_->MergeOther(other_index->bottom_graph_, logical_bias);
+        }
         if (route_graphs_.size() < other_index->route_graphs_.size()) {
-            route_graphs_.push_back(this->generate_one_route_graph());
+            if (merge_deduplicated_storage) {
+                while (route_graphs_.size() < other_index->route_graphs_.size()) {
+                    route_graphs_.push_back(this->generate_one_route_graph());
+                }
+            } else {
+                route_graphs_.push_back(this->generate_one_route_graph());
+            }
         }
         for (int j = 0; j < std::min(other_index->route_graphs_.size(), route_graphs_.size());
              ++j) {
             route_graphs_[j]->MergeOther(other_index->route_graphs_[j], logical_bias);
         }
-        this->total_count_ += other_index->GetNumElements();
+        this->total_count_ +=
+            merge_deduplicated_storage ? source_logical_count : other_index->GetNumElements();
+    }
+    if (this->total_count_ == 0) {
+        return;
     }
     if (this->odescent_param_ == nullptr) {
         odescent_param_ = std::make_shared<ODescentParameter>();
@@ -509,17 +728,67 @@ HGraph::Merge(const std::vector<MergeUnit>& merge_units) {
 
     auto build_data = (has_precise_reorder() and not build_by_base_) ? this->high_precise_codes_
                                                                      : this->basic_flatten_codes_;
-    for (InnerIdType inner_id = 0; inner_id < this->total_count_; ++inner_id) {
-        Vector<InnerIdType> neighbors(this->allocator_);
-        this->bottom_graph_->GetNeighbors(inner_id, neighbors);
-        neighbors.resize(neighbors.size() / 2);
-        this->bottom_graph_->InsertNeighborsById(inner_id, neighbors);
+    if (merge_deduplicated_storage and this->need_temporary_sq8_build_data_for_add()) {
+        build_data = this->raw_vector_;
+    }
+    Vector<InnerIdType> representative_ids(this->allocator_);
+    Vector<bool> representative_mask(this->allocator_);
+    if (merge_deduplicated_storage) {
+        // Duplicate-only logical IDs share their representative's codes and are not graph nodes.
+        // Rebuilding them as vertices would return the same logical group more than once.
+        const auto logical_count =
+            static_cast<InnerIdType>(this->total_count_.load(std::memory_order_acquire));
+        representative_mask.assign(logical_count, true);
+        representative_ids.reserve(logical_count);
+        for (InnerIdType inner_id = 0; inner_id < logical_count; ++inner_id) {
+            if (not representative_mask[inner_id]) {
+                continue;
+            }
+            representative_ids.emplace_back(inner_id);
+            for (const auto duplicate_id : this->bottom_graph_->GetDuplicateIds(inner_id)) {
+                CHECK_ARGUMENT(duplicate_id < logical_count,
+                               fmt::format("duplicate id({}) exceeds HGraph logical count({})",
+                                           duplicate_id,
+                                           logical_count));
+                CHECK_ARGUMENT(
+                    duplicate_id > inner_id,
+                    fmt::format("duplicate group for representative {} contains invalid id {}",
+                                inner_id,
+                                duplicate_id));
+                representative_mask[duplicate_id] = false;
+            }
+        }
+
+        for (const auto inner_id : representative_ids) {
+            Vector<InnerIdType> neighbors(this->allocator_);
+            this->bottom_graph_->GetNeighbors(inner_id, neighbors);
+            neighbors.erase(std::remove_if(neighbors.begin(),
+                                           neighbors.end(),
+                                           [&representative_mask](InnerIdType neighbor_id) {
+                                               return neighbor_id >= representative_mask.size() or
+                                                      not representative_mask[neighbor_id];
+                                           }),
+                            neighbors.end());
+            neighbors.resize(neighbors.size() / 2);
+            this->bottom_graph_->InsertNeighborsById(inner_id, neighbors);
+        }
+    } else {
+        for (InnerIdType inner_id = 0; inner_id < this->total_count_; ++inner_id) {
+            Vector<InnerIdType> neighbors(this->allocator_);
+            this->bottom_graph_->GetNeighbors(inner_id, neighbors);
+            neighbors.resize(neighbors.size() / 2);
+            this->bottom_graph_->InsertNeighborsById(inner_id, neighbors);
+        }
     }
     {
         odescent_param_->max_degree = bottom_graph_->MaximumDegree();
         ODescent odescent_builder(
             odescent_param_, build_data, allocator_, this->thread_pool_.get());
-        odescent_builder.Build(bottom_graph_);
+        if (merge_deduplicated_storage) {
+            odescent_builder.Build(representative_ids, bottom_graph_);
+        } else {
+            odescent_builder.Build(bottom_graph_);
+        }
         odescent_builder.SaveGraph(bottom_graph_);
     }
     for (auto& graph : route_graphs_) {
@@ -527,6 +796,18 @@ HGraph::Merge(const std::vector<MergeUnit>& merge_units) {
         ODescent sparse_odescent_builder(
             odescent_param_, build_data, allocator_, this->thread_pool_.get());
         auto ids = graph->GetIds();
+        if (merge_deduplicated_storage) {
+            ids.erase(std::remove_if(ids.begin(),
+                                     ids.end(),
+                                     [&representative_mask](InnerIdType id) {
+                                         return id >= representative_mask.size() or
+                                                not representative_mask[id];
+                                     }),
+                      ids.end());
+        }
+        if (ids.empty()) {
+            continue;
+        }
         sparse_odescent_builder.Build(ids, graph);
         sparse_odescent_builder.SaveGraph(graph);
         this->entry_point_id_ = ids.back();

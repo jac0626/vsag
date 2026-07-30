@@ -39,6 +39,20 @@ public:
     CodeSlotIdType
     AllocateSlot();
 
+    /**
+     * Append the source map's contiguous logical prefix to this map.
+     *
+     * The destination logical and physical biases are fixed to the destination's current
+     * PublishedLogicalCount() and PhysicalCount(). Every source physical slot in
+     * [0, source.PhysicalCount()) must be referenced by at least one of the
+     * source_logical_count logical IDs. The returned physical bias is the offset callers must
+     * use when appending the corresponding physical flatten storage.
+     *
+     * All source and destination invariants are validated before this map is changed.
+     */
+    [[nodiscard]] CodeSlotIdType
+    Append(const CodeSlotMap& source, InnerIdType source_logical_count);
+
     void
     PublishSlot(InnerIdType inner_id, CodeSlotIdType code_slot_id);
 

@@ -31,6 +31,26 @@ sorted_duplicates(std::vector<InnerIdType> ids) -> std::vector<InnerIdType> {
     return ids;
 }
 
+class CountingDenseDuplicateTracker : public DenseDuplicateTracker {
+public:
+    using DenseDuplicateTracker::DenseDuplicateTracker;
+
+    auto
+    GetDuplicateIds(InnerIdType id) const -> std::vector<InnerIdType> override {
+        ++get_duplicate_ids_count;
+        return DenseDuplicateTracker::GetDuplicateIds(id);
+    }
+
+    [[nodiscard]] auto
+    GetGroupId(InnerIdType id) const -> InnerIdType override {
+        ++get_group_id_count;
+        return DenseDuplicateTracker::GetGroupId(id);
+    }
+
+    mutable uint64_t get_duplicate_ids_count{0};
+    mutable uint64_t get_group_id_count{0};
+};
+
 }  // namespace
 
 TEST_CASE("DenseDuplicateTracker tracks duplicate groups", "[ut][DenseDuplicateTracker]") {
@@ -65,6 +85,52 @@ TEST_CASE("DenseDuplicateTracker ignores duplicate reinsertion", "[ut][DenseDupl
     tracker.SetDuplicateId(1, 1);
 
     REQUIRE(tracker.GetDuplicateIds(0) == std::vector<InnerIdType>{1});
+}
+
+TEST_CASE("DenseDuplicateTracker merges multiple groups with a non-zero bias",
+          "[ut][DenseDuplicateTracker]") {
+    constexpr InnerIdType bias = 17;
+    constexpr InnerIdType large_group_size = 2048;
+    constexpr InnerIdType second_group_id = large_group_size;
+    constexpr InnerIdType third_group_id = second_group_id + 3;
+    constexpr InnerIdType count = third_group_id + 5;
+
+    auto allocator = std::make_shared<DefaultAllocator>();
+    CountingDenseDuplicateTracker source(allocator.get());
+    source.Resize(count);
+    for (InnerIdType id = 1; id < large_group_size; ++id) {
+        source.SetDuplicateId(0, id);
+    }
+    source.SetDuplicateId(second_group_id, second_group_id + 1);
+    source.SetDuplicateId(second_group_id, second_group_id + 2);
+    source.SetDuplicateId(third_group_id, third_group_id + 1);
+
+    DenseDuplicateTracker target(allocator.get());
+    target.Resize(bias + count);
+    target.SetDuplicateId(0, 1);
+    target.MergeOther(source, bias, count);
+
+    REQUIRE(source.get_group_id_count == 6);
+    REQUIRE(source.get_duplicate_ids_count == 6);
+
+    std::vector<InnerIdType> expected_large_group;
+    expected_large_group.reserve(large_group_size - 1);
+    for (InnerIdType id = 1; id < large_group_size; ++id) {
+        expected_large_group.push_back(bias + id);
+    }
+    REQUIRE(sorted_duplicates(target.GetDuplicateIds(bias)) == expected_large_group);
+    REQUIRE(target.GetGroupId(bias + large_group_size - 1) == bias);
+
+    REQUIRE(sorted_duplicates(target.GetDuplicateIds(bias + second_group_id)) ==
+            std::vector<InnerIdType>{bias + second_group_id + 1, bias + second_group_id + 2});
+    REQUIRE(target.GetGroupId(bias + second_group_id + 2) == bias + second_group_id);
+
+    REQUIRE(target.GetDuplicateIds(bias + third_group_id) ==
+            std::vector<InnerIdType>{bias + third_group_id + 1});
+    REQUIRE(target.GetGroupId(bias + third_group_id + 1) == bias + third_group_id);
+
+    REQUIRE(target.GetDuplicateIds(bias + third_group_id + 2).empty());
+    REQUIRE(target.GetDuplicateIds(0) == std::vector<InnerIdType>{1});
 }
 
 TEST_CASE("DenseDuplicateTracker serialize and deserialize", "[ut][DenseDuplicateTracker]") {

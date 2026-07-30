@@ -111,8 +111,15 @@ is enabled:
 
 - force removal (`support_force_remove: true`);
 - cache-assisted build after `ImportCache()`;
-- `Merge`;
 - legacy v0.14 serialization.
+
+`Merge` preserves the duplicate groups already present in each input index, including the shared
+physical code slot within each group. It does not rerun duplicate detection across the destination
+and source indexes or between source indexes. Equal vectors from different input indexes therefore
+remain in separate duplicate groups and use separate physical code slots. The destination and all
+source indexes must use compatible index parameters and, for trained quantizers, the same exported
+model. RaBitQ without precise reorder also requires `store_raw_vector: true` so that the graph can
+be rebuilt. Inputs must not contain mark-removed vectors.
 
 `UpdateVector` is supported only for IDs whose vector storage is not shared with another
 duplicate-group member.
