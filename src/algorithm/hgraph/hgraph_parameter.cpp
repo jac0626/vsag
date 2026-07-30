@@ -370,8 +370,16 @@ HGraphSearchParameters::FromJson(const std::string& json_string) {
             params[INDEX_TYPE_HGRAPH][HGRAPH_PARAMETER_CONSIDER_DUPLICATE].GetBool();
     }
     if (params[INDEX_TYPE_HGRAPH].Contains(HGRAPH_PARAMETER_MAX_DUPLICATES_PER_GROUP)) {
-        obj.max_duplicates_per_group =
-            params[INDEX_TYPE_HGRAPH][HGRAPH_PARAMETER_MAX_DUPLICATES_PER_GROUP].GetInt();
+        const auto& max_duplicates_json =
+            params[INDEX_TYPE_HGRAPH][HGRAPH_PARAMETER_MAX_DUPLICATES_PER_GROUP];
+        CHECK_ARGUMENT(max_duplicates_json.IsNumberInteger(),
+                       "max_duplicates_per_group must be an integer");
+        if (max_duplicates_json.IsNumberUnsigned()) {
+            CHECK_ARGUMENT(max_duplicates_json.GetUint64() <=
+                               static_cast<uint64_t>(std::numeric_limits<int64_t>::max()),
+                           "max_duplicates_per_group exceeds int64_t range");
+        }
+        obj.max_duplicates_per_group = max_duplicates_json.GetInt();
         CHECK_ARGUMENT(obj.max_duplicates_per_group >= -1,
                        fmt::format("max_duplicates_per_group({}) must be >= -1",
                                    obj.max_duplicates_per_group));
