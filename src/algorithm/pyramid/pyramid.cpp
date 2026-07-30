@@ -15,15 +15,12 @@
 
 #include "pyramid.h"
 
-#include <atomic>
 #include <chrono>
 #include <exception>
-#include <limits>
 
 #include "algorithm/inner_index_interface.h"
 #include "analyzer/analyzer.h"
 #include "datacell/flatten_interface.h"
-#include "datacell/sparse_graph_datacell.h"
 #include "impl/heap/standard_heap.h"
 #include "impl/odescent/odescent_graph_builder.h"
 #include "impl/pruning_strategy.h"
@@ -39,77 +36,9 @@ namespace vsag {
 
 const static float RADIUS_EPSILON = 1.1F;
 constexpr uint64_t BUILD_CODES_BATCH_BYTES = uint64_t{32} * 1024 * 1024;
-constexpr uint64_t NSW_BUILD_TASKS_PER_WORKER = 4;
-constexpr uint64_t NSW_BUILD_MIN_CHUNK_IDS = 64;
-constexpr uint64_t NSW_BUILD_WARMUP_MIN_IDS = 64;
-constexpr uint64_t NSW_BUILD_WARMUP_MAX_IDS = 256;
-constexpr uint64_t NSW_BUILD_WARMUP_DEGREE_FACTOR = 2;
-
-class FrozenSparseGraphView final : public GraphInterface {
-public:
-    explicit FrozenSparseGraphView(std::shared_ptr<SparseGraphDataCell> graph)
-        : graph_(std::move(graph)) {
-    }
-
-    void
-    InsertNeighborsById(InnerIdType, const Vector<InnerIdType>&) override {
-        throw VsagException(ErrorType::INTERNAL_ERROR,
-                            "cannot insert graph keys through a frozen build view");
-    }
-
-    uint32_t
-    GetNeighborSize(InnerIdType) const override {
-        throw VsagException(ErrorType::INTERNAL_ERROR,
-                            "cannot read an unlocked size through a frozen build view");
-    }
-
-    void
-    GetNeighbors(InnerIdType id, Vector<InnerIdType>& neighbor_ids) const override {
-        graph_->GetNeighborsForBuild(id, neighbor_ids);
-    }
-
-    bool
-    CheckIdExists(InnerIdType id) const override {
-        return graph_->CheckIdExists(id);
-    }
-
-    void
-    Resize(InnerIdType) override {
-        throw VsagException(ErrorType::INTERNAL_ERROR,
-                            "cannot resize a graph through a frozen build view");
-    }
-
-    void
-    Prefetch(InnerIdType id, uint32_t neighbor_i) override {
-        graph_->Prefetch(id, neighbor_i);
-    }
-
-    InnerIdType
-    TotalCount() const override {
-        return graph_->TotalCount();
-    }
-
-    InnerIdType
-    MaximumDegree() const override {
-        return graph_->MaximumDegree();
-    }
-
-    InnerIdType
-    MaxCapacity() const override {
-        return graph_->MaxCapacity();
-    }
-
-private:
-    std::shared_ptr<SparseGraphDataCell> graph_;
-};
-
-static uint64_t
-ceil_div(uint64_t value, uint64_t divisor) {
-    return value == 0 ? 0 : 1 + (value - 1) / divisor;
-}
 
 static void
-wait_all_futures(Vector<std::future<void>>& futures, std::exception_ptr first_exception = nullptr) {
+wait_all_futures(Vector<std::future<void>>& futures, std::exception_ptr& first_exception) {
     for (auto& future : futures) {
         try {
             future.get();
@@ -383,371 +312,12 @@ Pyramid::collect_nsw_build_jobs(Hierarchy& hierarchy,
 }
 
 void
-Pyramid::build_nsw_graph_range(const NswBuildJob& job,
-                               uint64_t begin,
-                               uint64_t end,
-                               const float* data_vectors,
-                               const Vector<int64_t>& data_biases,
-                               const std::atomic<bool>* cancelled) {
-    for (uint64_t i = begin; i < end; ++i) {
-        if (cancelled != nullptr && cancelled->load(std::memory_order_acquire)) {
-            return;
-        }
-        const auto inner_id = job.node->ids_[i];
+Pyramid::build_nsw_graph(const NswBuildJob& job,
+                         const float* data_vectors,
+                         const Vector<int64_t>& data_biases) {
+    for (const auto inner_id : job.node->ids_) {
         const auto data_bias = data_biases[inner_id];
         add_one_point(*job.hierarchy, job.node, inner_id, data_vectors + dim_ * data_bias);
-    }
-}
-
-void
-Pyramid::build_nsw_graph_point(const NswBuildJob& job, InnerIdType inner_id, const float* vector) {
-    InnerSearchParam search_param;
-    search_param.ef = job.hierarchy->ef_construction;
-    search_param.topk = static_cast<int64_t>(job.hierarchy->ef_construction);
-    search_param.search_mode = KNN_SEARCH;
-    search_param.hops_limit = 10000;
-    search_param.ep = job.node->entry_point_;
-
-    auto codes = use_reorder_ ? precise_codes_ : base_codes_;
-    auto visited_list = pool_->TakeOne();
-    DistHeapPtr candidates;
-    try {
-        candidates = searcher_->Search(job.search_graph,
-                                       codes,
-                                       visited_list,
-                                       vector,
-                                       search_param,
-                                       (LabelTablePtr) nullptr,
-                                       nullptr);
-    } catch (...) {
-        pool_->ReturnOne(visited_list);
-        throw;
-    }
-    pool_->ReturnOne(visited_list);
-    publish_nsw_graph_point(job, inner_id, candidates);
-}
-
-void
-Pyramid::publish_nsw_graph_point(const NswBuildJob& job,
-                                 InnerIdType inner_id,
-                                 const DistHeapPtr& candidates) {
-    auto codes = use_reorder_ ? precise_codes_ : base_codes_;
-    const uint64_t max_degree = job.build_graph->MaximumDegree();
-
-    auto filtered_candidates = std::make_shared<StandardHeap<true, false>>(allocator_, -1);
-    while (not candidates->Empty()) {
-        const auto candidate = candidates->Top();
-        candidates->Pop();
-        if (candidate.second != inner_id) {
-            filtered_candidates->Push(candidate.first, candidate.second);
-        }
-    }
-    if (filtered_candidates->Empty()) {
-        throw VsagException(ErrorType::INTERNAL_ERROR,
-                            "no graph candidates found during Pyramid concurrent build");
-    }
-    select_edges_by_heuristic(
-        filtered_candidates, max_degree, codes, allocator_, job.hierarchy->alpha);
-
-    Vector<InnerIdType> selected_neighbors(allocator_);
-    selected_neighbors.reserve(filtered_candidates->Size());
-    while (not filtered_candidates->Empty()) {
-        selected_neighbors.emplace_back(filtered_candidates->Top().second);
-        filtered_candidates->Pop();
-    }
-
-    Vector<InnerIdType> forward_neighbors(allocator_);
-    {
-        // Never hold more than one point lock. Parent and child graphs share this lock array.
-        LockGuard current_lock(points_mutex_, inner_id);
-        Vector<InnerIdType> existing_neighbors(allocator_);
-        job.build_graph->GetNeighborsForBuild(inner_id, existing_neighbors);
-
-        auto merged = std::make_shared<StandardHeap<true, false>>(allocator_, -1);
-        UnorderedSet<InnerIdType> seen(allocator_);
-        seen.reserve(existing_neighbors.size() + selected_neighbors.size());
-        for (const auto neighbor : existing_neighbors) {
-            if (neighbor != inner_id && seen.emplace(neighbor).second) {
-                merged->Push(codes->ComputePairVectors(neighbor, inner_id), neighbor);
-            }
-        }
-        for (const auto neighbor : selected_neighbors) {
-            if (neighbor != inner_id && seen.emplace(neighbor).second) {
-                merged->Push(codes->ComputePairVectors(neighbor, inner_id), neighbor);
-            }
-        }
-        select_edges_by_heuristic(merged, max_degree, codes, allocator_, job.hierarchy->alpha);
-        forward_neighbors.reserve(merged->Size());
-        while (not merged->Empty()) {
-            forward_neighbors.emplace_back(merged->Top().second);
-            merged->Pop();
-        }
-        job.build_graph->UpdateNeighborsForBuild(inner_id, forward_neighbors);
-    }
-
-    // Reverse-install the original probe result, matching the regular NSW insertion path.
-    // A concurrent merge may prune one of these anchors from the current point's forward list,
-    // but that should not suppress the reciprocal-link attempt.
-    for (const auto selected_neighbor : selected_neighbors) {
-        LockGuard neighbor_lock(points_mutex_, selected_neighbor);
-        Vector<InnerIdType> neighbors(allocator_);
-        job.build_graph->GetNeighborsForBuild(selected_neighbor, neighbors);
-
-        if (std::find(neighbors.begin(), neighbors.end(), inner_id) != neighbors.end()) {
-            continue;
-        }
-        if (neighbors.size() < max_degree) {
-            neighbors.emplace_back(inner_id);
-            job.build_graph->UpdateNeighborsForBuild(selected_neighbor, neighbors);
-            continue;
-        }
-
-        auto neighbor_candidates = std::make_shared<StandardHeap<true, false>>(allocator_, -1);
-        neighbor_candidates->Push(codes->ComputePairVectors(inner_id, selected_neighbor), inner_id);
-        for (const auto neighbor : neighbors) {
-            neighbor_candidates->Push(codes->ComputePairVectors(neighbor, selected_neighbor),
-                                      neighbor);
-        }
-        select_edges_by_heuristic(
-            neighbor_candidates, max_degree, codes, allocator_, job.hierarchy->alpha);
-
-        Vector<InnerIdType> pruned_neighbors(allocator_);
-        pruned_neighbors.reserve(neighbor_candidates->Size());
-        while (not neighbor_candidates->Empty()) {
-            pruned_neighbors.emplace_back(neighbor_candidates->Top().second);
-            neighbor_candidates->Pop();
-        }
-        job.build_graph->UpdateNeighborsForBuild(selected_neighbor, pruned_neighbors);
-    }
-}
-
-Vector<Pyramid::NswBuildChunk>
-Pyramid::plan_nsw_build_chunks(const Vector<NswBuildRange>& ranges,
-                               uint64_t build_thread_count,
-                               Allocator* allocator) {
-    Vector<NswBuildChunk> chunks(allocator);
-    uint64_t remaining_count = 0;
-    for (const auto& range : ranges) {
-        remaining_count += range.end - range.begin;
-    }
-    if (remaining_count == 0) {
-        return chunks;
-    }
-
-    const uint64_t worker_count = std::max<uint64_t>(1, build_thread_count);
-    const uint64_t target_chunk_size = std::max<uint64_t>(
-        NSW_BUILD_MIN_CHUNK_IDS,
-        ceil_div(ceil_div(remaining_count, worker_count), NSW_BUILD_TASKS_PER_WORKER));
-    for (uint64_t job_index = 0; job_index < ranges.size(); ++job_index) {
-        const auto& range = ranges[job_index];
-        const uint64_t remaining = range.end - range.begin;
-        if (remaining == 0) {
-            continue;
-        }
-
-        const uint64_t chunk_count = ceil_div(remaining, target_chunk_size);
-        const uint64_t chunk_size = ceil_div(remaining, chunk_count);
-        for (uint64_t begin = range.begin; begin < range.end; begin += chunk_size) {
-            chunks.push_back({job_index, begin, std::min<uint64_t>(begin + chunk_size, range.end)});
-        }
-    }
-    std::sort(chunks.begin(), chunks.end(), [](const auto& lhs, const auto& rhs) {
-        const auto lhs_size = lhs.end - lhs.begin;
-        const auto rhs_size = rhs.end - rhs.begin;
-        if (lhs_size != rhs_size) {
-            return lhs_size > rhs_size;
-        }
-        if (lhs.job_index != rhs.job_index) {
-            return lhs.job_index < rhs.job_index;
-        }
-        return lhs.begin < rhs.begin;
-    });
-    return chunks;
-}
-
-void
-Pyramid::repair_nsw_graph_connectivity(const NswBuildJob& job,
-                                       const float* data_vectors,
-                                       const Vector<int64_t>& data_biases) {
-    const auto& ids = job.node->ids_;
-    if (ids.size() <= 1) {
-        return;
-    }
-
-    const uint64_t max_degree = job.build_graph->MaximumDegree();
-    if (max_degree == 0) {
-        throw VsagException(ErrorType::INTERNAL_ERROR,
-                            "cannot repair Pyramid graph connectivity with zero graph degree");
-    }
-
-    constexpr InnerIdType invalid_id = std::numeric_limits<InnerIdType>::max();
-    Vector<bool> belongs_to_node(data_biases.size(), false, allocator_);
-    Vector<bool> reachable(data_biases.size(), false, allocator_);
-    Vector<InnerIdType> tree_parent(data_biases.size(), invalid_id, allocator_);
-    for (const auto id : ids) {
-        belongs_to_node[id] = true;
-    }
-    if (job.final_entry_point >= belongs_to_node.size() ||
-        not belongs_to_node[job.final_entry_point]) {
-        throw VsagException(ErrorType::INTERNAL_ERROR,
-                            "Pyramid graph entry point is outside its build node");
-    }
-
-    uint64_t reachable_count = 0;
-    Vector<InnerIdType> pending(allocator_);
-    Vector<InnerIdType> traversal_neighbors(allocator_);
-    auto expand_reachable = [&](InnerIdType seed, InnerIdType parent) {
-        pending.clear();
-        reachable[seed] = true;
-        tree_parent[seed] = parent;
-        pending.emplace_back(seed);
-        ++reachable_count;
-
-        uint64_t cursor = 0;
-        while (cursor < pending.size()) {
-            const auto current = pending[cursor++];
-            traversal_neighbors.clear();
-            {
-                SharedLock current_lock(points_mutex_, current);
-                job.build_graph->GetNeighborsForBuild(current, traversal_neighbors);
-            }
-            for (const auto neighbor : traversal_neighbors) {
-                if (neighbor >= belongs_to_node.size() || not belongs_to_node[neighbor]) {
-                    throw VsagException(ErrorType::INTERNAL_ERROR,
-                                        "Pyramid graph contains an edge outside its build node");
-                }
-                if (not reachable[neighbor]) {
-                    reachable[neighbor] = true;
-                    tree_parent[neighbor] = current;
-                    pending.emplace_back(neighbor);
-                    ++reachable_count;
-                }
-            }
-        }
-    };
-    expand_reachable(job.final_entry_point, invalid_id);
-
-    auto codes = use_reorder_ ? precise_codes_ : base_codes_;
-    auto find_replacement =
-        [&](InnerIdType source, const Vector<InnerIdType>& neighbors, uint64_t& replacement) {
-            if (neighbors.size() < max_degree) {
-                replacement = neighbors.size();
-                return true;
-            }
-
-            bool found = false;
-            float farthest_distance = -1.0F;
-            for (uint64_t i = 0; i < neighbors.size(); ++i) {
-                const auto neighbor = neighbors[i];
-                if (tree_parent[neighbor] == source) {
-                    continue;
-                }
-                const float distance = codes->ComputePairVectors(source, neighbor);
-                if (not found || distance > farthest_distance) {
-                    found = true;
-                    farthest_distance = distance;
-                    replacement = i;
-                }
-            }
-            return found;
-        };
-
-    uint64_t next_unreachable = 0;
-    while (reachable_count < ids.size()) {
-        while (next_unreachable < ids.size() && reachable[ids[next_unreachable]]) {
-            ++next_unreachable;
-        }
-        if (next_unreachable >= ids.size()) {
-            throw VsagException(ErrorType::INTERNAL_ERROR,
-                                "Pyramid graph reachability accounting is inconsistent");
-        }
-        const auto target = ids[next_unreachable];
-
-        InnerSearchParam search_param;
-        search_param.ef = job.hierarchy->ef_construction;
-        search_param.topk = static_cast<int64_t>(job.hierarchy->ef_construction);
-        search_param.search_mode = KNN_SEARCH;
-        search_param.hops_limit = 10000;
-        search_param.ep = job.final_entry_point;
-
-        auto visited_list = pool_->TakeOne();
-        DistHeapPtr candidates;
-        try {
-            const auto data_bias = data_biases[target];
-            candidates = searcher_->Search(job.search_graph,
-                                           codes,
-                                           visited_list,
-                                           data_vectors + dim_ * static_cast<uint64_t>(data_bias),
-                                           search_param,
-                                           (LabelTablePtr) nullptr,
-                                           nullptr);
-        } catch (...) {
-            pool_->ReturnOne(visited_list);
-            throw;
-        }
-        pool_->ReturnOne(visited_list);
-
-        InnerIdType source = invalid_id;
-        float source_distance = std::numeric_limits<float>::max();
-        while (not candidates->Empty()) {
-            const auto candidate = candidates->Top();
-            candidates->Pop();
-            if (candidate.second >= reachable.size() || not reachable[candidate.second]) {
-                continue;
-            }
-
-            Vector<InnerIdType> neighbors(allocator_);
-            {
-                SharedLock candidate_lock(points_mutex_, candidate.second);
-                job.build_graph->GetNeighborsForBuild(candidate.second, neighbors);
-            }
-            uint64_t replacement = 0;
-            if (find_replacement(candidate.second, neighbors, replacement) &&
-                candidate.first < source_distance) {
-                source = candidate.second;
-                source_distance = candidate.first;
-            }
-        }
-
-        if (source == invalid_id) {
-            for (const auto candidate : ids) {
-                if (not reachable[candidate]) {
-                    continue;
-                }
-                Vector<InnerIdType> neighbors(allocator_);
-                {
-                    SharedLock candidate_lock(points_mutex_, candidate);
-                    job.build_graph->GetNeighborsForBuild(candidate, neighbors);
-                }
-                uint64_t replacement = 0;
-                if (find_replacement(candidate, neighbors, replacement)) {
-                    source = candidate;
-                    break;
-                }
-            }
-        }
-        if (source == invalid_id) {
-            throw VsagException(ErrorType::INTERNAL_ERROR,
-                                "Pyramid graph has no safe edge slot for connectivity repair");
-        }
-
-        {
-            LockGuard source_lock(points_mutex_, source);
-            Vector<InnerIdType> neighbors(allocator_);
-            job.build_graph->GetNeighborsForBuild(source, neighbors);
-            uint64_t replacement = 0;
-            if (not find_replacement(source, neighbors, replacement)) {
-                throw VsagException(ErrorType::INTERNAL_ERROR,
-                                    "Pyramid connectivity repair source changed unexpectedly");
-            }
-            if (replacement == neighbors.size()) {
-                neighbors.emplace_back(target);
-            } else {
-                neighbors[replacement] = target;
-            }
-            job.build_graph->UpdateNeighborsForBuild(source, neighbors);
-        }
-        expand_reachable(target, source);
     }
 }
 
@@ -793,153 +363,29 @@ Pyramid::build_by_nsw(const DatasetPtr& base) {
         (void)hname;
         collect_nsw_build_jobs(*hierarchy, hierarchy->root.get(), build_jobs);
     }
-    std::sort(
-        build_jobs.begin(), build_jobs.end(), [](const NswBuildJob& lhs, const NswBuildJob& rhs) {
-            return lhs.node->ids_.size() > rhs.node->ids_.size();
-        });
-
-    auto run_tasks = [this](uint64_t task_count, const auto& task) {
-        if (task_count == 0) {
-            return;
+    const bool use_parallel_build = thread_pool_ != nullptr && build_thread_count_ > 1;
+    if (not use_parallel_build) {
+        for (const auto& job : build_jobs) {
+            build_nsw_graph(job, data_vectors, data_biases);
         }
-
-        std::atomic<uint64_t> next_task{0};
-        std::atomic<bool> cancelled{false};
-        const uint64_t worker_count = std::min<uint64_t>(build_thread_count_, task_count);
+    } else {
         Vector<std::future<void>> futures(allocator_);
-        futures.reserve(worker_count);
         std::exception_ptr enqueue_exception;
         try {
-            for (uint64_t i = 0; i < worker_count; ++i) {
-                futures.push_back(
-                    thread_pool_->GeneralEnqueue([&task, &next_task, &cancelled, task_count]() {
-                        try {
-                            while (not cancelled.load(std::memory_order_acquire)) {
-                                const uint64_t task_index =
-                                    next_task.fetch_add(1, std::memory_order_relaxed);
-                                if (task_index >= task_count) {
-                                    return;
-                                }
-                                task(task_index, cancelled);
-                            }
-                        } catch (...) {
-                            cancelled.store(true, std::memory_order_release);
-                            throw;
-                        }
-                    }));
+            for (const auto& job : build_jobs) {
+                for (const auto inner_id : job.node->ids_) {
+                    const auto data_bias = data_biases[inner_id];
+                    const auto* vector = data_vectors + dim_ * data_bias;
+                    futures.push_back(thread_pool_->GeneralEnqueue(
+                        [this, hierarchy = job.hierarchy, node = job.node, inner_id, vector]() {
+                            add_one_point(*hierarchy, node, inner_id, vector);
+                        }));
+                }
             }
         } catch (...) {
-            cancelled.store(true, std::memory_order_release);
             enqueue_exception = std::current_exception();
         }
         wait_all_futures(futures, enqueue_exception);
-    };
-
-    const bool use_parallel_build =
-        thread_pool_ != nullptr && build_thread_count_ > 1 && not build_jobs.empty();
-    if (not use_parallel_build) {
-        for (const auto& job : build_jobs) {
-            build_nsw_graph_range(
-                job, 0, job.node->ids_.size(), data_vectors, data_biases, nullptr);
-        }
-    } else if (support_duplicate_) {
-        run_tasks(build_jobs.size(), [&](uint64_t job_index, const std::atomic<bool>& cancelled) {
-            const auto& job = build_jobs[job_index];
-            build_nsw_graph_range(
-                job, 0, job.node->ids_.size(), data_vectors, data_biases, &cancelled);
-        });
-    } else {
-        auto finish_concurrent_builds = [&build_jobs]() {
-            for (const auto& job : build_jobs) {
-                if (job.build_graph != nullptr) {
-                    job.build_graph->FinishConcurrentBuild();
-                }
-            }
-        };
-
-        try {
-            run_tasks(
-                build_jobs.size(), [&](uint64_t job_index, const std::atomic<bool>& cancelled) {
-                    auto& job = build_jobs[job_index];
-                    const uint64_t node_size = job.node->ids_.size();
-                    const uint64_t warmup_size = std::clamp<uint64_t>(
-                        job.node->graph_->MaximumDegree() * NSW_BUILD_WARMUP_DEGREE_FACTOR,
-                        NSW_BUILD_WARMUP_MIN_IDS,
-                        NSW_BUILD_WARMUP_MAX_IDS);
-                    job.warmup_end = std::min(node_size, warmup_size);
-                    build_nsw_graph_range(
-                        job, 0, job.warmup_end, data_vectors, data_biases, &cancelled);
-
-                    if (job.warmup_end < node_size &&
-                        not cancelled.load(std::memory_order_acquire)) {
-                        auto sparse_graph =
-                            std::dynamic_pointer_cast<SparseGraphDataCell>(job.node->graph_);
-                        if (sparse_graph == nullptr) {
-                            throw VsagException(ErrorType::INTERNAL_ERROR,
-                                                "Pyramid NSW build requires sparse graph storage");
-                        }
-                        sparse_graph->PreallocateNodesForBuild(job.node->ids_);
-                        job.build_graph = sparse_graph;
-                        job.search_graph = std::make_shared<FrozenSparseGraphView>(sparse_graph);
-                    }
-                });
-
-            // Warmup uses the regular Add entry-point policy. Replay the same reservoir decisions
-            // for the remaining logical insertion counts before those points are built in parallel.
-            // Searches keep using the warmup entry point; the selected final value is published
-            // only after all graph mutations have drained.
-            {
-                std::scoped_lock<std::mutex> entry_point_lock(entry_point_mutex_);
-                for (auto& job : build_jobs) {
-                    if (job.build_graph == nullptr) {
-                        continue;
-                    }
-                    job.final_entry_point = job.node->entry_point_;
-                    for (uint64_t i = job.warmup_end; i < job.node->ids_.size(); ++i) {
-                        if (is_update_entry_point(i)) {
-                            job.final_entry_point = job.node->ids_[i];
-                        }
-                    }
-                }
-            }
-
-            Vector<NswBuildRange> build_ranges(allocator_);
-            build_ranges.reserve(build_jobs.size());
-            for (const auto& job : build_jobs) {
-                build_ranges.push_back({job.warmup_end, job.node->ids_.size()});
-            }
-            const auto chunks =
-                plan_nsw_build_chunks(build_ranges, build_thread_count_, allocator_);
-
-            run_tasks(chunks.size(), [&](uint64_t chunk_index, const std::atomic<bool>& cancelled) {
-                const auto& chunk = chunks[chunk_index];
-                const auto& job = build_jobs[chunk.job_index];
-                for (uint64_t i = chunk.begin; i < chunk.end; ++i) {
-                    if (cancelled.load(std::memory_order_acquire)) {
-                        return;
-                    }
-                    const auto inner_id = job.node->ids_[i];
-                    const auto data_bias = data_biases[inner_id];
-                    build_nsw_graph_point(
-                        job, inner_id, data_vectors + dim_ * static_cast<uint64_t>(data_bias));
-                }
-            });
-
-            // Concurrent reverse-edge pruning can remove the last incoming path to a component.
-            // Repair only those components after the final prune. Existing reachability-tree
-            // edges are never replaced, so each repair strictly increases the reachable set.
-            for (auto& job : build_jobs) {
-                if (job.build_graph == nullptr) {
-                    continue;
-                }
-                repair_nsw_graph_connectivity(job, data_vectors, data_biases);
-                job.node->entry_point_ = job.final_entry_point;
-            }
-        } catch (...) {
-            finish_concurrent_builds();
-            throw;
-        }
-        finish_concurrent_builds();
     }
 
     for (const auto& job : build_jobs) {
