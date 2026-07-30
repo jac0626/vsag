@@ -15,6 +15,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <memory>
 #include <utility>
 
@@ -37,6 +38,7 @@
 namespace vsag {
 
 class IndexNode;
+class SparseGraphDataCell;
 using SearchFunc = std::function<DistHeapPtr(const IndexNode* node, const VisitedListPtr& vl)>;
 
 std::vector<std::string>
@@ -299,9 +301,32 @@ private:
         }
     };
 
+    struct NswBuildJob {
+        Hierarchy* hierarchy{nullptr};
+        IndexNode* node{nullptr};
+        std::shared_ptr<SparseGraphDataCell> build_graph{nullptr};
+        GraphInterfacePtr search_graph{nullptr};
+        uint64_t warmup_end{0};
+        InnerIdType final_entry_point{0};
+    };
+
+    struct NswBuildRange {
+        uint64_t begin{0};
+        uint64_t end{0};
+    };
+
+    struct NswBuildChunk {
+        uint64_t job_index{0};
+        uint64_t begin{0};
+        uint64_t end{0};
+    };
+
     /// Pre-create the IndexNode tree structure from the path labels.
     static void
-    populate_path_tree(Hierarchy& h, const std::string* paths, int64_t count);
+    populate_path_tree(Hierarchy& h,
+                       const std::string* paths,
+                       int64_t count,
+                       const Vector<int64_t>* data_biases = nullptr);
 
     /// Insert vectors and their path labels into the hierarchy tree.
     void
@@ -344,6 +369,55 @@ private:
     std::vector<int64_t>
     build_by_odescent(const DatasetPtr& base);
 
+    /// Build all hierarchy graphs via NSW from a frozen per-node build plan.
+    std::vector<int64_t>
+    build_by_nsw(const DatasetPtr& base);
+
+    /// Prepare labels and encoded vectors for an initial NSW build.
+    std::vector<int64_t>
+    prepare_build_data(const DatasetPtr& base, Vector<int64_t>& data_biases);
+
+    /// Insert valid initial vectors in bounded contiguous batches.
+    void
+    batch_insert_build_codes(const FlattenInterfacePtr& codes,
+                             const float* data_vectors,
+                             const Vector<int64_t>& data_biases);
+
+    /// Classify frozen tree nodes and collect the graph nodes that require construction.
+    static void
+    collect_nsw_build_jobs(Hierarchy& hierarchy, IndexNode* node, Vector<NswBuildJob>& build_jobs);
+
+    /// Build a range of one graph node from the ids collected in the frozen path tree.
+    void
+    build_nsw_graph_range(const NswBuildJob& job,
+                          uint64_t begin,
+                          uint64_t end,
+                          const float* data_vectors,
+                          const Vector<int64_t>& data_biases,
+                          const std::atomic<bool>* cancelled = nullptr);
+
+    /// Probe and publish one point through the frozen concurrent-build graph path.
+    void
+    build_nsw_graph_point(const NswBuildJob& job, InnerIdType inner_id, const float* vector);
+
+    /// Publish a point while holding at most one shared point mutex at a time.
+    void
+    publish_nsw_graph_point(const NswBuildJob& job,
+                            InnerIdType inner_id,
+                            const DistHeapPtr& candidates);
+
+    /// Split graph-node ranges into bounded, size-weighted build chunks.
+    static Vector<NswBuildChunk>
+    plan_nsw_build_chunks(const Vector<NswBuildRange>& ranges,
+                          uint64_t build_thread_count,
+                          Allocator* allocator);
+
+    /// Connect only unreachable graph components without replacing reachability-tree edges.
+    void
+    repair_nsw_graph_connectivity(const NswBuildJob& job,
+                                  const float* data_vectors,
+                                  const Vector<int64_t>& data_biases);
+
     /// Recursively insert a single vector into the hierarchy tree.
     void
     add_one_point(const Hierarchy& h, IndexNode* node, InnerIdType inner_id, const float* vector);
@@ -363,6 +437,8 @@ private:
                 uint64_t subindex_ef_search) const;
 
 private:
+    friend class PyramidTestAccess;
+
     ODescentParameterPtr odescent_param_{nullptr};  // ODescent build parameters
     UnorderedMap<std::string, std::unique_ptr<Hierarchy>> hierarchies_;  // named hierarchies
     FlattenInterfacePtr base_codes_{nullptr};          // coarse codes for graph build/search

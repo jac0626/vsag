@@ -17,11 +17,17 @@
 
 #include <fmt/format.h>
 
+#include <algorithm>
+#include <atomic>
+#include <future>
+#include <thread>
+
 #include "graph_interface_test.h"
 #include "impl/allocator/safe_allocator.h"
 #include "index_common_param.h"
 #include "sparse_graph_datacell_parameter.h"
 #include "unittest.h"
+#include "utils/lock_strategy.h"
 using namespace vsag;
 
 void
@@ -197,4 +203,141 @@ TEST_CASE("SparseGraphDataCell decodes stored neighbors for reverse-edge updates
     graph->GetIncomingNeighbors(3, incoming);
     REQUIRE(incoming.size() == 1);
     REQUIRE(incoming[0] == 1);
+}
+
+TEST_CASE("SparseGraphDataCell supports frozen concurrent build updates",
+          "[ut][SparseGraphDataCell]") {
+    auto allocator = SafeAllocator::FactoryDefaultAllocator();
+
+    IndexCommonParam common_param;
+    common_param.dim_ = 32;
+    common_param.allocator_ = allocator;
+    auto graph_param = std::make_shared<SparseGraphDatacellParameter>();
+    graph_param->max_degree_ = 8;
+    graph_param->support_delete_ = true;
+    graph_param->use_reverse_edges_ = true;
+
+    auto graph = std::make_shared<SparseGraphDataCell>(graph_param, common_param);
+    Vector<InnerIdType> ids(allocator.get());
+    ids.emplace_back(2);
+    ids.emplace_back(101);
+    ids.emplace_back(9);
+    graph->PreallocateNodesForBuild(ids);
+
+    REQUIRE(graph->TotalCount() == 3);
+    REQUIRE(graph->MaxCapacity() == 102);
+    for (const auto id : ids) {
+        REQUIRE(graph->CheckIdExists(id));
+    }
+
+    Vector<InnerIdType> neighbors(allocator.get());
+    neighbors.emplace_back(101);
+    neighbors.emplace_back(9);
+    graph->UpdateNeighborsForBuild(2, neighbors);
+
+    Vector<InnerIdType> actual(allocator.get());
+    graph->GetNeighbors(2, actual);
+    REQUIRE(actual == neighbors);
+    graph->GetNeighborsForBuild(2, actual);
+    REQUIRE(actual == neighbors);
+
+    Vector<InnerIdType> incoming(allocator.get());
+    graph->GetIncomingNeighbors(101, incoming);
+    Vector<InnerIdType> expected_incoming(allocator.get());
+    expected_incoming.emplace_back(2);
+    REQUIRE(incoming == expected_incoming);
+
+    Vector<InnerIdType> missing_neighbor(allocator.get());
+    missing_neighbor.emplace_back(77);
+    REQUIRE_THROWS(graph->UpdateNeighborsForBuild(2, missing_neighbor));
+    REQUIRE_THROWS(graph->UpdateNeighborsForBuild(77, neighbors));
+
+    graph->FinishConcurrentBuild();
+    graph->DeleteNeighborsById(101);
+    graph->GetNeighbors(2, actual);
+    Vector<InnerIdType> expected_after_delete(allocator.get());
+    expected_after_delete.emplace_back(9);
+    REQUIRE(actual == expected_after_delete);
+
+    REQUIRE_THROWS(graph->UpdateNeighborsForBuild(2, neighbors));
+    REQUIRE_THROWS(graph->GetNeighborsForBuild(2, actual));
+}
+
+TEST_CASE("SparseGraphDataCell updates frozen nodes concurrently", "[ut][SparseGraphDataCell]") {
+    auto allocator = SafeAllocator::FactoryDefaultAllocator();
+
+    IndexCommonParam common_param;
+    common_param.dim_ = 32;
+    common_param.allocator_ = allocator;
+    auto graph_param = std::make_shared<SparseGraphDatacellParameter>();
+    graph_param->max_degree_ = 8;
+    graph_param->support_delete_ = true;
+    graph_param->use_reverse_edges_ = true;
+
+    constexpr InnerIdType node_count = 128;
+    constexpr uint64_t worker_count = 8;
+    auto graph = std::make_shared<SparseGraphDataCell>(graph_param, common_param);
+    Vector<InnerIdType> ids(allocator.get());
+    ids.reserve(node_count);
+    for (InnerIdType id = 0; id < node_count; ++id) {
+        ids.emplace_back(id);
+    }
+    graph->PreallocateNodesForBuild(ids);
+
+    MutexArrayPtr point_mutexes = std::make_shared<PointsMutex>(node_count, allocator.get());
+    std::atomic<uint64_t> ready_count{0};
+    std::atomic<bool> start{false};
+    std::vector<std::future<void>> workers;
+    workers.reserve(worker_count);
+    for (uint64_t worker = 0; worker < worker_count; ++worker) {
+        workers.emplace_back(std::async(std::launch::async, [&, worker]() {
+            ready_count.fetch_add(1, std::memory_order_release);
+            while (not start.load(std::memory_order_acquire)) {
+                std::this_thread::yield();
+            }
+
+            for (InnerIdType id = static_cast<InnerIdType>(worker); id < node_count;
+                 id += worker_count) {
+                Vector<InnerIdType> neighbors(allocator.get());
+                neighbors.emplace_back((id + 1) % node_count);
+                neighbors.emplace_back((id + 2) % node_count);
+                {
+                    LockGuard lock(point_mutexes, id);
+                    graph->UpdateNeighborsForBuild(id, neighbors);
+                }
+
+                const auto read_id = (id + node_count - 1) % node_count;
+                Vector<InnerIdType> observed(allocator.get());
+                SharedLock lock(point_mutexes, read_id);
+                graph->GetNeighborsForBuild(read_id, observed);
+            }
+        }));
+    }
+
+    while (ready_count.load(std::memory_order_acquire) < worker_count) {
+        std::this_thread::yield();
+    }
+    start.store(true, std::memory_order_release);
+    for (auto& worker : workers) {
+        worker.get();
+    }
+    graph->FinishConcurrentBuild();
+
+    for (InnerIdType id = 0; id < node_count; ++id) {
+        Vector<InnerIdType> actual(allocator.get());
+        graph->GetNeighbors(id, actual);
+        Vector<InnerIdType> expected(allocator.get());
+        expected.emplace_back((id + 1) % node_count);
+        expected.emplace_back((id + 2) % node_count);
+        REQUIRE(actual == expected);
+
+        Vector<InnerIdType> incoming(allocator.get());
+        graph->GetIncomingNeighbors(id, incoming);
+        std::sort(incoming.begin(), incoming.end());
+        Vector<InnerIdType> expected_incoming(allocator.get());
+        expected_incoming.emplace_back((id + node_count - 2) % node_count);
+        expected_incoming.emplace_back((id + node_count - 1) % node_count);
+        std::sort(expected_incoming.begin(), expected_incoming.end());
+        REQUIRE(incoming == expected_incoming);
+    }
 }

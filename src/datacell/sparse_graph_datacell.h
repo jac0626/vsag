@@ -15,6 +15,7 @@
 
 #pragma once
 
+#include <atomic>
 #include <shared_mutex>
 
 #include "graph_interface.h"
@@ -36,6 +37,36 @@ public:
 
     void
     InsertNeighborsById(InnerIdType id, const Vector<InnerIdType>& neighbor_ids) override;
+
+    /**
+     * Pre-create every graph node before a concurrent initial build.
+     *
+     * This method must run before build workers start. Once it returns, the caller must keep the
+     * graph key set frozen until all calls to UpdateNeighborsForBuild have completed.
+     */
+    void
+    PreallocateNodesForBuild(const Vector<InnerIdType>& ids);
+
+    /**
+     * Update a pre-created node without taking the graph-wide map lock.
+     *
+     * The caller must hold the exclusive point lock for id and keep the graph key set frozen.
+     */
+    void
+    UpdateNeighborsForBuild(InnerIdType id, const Vector<InnerIdType>& neighbor_ids);
+
+    /**
+     * Read a pre-created node without taking the graph-wide map lock.
+     *
+     * This is only for an internal frozen-build view. The caller must hold the shared or exclusive
+     * point lock for id, and the graph must remain in concurrent-build mode.
+     */
+    void
+    GetNeighborsForBuild(InnerIdType id, Vector<InnerIdType>& neighbor_ids) const;
+
+    /// Leave the frozen concurrent-build mode and restore normal graph-wide map locking.
+    void
+    FinishConcurrentBuild();
 
     void
     DeleteNeighborsById(InnerIdType id) override;
@@ -96,10 +127,14 @@ public:
     }
 
 private:
+    void
+    copy_neighbors_unlocked(InnerIdType id, Vector<InnerIdType>& neighbor_ids) const;
+
     uint32_t code_line_size_{0};
     Allocator* const allocator_{nullptr};
     UnorderedMap<InnerIdType, std::unique_ptr<Vector<InnerIdType>>> neighbors_;
     mutable std::shared_mutex neighbors_map_mutex_{};
+    std::atomic<bool> concurrent_build_{false};
 
     bool is_support_delete_{true};
     uint32_t remove_flag_bit_{8};

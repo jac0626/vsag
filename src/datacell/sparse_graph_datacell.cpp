@@ -100,11 +100,135 @@ SparseGraphDataCell::InsertNeighborsById(InnerIdType id, const Vector<InnerIdTyp
                                     node_version_.size());
             }
 #endif
-            iter->second->at(i) = (neighbor_ids[i] | (node_version_[neighbor_ids[i]] << id_bit_));
+            iter->second->at(i) =
+                neighbor_ids[i] |
+                (static_cast<InnerIdType>(node_version_[neighbor_ids[i]]) << id_bit_);
         }
     } else {
         iter->second->assign(neighbor_ids.begin(), neighbor_ids.begin() + size);
     }
+}
+
+void
+SparseGraphDataCell::PreallocateNodesForBuild(const Vector<InnerIdType>& ids) {
+    std::unique_lock<std::shared_mutex> lock(this->neighbors_map_mutex_);
+    this->neighbors_.reserve(this->neighbors_.size() + ids.size());
+    if (is_support_delete_) {
+        this->node_version_.reserve(this->node_version_.size() + ids.size());
+    }
+
+    for (const auto id : ids) {
+        if (is_support_delete_ && id > remove_flag_mask_) {
+            throw VsagException(ErrorType::INVALID_ARGUMENT,
+                                fmt::format("graph id {} exceeds the supported id range", id));
+        }
+
+        const auto existing = this->neighbors_.find(id);
+        if (existing != this->neighbors_.end()) {
+            if (is_support_delete_ && this->node_version_.find(id) == this->node_version_.end()) {
+                throw VsagException(ErrorType::INTERNAL_ERROR,
+                                    fmt::format("graph id {} has no version entry", id));
+            }
+            this->max_capacity_ = std::max(this->max_capacity_, id + 1);
+            continue;
+        }
+
+        auto neighbors = std::make_unique<Vector<InnerIdType>>(allocator_);
+        const auto [iter, inserted] = this->neighbors_.emplace(id, std::move(neighbors));
+        if (not inserted) {
+            continue;
+        }
+        try {
+            if (is_support_delete_) {
+                const auto [version_iter, version_inserted] = this->node_version_.emplace(id, 0);
+                (void)version_iter;
+                if (not version_inserted) {
+                    throw VsagException(ErrorType::INTERNAL_ERROR,
+                                        fmt::format("graph id {} already has a version entry", id));
+                }
+            }
+        } catch (...) {
+            this->neighbors_.erase(iter);
+            throw;
+        }
+
+        total_count_.fetch_add(1, std::memory_order_relaxed);
+        this->max_capacity_ = std::max(this->max_capacity_, id + 1);
+    }
+    concurrent_build_.store(true, std::memory_order_release);
+}
+
+void
+SparseGraphDataCell::UpdateNeighborsForBuild(InnerIdType id,
+                                             const Vector<InnerIdType>& neighbor_ids) {
+    if (neighbor_ids.size() > this->maximum_degree_) {
+        throw VsagException(ErrorType::INVALID_ARGUMENT,
+                            fmt::format("insert neighbors count {} more than {}",
+                                        neighbor_ids.size(),
+                                        this->maximum_degree_));
+    }
+    if (not concurrent_build_.load(std::memory_order_acquire)) {
+        throw VsagException(ErrorType::INTERNAL_ERROR,
+                            "SparseGraphDataCell is not in concurrent-build mode");
+    }
+
+    const auto& frozen_neighbors = this->neighbors_;
+    const auto iter = frozen_neighbors.find(id);
+    if (iter == frozen_neighbors.end()) {
+        throw VsagException(
+            ErrorType::INTERNAL_ERROR,
+            fmt::format("graph id {} was not preallocated for concurrent build", id));
+    }
+
+    const uint64_t size = std::min<uint64_t>(this->maximum_degree_, neighbor_ids.size());
+    Vector<InnerIdType> stored_neighbors(allocator_);
+    stored_neighbors.reserve(size);
+    if (is_support_delete_) {
+        const auto& frozen_versions = this->node_version_;
+        for (uint64_t i = 0; i < size; ++i) {
+            const auto neighbor_id = neighbor_ids[i];
+            if (neighbor_id > remove_flag_mask_) {
+                throw VsagException(
+                    ErrorType::INVALID_ARGUMENT,
+                    fmt::format("graph neighbor id {} exceeds the supported id range",
+                                neighbor_id));
+            }
+            const auto version = frozen_versions.find(neighbor_id);
+            if (version == frozen_versions.end()) {
+                throw VsagException(
+                    ErrorType::INTERNAL_ERROR,
+                    fmt::format("graph neighbor id {} was not preallocated for concurrent build",
+                                neighbor_id));
+            }
+            stored_neighbors.emplace_back(neighbor_id |
+                                          (static_cast<InnerIdType>(version->second) << id_bit_));
+        }
+    } else {
+        stored_neighbors.assign(neighbor_ids.begin(), neighbor_ids.begin() + size);
+    }
+
+    Vector<InnerIdType> old_neighbors(allocator_);
+    old_neighbors.reserve(iter->second->size());
+    for (const auto old_neighbor : *iter->second) {
+        old_neighbors.emplace_back(is_support_delete_ ? (old_neighbor & remove_flag_mask_)
+                                                      : old_neighbor);
+    }
+    UpdateReverseEdges(id, old_neighbors, neighbor_ids);
+    *iter->second = std::move(stored_neighbors);
+}
+
+void
+SparseGraphDataCell::FinishConcurrentBuild() {
+    concurrent_build_.store(false, std::memory_order_release);
+}
+
+void
+SparseGraphDataCell::GetNeighborsForBuild(InnerIdType id, Vector<InnerIdType>& neighbor_ids) const {
+    if (not concurrent_build_.load(std::memory_order_acquire)) {
+        throw VsagException(ErrorType::INTERNAL_ERROR,
+                            "SparseGraphDataCell is not in concurrent-build mode");
+    }
+    copy_neighbors_unlocked(id, neighbor_ids);
 }
 
 uint32_t
@@ -118,7 +242,13 @@ SparseGraphDataCell::GetNeighborSize(InnerIdType id) const {
 }
 void
 SparseGraphDataCell::GetNeighbors(InnerIdType id, Vector<InnerIdType>& neighbor_ids) const {
-    std::shared_lock<std::shared_mutex> rlock(this->neighbors_map_mutex_);
+    std::shared_lock<std::shared_mutex> lock(this->neighbors_map_mutex_);
+    copy_neighbors_unlocked(id, neighbor_ids);
+}
+
+void
+SparseGraphDataCell::copy_neighbors_unlocked(InnerIdType id,
+                                             Vector<InnerIdType>& neighbor_ids) const {
     auto iter = this->neighbors_.find(id);
     if (iter != this->neighbors_.end()) {
         const auto& ngbrs = iter->second;
