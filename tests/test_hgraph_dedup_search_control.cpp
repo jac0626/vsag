@@ -31,13 +31,15 @@ constexpr int64_t BASE_COUNT = 200;
 constexpr int64_t DUP_COUNT = 100;
 
 std::string
-make_build_param(bool support_duplicate, float dup_threshold = 0.0F) {
+make_build_param(bool support_duplicate,
+                 float dup_threshold = 0.0F,
+                 const std::string& base_quantization_type = "sq8") {
     return fmt::format(R"({{
         "dtype": "float32",
         "metric_type": "l2",
         "dim": {},
         "index_param": {{
-            "base_quantization_type": "sq8",
+            "base_quantization_type": "{}",
             "graph_type": "nsw",
             "max_degree": 24,
             "ef_construction": 100,
@@ -46,6 +48,7 @@ make_build_param(bool support_duplicate, float dup_threshold = 0.0F) {
         }}
     }})",
                        DIM,
+                       base_quantization_type,
                        support_duplicate ? "true" : "false",
                        dup_threshold);
 }
@@ -413,6 +416,45 @@ TEST_CASE("HGraph dedup search: brute force counts only accepted duplicates",
                                     result.value()->GetIds() + result.value()->GetDim());
     INFO("actual ids: " << actual_ids[0] << ", " << actual_ids[1]);
     REQUIRE(contains_id(result.value(), multi_base_count + multi_base_count));
+}
+
+TEST_CASE("HGraph dedup search: brute force replaces a worse retained group member",
+          "[ft][hgraph][duplicate][search_control]") {
+    constexpr int64_t base_count = 2;
+    constexpr int64_t duplicate_count = 2;
+    auto tv = generate_test_data(DIM, base_count, duplicate_count);
+    std::fill(tv.base.begin(), tv.base.end(), 0.0F);
+    std::fill(tv.duplicates.begin(), tv.duplicates.end(), 0.0F);
+    std::fill(tv.queries.begin(), tv.queries.end(), 0.0F);
+    tv.base[DIM] = 30.0F;
+    tv.duplicates[0] = 10.0F;
+    tv.duplicates[DIM] = 5.0F;
+
+    auto index = build_index_with_duplicates(tv, make_build_param(true, 101.0F, "fp32"));
+    auto query_ds = vsag::Dataset::Make();
+    query_ds->NumElements(1)->Dim(DIM)->Float32Vectors(tv.queries.data())->Owner(false);
+    auto param = make_search_param(4, true, 1, 1.0F);
+
+    auto knn_result = index->KnnSearch(query_ds, 3, param);
+    REQUIRE(knn_result.has_value());
+    REQUIRE(knn_result.value()->GetDim() == 3);
+    REQUIRE(knn_result.value()->GetIds()[0] == 0);
+    REQUIRE(knn_result.value()->GetIds()[1] == 3);
+    REQUIRE(knn_result.value()->GetIds()[2] == 1);
+
+    auto range_result = index->RangeSearch(query_ds, 1000.0F, param, 3);
+    REQUIRE(range_result.has_value());
+    REQUIRE(range_result.value()->GetDim() == 3);
+    REQUIRE(range_result.value()->GetIds()[0] == 0);
+    REQUIRE(range_result.value()->GetIds()[1] == 3);
+    REQUIRE(range_result.value()->GetIds()[2] == 1);
+
+    auto unlimited_range_result = index->RangeSearch(query_ds, 1000.0F, param, -1);
+    REQUIRE(unlimited_range_result.has_value());
+    REQUIRE(unlimited_range_result.value()->GetDim() == 3);
+    REQUIRE(unlimited_range_result.value()->GetIds()[0] == 0);
+    REQUIRE(unlimited_range_result.value()->GetIds()[1] == 3);
+    REQUIRE(unlimited_range_result.value()->GetIds()[2] == 1);
 }
 
 TEST_CASE("HGraph dedup search: brute force respects consider_duplicate in range search",
