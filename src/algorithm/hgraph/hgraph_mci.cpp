@@ -534,8 +534,11 @@ HGraph::try_mci_search(const SearchRequest& request,
                        QueryContext* ctx) const {
     MCIHybridSearchResult result(params, inner_filter);
     const bool bitset_seed_source = has_bitset_source(request.filter_);
+    const bool requires_duplicate_control =
+        this->support_duplicate_ and
+        (not search_param.consider_duplicate or search_param.max_duplicates_per_group >= 0);
     const bool can_use_mci = params.use_mci and this->mci_parameters_.enabled and
-                             search_param.executors.empty() and
+                             not requires_duplicate_control and search_param.executors.empty() and
                              (has_valid_id_source(request.filter_) or bitset_seed_source) and
                              this->mci_cliques_ != nullptr and
                              this->mci_cliques_->HasCliqueIndex(this->total_count_.load());
