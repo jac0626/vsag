@@ -98,9 +98,12 @@ auto result = index->KnnSearch(
 同一个物理编码槽位，但仍保留各自的标签。该选项目前仅支持使用 `graph_type: "nsw"` 的
 稠密向量 HGraph 索引；独立的 HNSW 索引以及 `graph_type: "odescent"` 均不支持。
 
+使用 flat 图存储并设置 `support_force_remove: true`、`use_reverse_edges: true` 时，支持
+`RemoveMode::FORCE_REMOVE`。删除单个重复向量时会保留共享编码槽位；最后一个逻辑引用被
+删除后才回收该槽位。
+
 启用存储去重后，暂不支持以下操作和配置：
 
-- 强制删除（`support_force_remove: true`）；
 - 调用 `ImportCache()` 后基于缓存加速构建；
 - `Merge`；
 - v0.14 旧版序列化格式。

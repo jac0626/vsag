@@ -18,6 +18,7 @@
 
 #include <algorithm>
 
+#include "common.h"
 #include "vsag_exception.h"
 
 namespace vsag {
@@ -220,6 +221,60 @@ DenseDuplicateTracker::Resize(InnerIdType new_size) {
     for (size_t i = old_size; i < new_size; ++i) {
         duplicate_ids_[i] = static_cast<InnerIdType>(i);
     }
+}
+
+void
+DenseDuplicateTracker::RemoveAndSwapLast(InnerIdType removed_id, InnerIdType last_id) {
+    std::scoped_lock lock(mutex_);
+
+    CHECK_ARGUMENT(removed_id <= last_id,
+                   fmt::format("removed_id({}) must not exceed last_id({})", removed_id, last_id));
+    CHECK_ARGUMENT(
+        last_id < duplicate_ids_.size(),
+        fmt::format(
+            "last_id({}) exceeds duplicate tracker size({})", last_id, duplicate_ids_.size()));
+
+    this->DetachId(removed_id);
+    if (removed_id != last_id) {
+        this->RenameId(last_id, removed_id);
+    }
+}
+
+void
+DenseDuplicateTracker::DetachId(InnerIdType id) {
+    const auto next_id = duplicate_ids_[id];
+    if (next_id == id) {
+        return;
+    }
+
+    auto previous_id = next_id;
+    while (duplicate_ids_[previous_id] != id) {
+        previous_id = duplicate_ids_[previous_id];
+    }
+    duplicate_ids_[previous_id] = next_id;
+    duplicate_ids_[id] = id;
+
+    if (previous_id == next_id) {
+        duplicate_ids_[previous_id] = previous_id;
+        --duplicate_count_;
+    }
+}
+
+void
+DenseDuplicateTracker::RenameId(InnerIdType from, InnerIdType to) {
+    const auto next_id = duplicate_ids_[from];
+    if (next_id == from) {
+        duplicate_ids_[to] = to;
+        return;
+    }
+
+    auto previous_id = next_id;
+    while (duplicate_ids_[previous_id] != from) {
+        previous_id = duplicate_ids_[previous_id];
+    }
+    duplicate_ids_[previous_id] = to;
+    duplicate_ids_[to] = next_id;
+    duplicate_ids_[from] = from;
 }
 
 }  // namespace vsag

@@ -106,6 +106,30 @@ TEST_CASE("SparseGraphDataCell Reverse Edges", "[ut][SparseGraphDataCell]") {
     test.ReverseEdgeTest(100);
 }
 
+TEST_CASE("SparseGraphDataCell rebuilds reverse edges across missing ids",
+          "[ut][SparseGraphDataCell]") {
+    auto allocator = SafeAllocator::FactoryDefaultAllocator();
+
+    IndexCommonParam common_param;
+    common_param.dim_ = 32;
+    common_param.allocator_ = allocator;
+    auto graph_param = std::make_shared<SparseGraphDatacellParameter>();
+    graph_param->max_degree_ = 8;
+    graph_param->use_reverse_edges_ = true;
+
+    auto graph = GraphInterface::MakeInstance(graph_param, common_param);
+    Vector<InnerIdType> neighbors(allocator.get());
+    neighbors.emplace_back(2);
+    graph->InsertNeighborsById(1, neighbors);
+
+    graph->RebuildReverseEdges(5);
+
+    Vector<InnerIdType> incoming(allocator.get());
+    graph->GetIncomingNeighbors(2, incoming);
+    REQUIRE(incoming.size() == 1);
+    REQUIRE(incoming[0] == 1);
+}
+
 TEST_CASE("SparseGraphDataCell Move", "[ut][SparseGraphDataCell]") {
     auto allocator = SafeAllocator::FactoryDefaultAllocator();
     auto dim = 32;

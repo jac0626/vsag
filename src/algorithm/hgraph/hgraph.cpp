@@ -132,6 +132,10 @@ HGraph::HGraph(const HGraphParameterPtr& hgraph_param, const vsag::IndexCommonPa
 
 bool
 HGraph::Tune(const std::string& parameters, bool disable_future_tuning) {
+    std::shared_lock<std::shared_mutex> force_remove_rlock;
+    if (this->using_dedup_storage() && this->support_force_remove()) {
+        force_remove_rlock = std::shared_lock<std::shared_mutex>(this->force_remove_mutex_);
+    }
     std::scoped_lock lock(this->add_mutex_);
     if (this->immutable_.load(std::memory_order_acquire) or
         not this->index_feature_list_->CheckFeature(IndexFeature::SUPPORT_TUNE)) {

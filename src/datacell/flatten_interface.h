@@ -236,6 +236,12 @@ public:
         return this->total_count_;
     }
 
+    void
+    SetTotalCount(InnerIdType total_count) {
+        std::unique_lock lock(mutex_);
+        this->total_count_ = total_count;
+    }
+
     virtual void
     Serialize(StreamWriter& writer) {
         StreamWriter::WriteObj(writer, this->total_count_);

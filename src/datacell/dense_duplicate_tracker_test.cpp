@@ -103,6 +103,48 @@ TEST_CASE("DenseDuplicateTracker resize initializes new ids", "[ut][DenseDuplica
     REQUIRE(sorted_duplicates(tracker.GetDuplicateIds(4)) == std::vector<InnerIdType>{5});
 }
 
+TEST_CASE("DenseDuplicateTracker compacts ids after removal", "[ut][DenseDuplicateTracker]") {
+    auto allocator = std::make_shared<DefaultAllocator>();
+
+    SECTION("last id moves from another duplicate group") {
+        DenseDuplicateTracker tracker(allocator.get());
+        tracker.Resize(8);
+        tracker.SetDuplicateId(0, 2);
+        tracker.SetDuplicateId(4, 7);
+
+        tracker.RemoveAndSwapLast(0, 7);
+
+        REQUIRE(tracker.GetDuplicateIds(2).empty());
+        REQUIRE(sorted_duplicates(tracker.GetDuplicateIds(0)) == std::vector<InnerIdType>{4});
+        REQUIRE(tracker.GetGroupId(4) == 0);
+        REQUIRE(tracker.GetDuplicateIds(7).empty());
+    }
+
+    SECTION("removed and last ids belong to the same group") {
+        DenseDuplicateTracker tracker(allocator.get());
+        tracker.Resize(6);
+        tracker.SetDuplicateId(0, 3);
+        tracker.SetDuplicateId(0, 5);
+
+        tracker.RemoveAndSwapLast(0, 5);
+
+        REQUIRE(sorted_duplicates(tracker.GetDuplicateIds(0)) == std::vector<InnerIdType>{3});
+        REQUIRE(tracker.GetGroupId(3) == 0);
+        REQUIRE(tracker.GetDuplicateIds(5).empty());
+    }
+
+    SECTION("removing the last duplicate dissolves a two-member group") {
+        DenseDuplicateTracker tracker(allocator.get());
+        tracker.Resize(6);
+        tracker.SetDuplicateId(1, 5);
+
+        tracker.RemoveAndSwapLast(5, 5);
+
+        REQUIRE(tracker.GetDuplicateIds(1).empty());
+        REQUIRE(tracker.GetDuplicateIds(5).empty());
+    }
+}
+
 TEST_CASE("DenseDuplicateTracker deserializes legacy format", "[ut][DenseDuplicateTracker]") {
     auto allocator = std::make_shared<DefaultAllocator>();
 

@@ -14,6 +14,7 @@
 
 #include <new>
 
+#include "datacell/dense_duplicate_tracker.h"
 #include "hgraph.h"  // IWYU pragma: keep
 #include "impl/pruning_strategy.h"
 #include "utils/util_functions.h"
@@ -34,6 +35,10 @@ HGraph::Remove(const std::vector<int64_t>& ids, RemoveMode mode) {
         CHECK_ARGUMENT(this->support_force_remove(),
                        "force remove requires index_param.support_force_remove to be true");
         std::unique_lock<std::shared_mutex> wlock(this->force_remove_mutex_);
+        std::unique_lock<std::shared_mutex> dedup_storage_lock;
+        if (this->using_dedup_storage()) {
+            dedup_storage_lock = std::unique_lock<std::shared_mutex>(this->global_mutex_);
+        }
         for (const auto& id : ids) {
             delete_count += this->force_remove_one(id);
         }
@@ -47,6 +52,9 @@ HGraph::Remove(const std::vector<int64_t>& ids, RemoveMode mode) {
                 // Deletion has already completed; compaction is best effort when memory is exhausted.
             } catch (const std::bad_alloc&) {
                 // SafeAllocator reports failed storage shrinking as std::bad_alloc.
+            }
+            if (this->using_dedup_storage()) {
+                this->cal_memory_usage();
             }
         }
         return delete_count;
@@ -164,6 +172,86 @@ HGraph::move_id(InnerIdType from, InnerIdType to) {
     }
 }
 
+void
+HGraph::move_graph_id(InnerIdType from, InnerIdType to) {
+    if (from == to) {
+        return;
+    }
+
+    bottom_graph_->Move(from, to);
+    for (const auto& route_graph : route_graphs_) {
+        route_graph->Move(from, to);
+    }
+    if (entry_point_id_ == from) {
+        entry_point_id_ = to;
+    }
+}
+
+void
+HGraph::move_logical_metadata(InnerIdType from, InnerIdType to) {
+    if (extra_infos_) {
+        extra_infos_->Move(from, to);
+    }
+    label_table_->Move(from, to);
+}
+
+void
+HGraph::update_graphs_for_deduplicated_remove(InnerIdType inner_id, InnerIdType swap_id) {
+    auto tracker = this->bottom_graph_->GetDuplicateTracker();
+    if (tracker == nullptr) {
+        throw VsagException(ErrorType::INTERNAL_ERROR,
+                            "deduplicated HGraph force remove requires a duplicate tracker");
+    }
+
+    const auto removed_representative = tracker->GetGroupId(inner_id);
+    const auto swap_representative = tracker->GetGroupId(swap_id);
+    const auto removed_duplicates = tracker->GetDuplicateIds(inner_id);
+    const bool same_group = removed_representative == swap_representative;
+    const bool removed_group_is_singleton = removed_duplicates.empty();
+    const bool removed_entry_point = entry_point_id_ == inner_id;
+
+    const auto graph_repair_codes = this->get_precise_codes();
+    auto remove_graph_id = [this, &graph_repair_codes](InnerIdType id) {
+        if (id == this->entry_point_id_) {
+            this->find_new_entry_point();
+        }
+        this->graph_force_remove_one(id, graph_repair_codes, this->bottom_graph_);
+        for (const auto& route_graph : this->route_graphs_) {
+            this->graph_force_remove_one(id, graph_repair_codes, route_graph);
+        }
+    };
+
+    if (same_group) {
+        if (removed_group_is_singleton) {
+            remove_graph_id(inner_id);
+        }
+    } else {
+        if (removed_representative == inner_id) {
+            if (removed_group_is_singleton) {
+                remove_graph_id(inner_id);
+            } else {
+                const auto new_representative =
+                    *std::min_element(removed_duplicates.begin(), removed_duplicates.end());
+                this->move_graph_id(inner_id, new_representative);
+            }
+        }
+
+        if (inner_id < swap_representative) {
+            this->move_graph_id(swap_representative, inner_id);
+        }
+    }
+
+    if (removed_group_is_singleton && removed_entry_point && entry_point_id_ == inner_id) {
+        if (swap_id != inner_id) {
+            entry_point_id_ = std::min(inner_id, swap_representative);
+        } else if (inner_id > 0) {
+            entry_point_id_ = tracker->GetGroupId(0);
+        } else {
+            entry_point_id_ = INVALID_ENTRY_POINT;
+        }
+    }
+}
+
 uint32_t
 HGraph::force_remove_one(int64_t label) {
     InnerIdType inner_id;
@@ -175,16 +263,18 @@ HGraph::force_remove_one(int64_t label) {
             return 0;
         }
     }
-    if (inner_id == this->entry_point_id_) {
-        this->find_new_entry_point();
-    }
-
-    graph_force_remove_one(inner_id, basic_flatten_codes_, bottom_graph_);
-
-    for (const auto& route_graph : route_graphs_) {
-        graph_force_remove_one(inner_id, basic_flatten_codes_, route_graph);
-    }
     InnerIdType swap_id = this->total_count_.load() - 1;
+    if (this->using_dedup_storage()) {
+        this->update_graphs_for_deduplicated_remove(inner_id, swap_id);
+    } else {
+        if (inner_id == this->entry_point_id_) {
+            this->find_new_entry_point();
+        }
+        graph_force_remove_one(inner_id, basic_flatten_codes_, bottom_graph_);
+        for (const auto& route_graph : route_graphs_) {
+            graph_force_remove_one(inner_id, basic_flatten_codes_, route_graph);
+        }
+    }
 
     bool was_mark_removed = false;
     {
@@ -192,7 +282,22 @@ HGraph::force_remove_one(int64_t label) {
         was_mark_removed = this->label_table_->IsRemoved(inner_id);
         this->label_table_->ForceRemove(label, inner_id);
         if (swap_id != inner_id) {
-            this->move_id(swap_id, inner_id);
+            if (this->using_dedup_storage()) {
+                this->move_logical_metadata(swap_id, inner_id);
+            } else {
+                this->move_id(swap_id, inner_id);
+            }
+        }
+        if (this->using_dedup_storage()) {
+            auto tracker = std::dynamic_pointer_cast<DenseDuplicateTracker>(
+                this->bottom_graph_->GetDuplicateTracker());
+            if (tracker == nullptr) {
+                throw VsagException(
+                    ErrorType::INTERNAL_ERROR,
+                    "deduplicated HGraph force remove requires a dense duplicate tracker");
+            }
+            tracker->RemoveAndSwapLast(inner_id, swap_id);
+            this->code_slot_map_->RemoveAndSwapLast(inner_id, swap_id);
         }
     }
     if (was_mark_removed) {
@@ -203,12 +308,48 @@ HGraph::force_remove_one(int64_t label) {
 }
 
 void
+HGraph::compact_deduplicated_codes() {
+    std::unique_lock<std::shared_mutex> codes_lock(this->persistent_codes_mutex_);
+    const auto physical_count =
+        this->code_slot_map_->CompactSlots([this](CodeSlotIdType from, CodeSlotIdType to) {
+            GetCodeSlotPhysicalFlatten(this->basic_flatten_codes_)->Move(from, to);
+            if (this->has_precise_reorder()) {
+                GetCodeSlotPhysicalFlatten(this->high_precise_codes_)->Move(from, to);
+            }
+            if (this->create_new_raw_vector_) {
+                GetCodeSlotPhysicalFlatten(this->raw_vector_)->Move(from, to);
+            }
+        });
+
+    GetCodeSlotPhysicalFlatten(this->basic_flatten_codes_)->SetTotalCount(physical_count);
+    if (this->has_precise_reorder()) {
+        GetCodeSlotPhysicalFlatten(this->high_precise_codes_)->SetTotalCount(physical_count);
+    }
+    if (this->create_new_raw_vector_) {
+        GetCodeSlotPhysicalFlatten(this->raw_vector_)->SetTotalCount(physical_count);
+    }
+    this->physical_code_capacity_.store(physical_count, std::memory_order_release);
+}
+
+void
 HGraph::shrink_to_fit() {
     auto total_count = this->total_count_.load();
 
-    basic_flatten_codes_->ShrinkToFit(total_count);
-    if (high_precise_codes_) {
-        high_precise_codes_->ShrinkToFit(total_count);
+    if (this->using_dedup_storage()) {
+        this->compact_deduplicated_codes();
+        const auto physical_count = this->code_slot_map_->PhysicalCount();
+        GetCodeSlotPhysicalFlatten(this->basic_flatten_codes_)->ShrinkToFit(physical_count);
+        if (this->has_precise_reorder()) {
+            GetCodeSlotPhysicalFlatten(this->high_precise_codes_)->ShrinkToFit(physical_count);
+        }
+        if (this->create_new_raw_vector_) {
+            GetCodeSlotPhysicalFlatten(this->raw_vector_)->ShrinkToFit(physical_count);
+        }
+    } else {
+        basic_flatten_codes_->ShrinkToFit(total_count);
+        if (high_precise_codes_) {
+            high_precise_codes_->ShrinkToFit(total_count);
+        }
     }
     bottom_graph_->ShrinkToFit(total_count);
     for (const auto& route_graph : route_graphs_) {

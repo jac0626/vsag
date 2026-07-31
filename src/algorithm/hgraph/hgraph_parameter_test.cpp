@@ -277,7 +277,7 @@ TEST_CASE("HGraph rejects deduplicate_storage without support_duplicate", "[ut][
     REQUIRE_THROWS(vsag::HGraph::CheckAndMappingExternalParam(param, common_param));
 }
 
-TEST_CASE("HGraph rejects deduplicate_storage with force remove", "[ut][HGraphParameter]") {
+TEST_CASE("HGraph supports deduplicate_storage with force remove", "[ut][HGraphParameter]") {
     auto param = vsag::JsonType::Parse(R"({
         "base_quantization_type": "fp32",
         "base_io_type": "block_memory_io",
@@ -291,7 +291,52 @@ TEST_CASE("HGraph rejects deduplicate_storage with force remove", "[ut][HGraphPa
         "support_duplicate": true,
         "deduplicate_storage": true,
         "support_force_remove": true,
+        "use_reverse_edges": true,
         "use_reorder": true
+    })");
+
+    vsag::IndexCommonParam common_param;
+    common_param.dim_ = 128;
+    common_param.data_type_ = vsag::DataTypes::DATA_TYPE_FLOAT;
+    auto result = vsag::HGraph::CheckAndMappingExternalParam(param, common_param);
+    auto hgraph_param = std::dynamic_pointer_cast<vsag::HGraphParameter>(result);
+    REQUIRE(hgraph_param != nullptr);
+    REQUIRE(hgraph_param->deduplicate_storage);
+    REQUIRE(hgraph_param->support_force_remove);
+}
+
+TEST_CASE("HGraph rejects deduplicate_storage force remove without reverse edges",
+          "[ut][HGraphParameter]") {
+    auto param = vsag::JsonType::Parse(R"({
+        "base_quantization_type": "fp32",
+        "base_io_type": "block_memory_io",
+        "graph_storage_type": "flat",
+        "graph_type": "nsw",
+        "max_degree": 32,
+        "ef_construction": 100,
+        "support_duplicate": true,
+        "deduplicate_storage": true,
+        "support_force_remove": true
+    })");
+
+    vsag::IndexCommonParam common_param;
+    common_param.dim_ = 128;
+    common_param.data_type_ = vsag::DataTypes::DATA_TYPE_FLOAT;
+    REQUIRE_THROWS(vsag::HGraph::CheckAndMappingExternalParam(param, common_param));
+}
+
+TEST_CASE("HGraph rejects deduplicate_storage force remove with compressed graph",
+          "[ut][HGraphParameter]") {
+    auto param = vsag::JsonType::Parse(R"({
+        "base_quantization_type": "fp32",
+        "base_io_type": "block_memory_io",
+        "graph_storage_type": "compressed",
+        "graph_type": "nsw",
+        "max_degree": 32,
+        "ef_construction": 100,
+        "support_duplicate": true,
+        "deduplicate_storage": true,
+        "support_force_remove": true
     })");
 
     vsag::IndexCommonParam common_param;

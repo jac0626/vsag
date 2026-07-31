@@ -16,6 +16,7 @@
 
 #include <fmt/format.h>
 
+#include <algorithm>
 #include <limits>
 #include <mutex>
 #include <new>
@@ -133,6 +134,80 @@ CodeSlotMap::ReserveLogicalSize(InnerIdType new_size) {
     this->EnsureLogicalSize(new_size);
 }
 
+void
+CodeSlotMap::RemoveAndSwapLast(InnerIdType removed_id, InnerIdType last_id) {
+    std::unique_lock lock(mutex_);
+
+    auto published_count = published_logical_count_.load(std::memory_order_acquire);
+    CHECK_ARGUMENT(  // NOLINT(readability-simplify-boolean-expr)
+        published_count > 0 && last_id == published_count - 1,
+        fmt::format(
+            "last_id({}) must be the last of {} published logical ids", last_id, published_count));
+    CHECK_ARGUMENT(removed_id <= last_id,
+                   fmt::format("removed_id({}) must not exceed last_id({})", removed_id, last_id));
+
+    auto removed_slot = inner_to_slot_[removed_id].load(std::memory_order_acquire);
+    auto last_slot = inner_to_slot_[last_id].load(std::memory_order_acquire);
+    CHECK_ARGUMENT(removed_slot != INVALID_CODE_SLOT,
+                   fmt::format("removed_id({}) has no bound code slot", removed_id));
+    CHECK_ARGUMENT(last_slot != INVALID_CODE_SLOT,
+                   fmt::format("last_id({}) has no bound code slot", last_id));
+
+    if (removed_id != last_id) {
+        inner_to_slot_[removed_id].store(last_slot, std::memory_order_release);
+    }
+    inner_to_slot_[last_id].store(INVALID_CODE_SLOT, std::memory_order_release);
+    published_logical_count_.fetch_sub(1, std::memory_order_acq_rel);
+}
+
+CodeSlotIdType
+CodeSlotMap::CompactSlots(const std::function<void(CodeSlotIdType, CodeSlotIdType)>& move_slot) {
+    std::unique_lock lock(mutex_);
+
+    const auto physical_count = physical_count_.load(std::memory_order_acquire);
+    const auto logical_count = published_logical_count_.load(std::memory_order_acquire);
+    Vector<CodeSlotIdType> slot_remap(physical_count, INVALID_CODE_SLOT, allocator_);
+    CodeSlotIdType referenced_count = 0;
+    for (InnerIdType inner_id = 0; inner_id < logical_count; ++inner_id) {
+        const auto slot = inner_to_slot_[inner_id].load(std::memory_order_acquire);
+        CHECK_ARGUMENT(slot < physical_count,
+                       fmt::format("inner_id({}) has invalid code slot {} for physical count {}",
+                                   inner_id,
+                                   slot,
+                                   physical_count));
+        if (slot_remap[slot] == INVALID_CODE_SLOT) {
+            slot_remap[slot] = slot;
+            ++referenced_count;
+        }
+    }
+
+    CodeSlotIdType source = physical_count;
+    for (CodeSlotIdType target = 0; target < referenced_count; ++target) {
+        if (slot_remap[target] != INVALID_CODE_SLOT) {
+            continue;
+        }
+        do {
+            --source;
+        } while (source >= referenced_count && slot_remap[source] == INVALID_CODE_SLOT);
+        CHECK_ARGUMENT(source >= referenced_count,
+                       "failed to find a referenced tail code slot during compaction");
+        move_slot(source, target);
+        slot_remap[source] = target;
+    }
+
+    for (InnerIdType inner_id = 0; inner_id < logical_count; ++inner_id) {
+        const auto old_slot = inner_to_slot_[inner_id].load(std::memory_order_acquire);
+        const auto new_slot = slot_remap[old_slot];
+        CHECK_ARGUMENT(new_slot != INVALID_CODE_SLOT,
+                       fmt::format("inner_id({}) lost its code slot during compaction", inner_id));
+        if (new_slot != old_slot) {
+            inner_to_slot_[inner_id].store(new_slot, std::memory_order_release);
+        }
+    }
+    physical_count_.store(referenced_count, std::memory_order_release);
+    return referenced_count;
+}
+
 CodeSlotIdType
 CodeSlotMap::PhysicalCount() const {
     return physical_count_.load(std::memory_order_acquire);
@@ -156,6 +231,8 @@ CodeSlotMap::Serialize(StreamWriter& writer) const {
         }
         --serialized_slot_count;
     }
+    serialized_slot_count =
+        std::max(serialized_slot_count, static_cast<InnerIdType>(physical_count));
     Vector<CodeSlotIdType> slots(allocator_);
     slots.resize(serialized_slot_count);
     for (InnerIdType inner_id = 0; inner_id < serialized_slot_count; ++inner_id) {

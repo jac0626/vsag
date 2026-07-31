@@ -15,6 +15,7 @@
 #pragma once
 
 #include <atomic>
+#include <functional>
 #include <shared_mutex>
 
 #include "basic_types.h"
@@ -58,6 +59,25 @@ public:
 
     void
     ReserveLogicalSize(InnerIdType new_size);
+
+    /**
+     * Remove one active logical ID and move the last active logical binding into its position.
+     *
+     * Physical slots are left untouched so a batch of logical removals can compact them once.
+     */
+    void
+    RemoveAndSwapLast(InnerIdType removed_id, InnerIdType last_id);
+
+    /**
+     * Compact referenced physical slots into a dense prefix.
+     *
+     * move_slot is called before bindings are changed. Its source slots remain intact and its
+     * destination slots are unreferenced, so an exception leaves every published binding valid.
+     *
+     * @return The number of referenced physical slots after compaction.
+     */
+    CodeSlotIdType
+    CompactSlots(const std::function<void(CodeSlotIdType, CodeSlotIdType)>& move_slot);
 
     [[nodiscard]] CodeSlotIdType
     PhysicalCount() const;

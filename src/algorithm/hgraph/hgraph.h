@@ -612,6 +612,26 @@ private:
     void
     move_id(InnerIdType from, InnerIdType to);
 
+    /// Move only graph-node identity across all layers, including the entry point.
+    void
+    move_graph_id(InnerIdType from, InnerIdType to);
+
+    /// Move logical metadata without touching graph nodes or physical vector codes.
+    void
+    move_logical_metadata(InnerIdType from, InnerIdType to);
+
+    /// Preserve canonical duplicate-group graph representatives for a deduplicated removal.
+    void
+    update_graphs_for_deduplicated_remove(InnerIdType inner_id, InnerIdType swap_id);
+
+    /// Compact physical code slots after a batch of deduplicated logical removals.
+    void
+    compact_deduplicated_codes();
+
+    /// Restore non-persisted reverse edges required by deduplicated force removal.
+    void
+    rebuild_reverse_edges_for_deduplicated_force_remove();
+
     /// Compact internal storage after deletions.
     void
     shrink_to_fit();

@@ -48,6 +48,25 @@ GraphInterface::UpdateReverseEdges(InnerIdType id,
     }
 }
 
+void
+GraphInterface::RebuildReverseEdges(InnerIdType total_count) {
+    if (reverse_edges_ == nullptr) {
+        return;
+    }
+
+    reverse_edges_->Clear();
+    Vector<InnerIdType> neighbors(allocator_);
+    for (InnerIdType inner_id = 0; inner_id < total_count; ++inner_id) {
+        neighbors.clear();
+        this->GetNeighbors(inner_id, neighbors);
+        for (const auto neighbor : neighbors) {
+            if (neighbor < total_count) {
+                reverse_edges_->AddReverseEdge(inner_id, neighbor);
+            }
+        }
+    }
+}
+
 GraphInterfacePtr
 GraphInterface::MakeInstance(const GraphInterfaceParamPtr& graph_param,
                              const IndexCommonParam& common_param) {

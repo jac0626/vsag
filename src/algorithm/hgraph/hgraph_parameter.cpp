@@ -160,11 +160,16 @@ HGraphParameter::FromJson(const JsonType& json) {
     if (json.Contains(SUPPORT_FORCE_REMOVE)) {
         this->support_force_remove = json[SUPPORT_FORCE_REMOVE].GetBool();
     }
-    if (this->deduplicate_storage && this->support_force_remove) {
+    const bool deduplicated_force_remove = this->deduplicate_storage && this->support_force_remove;
+    if (deduplicated_force_remove && this->bottom_graph_param->graph_storage_type_ !=
+                                         GraphStorageTypes::GRAPH_STORAGE_TYPE_VALUE_FLAT) {
+        throw VsagException(ErrorType::INVALID_ARGUMENT,
+                            "deduplicate_storage force remove only supports flat graph storage");
+    }
+    if (deduplicated_force_remove && not this->bottom_graph_param->use_reverse_edges_) {
         throw VsagException(
             ErrorType::INVALID_ARGUMENT,
-            "deduplicate_storage does not support force remove because duplicate groups share "
-            "physical vector slots");
+            "deduplicate_storage force remove requires use_reverse_edges to be true");
     }
     if (json.Contains(HGRAPH_PERSIST_SOURCE_ID_KEY)) {
         this->persist_source_id = json[HGRAPH_PERSIST_SOURCE_ID_KEY].GetBool();

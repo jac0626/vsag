@@ -627,6 +627,9 @@ HGraph::publish_unique_storage_if_needed(const void* data,
     if (not context.use_dedup_storage) {
         return;
     }
+    if (this->support_force_remove()) {
+        this->ensure_physical_code_capacity_unlocked(this->code_slot_map_->PhysicalCount() + 1);
+    }
     auto code_slot_id = this->code_slot_map_->AllocateSlot();
     this->ensure_physical_code_capacity_unlocked(code_slot_id + 1);
     this->insert_persistent_codes_to_slot(data, code_slot_id);
@@ -640,6 +643,14 @@ HGraph::publish_unique_storage_if_needed(const void* data,
                                          std::shared_lock<std::shared_mutex>& read_lock) {
     if (not context.use_dedup_storage) {
         return;
+    }
+    if (this->support_force_remove()) {
+        const auto required_capacity = this->code_slot_map_->PhysicalCount() + 1;
+        if (this->physical_code_capacity_.load(std::memory_order_acquire) < required_capacity) {
+            read_lock.unlock();
+            this->ensure_physical_code_capacity(required_capacity);
+            read_lock.lock();
+        }
     }
     auto code_slot_id = this->code_slot_map_->AllocateSlot();
     if (this->physical_code_capacity_.load(std::memory_order_acquire) < code_slot_id + 1) {
@@ -834,6 +845,9 @@ HGraph::ensure_physical_code_capacity_unlocked(CodeSlotIdType required_capacity)
 
     auto new_capacity = static_cast<InnerIdType>(
         next_multiple_of_power_of_two(required_capacity, this->resize_increase_count_bit_));
+    if (this->support_force_remove()) {
+        this->code_slot_map_->ReserveLogicalSize(new_capacity);
+    }
     GetCodeSlotPhysicalFlatten(this->basic_flatten_codes_)->Resize(new_capacity);
     if (has_precise_reorder()) {
         GetCodeSlotPhysicalFlatten(this->high_precise_codes_)->Resize(new_capacity);

@@ -107,10 +107,13 @@ vectors share one physical code slot while retaining their individual labels. Th
 currently supports only dense-vector HGraph indexes using `graph_type: "nsw"`; it is not
 available for the separate HNSW index or for `graph_type: "odescent"`.
 
+`RemoveMode::FORCE_REMOVE` is supported when `support_force_remove: true`,
+`use_reverse_edges: true`, and flat graph storage are used. Removing one duplicate keeps the shared
+code slot; the slot is reclaimed after its last logical reference is removed.
+
 The following operations and configurations are not supported while storage deduplication
 is enabled:
 
-- force removal (`support_force_remove: true`);
 - cache-assisted build after `ImportCache()`;
 - `Merge`;
 - legacy v0.14 serialization.

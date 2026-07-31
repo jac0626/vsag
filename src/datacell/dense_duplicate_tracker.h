@@ -47,7 +47,22 @@ public:
     void
     Resize(InnerIdType new_size) override;
 
+    /**
+     * Remove one active logical ID and move the last active ID into its position.
+     *
+     * This mirrors the swap-with-last compaction used by HGraph ForceRemove. The caller must pass
+     * the last active ID before the removal.
+     */
+    void
+    RemoveAndSwapLast(InnerIdType removed_id, InnerIdType last_id);
+
 private:
+    void
+    DetachId(InnerIdType id);
+
+    void
+    RenameId(InnerIdType from, InnerIdType to);
+
     Allocator* allocator_;
     Vector<InnerIdType> duplicate_ids_;
     mutable std::shared_mutex mutex_;

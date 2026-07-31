@@ -603,6 +603,156 @@ TEST_CASE("HGraph deduplicate_storage handles duplicate chains", "[ut][hgraph][d
     }
 }
 
+TEST_CASE("HGraph deduplicate_storage ForceRemove preserves groups and compacts code slots",
+          "[ut][hgraph][duplicate][force_remove][serialize]") {
+    constexpr int64_t dim = 2;
+    auto common_param = MakeCommonParam(dim);
+    auto hgraph_json = MakeFp32HGraphJson();
+    hgraph_json["support_force_remove"].SetBool(true);
+    hgraph_json["use_reverse_edges"].SetBool(true);
+    auto index = MakeHGraphIndex(hgraph_json, common_param);
+
+    std::vector<float> vectors = {
+        0.0F,
+        0.0F,
+        10.0F,
+        0.0F,
+        10.0F,
+        0.0F,
+        20.0F,
+        0.0F,
+        20.0F,
+        0.0F,
+    };
+    std::vector<int64_t> ids = {10, 20, 21, 30, 31};
+    auto base = MakeFloatDataset(vectors, ids, dim, 5);
+    REQUIRE(index->Build(base).has_value());
+
+    auto require_counts = [](const std::shared_ptr<vsag::IndexImpl<vsag::HGraph>>& target,
+                             vsag::InnerIdType logical_count,
+                             vsag::CodeSlotIdType physical_count) {
+        auto hgraph = std::dynamic_pointer_cast<vsag::HGraph>(target->GetInnerIndex());
+        REQUIRE(hgraph != nullptr);
+        REQUIRE(hgraph->GetCodeStorageCounts() ==
+                std::pair<vsag::InnerIdType, vsag::CodeSlotIdType>{logical_count, physical_count});
+    };
+    auto require_graph_result = [](const std::shared_ptr<vsag::IndexImpl<vsag::HGraph>>& target,
+                                   std::vector<float>& query_vector,
+                                   std::initializer_list<int64_t> expected_ids) {
+        auto query = MakeFloatQuery(query_vector, dim);
+        auto result = target->KnnSearch(query, 1, R"({"hgraph": {"ef_search": 32}})");
+        REQUIRE(result.has_value());
+        REQUIRE(result.value()->GetDim() == 1);
+        const auto result_id = result.value()->GetIds()[0];
+        REQUIRE(std::find(expected_ids.begin(), expected_ids.end(), result_id) !=
+                expected_ids.end());
+    };
+    auto force_remove = [](const std::shared_ptr<vsag::IndexImpl<vsag::HGraph>>& target,
+                           int64_t id) {
+        auto result = target->Remove({id}, vsag::RemoveMode::FORCE_REMOVE);
+        REQUIRE(result.has_value());
+        REQUIRE(result.value() == 1);
+    };
+
+    std::vector<float> vector_b = {10.0F, 0.0F};
+    std::vector<float> vector_c = {20.0F, 0.0F};
+    require_counts(index, 5, 3);
+
+    // The last logical ID belongs to group C. Moving it into ID 0 also makes ID 0 the new graph
+    // representative for C, while physical slot 2 is compacted into the released slot 0.
+    force_remove(index, 10);
+    require_counts(index, 4, 2);
+    require_graph_result(index, vector_c, {30, 31});
+    auto query_c = MakeFloatQuery(vector_c, dim);
+    RequireRangeContains(index, query_c, {30, 31}, 2, 0.01F, kBruteForceSearchParams);
+
+    // Removing the representative with the last ID from the same group keeps the graph node at
+    // the compacted logical ID and only removes one logical binding.
+    force_remove(index, 31);
+    require_counts(index, 3, 2);
+    require_graph_result(index, vector_c, {30});
+
+    auto binary = index->Serialize();
+    REQUIRE(binary.has_value());
+    auto restored = MakeHGraphIndex(hgraph_json, common_param);
+    REQUIRE(restored->Deserialize(binary.value()).has_value());
+    require_counts(restored, 3, 2);
+    require_graph_result(restored, vector_c, {30});
+
+    // Removing the last reference to C reclaims its physical slot. Group B's last duplicate moves
+    // into the hole and becomes the new canonical graph representative.
+    force_remove(restored, 30);
+    require_counts(restored, 2, 1);
+    require_graph_result(restored, vector_b, {20, 21});
+    auto query_b = MakeFloatQuery(vector_b, dim);
+    RequireRangeContains(restored, query_b, {20, 21}, 2, 0.01F, kBruteForceSearchParams);
+
+    std::vector<float> add_vectors = {
+        10.0F,
+        0.0F,
+        30.0F,
+        0.0F,
+    };
+    std::vector<int64_t> add_ids = {40, 50};
+    auto add = MakeFloatDataset(add_vectors, add_ids, dim, 2);
+    REQUIRE(restored->Add(add).has_value());
+    require_counts(restored, 4, 2);
+    RequireRangeContains(restored, query_b, {20, 21, 40}, 3, 0.01F, kBruteForceSearchParams);
+
+    // The removed representative's group survives at its next canonical ID, while the last
+    // unique point moves into the logical hole.
+    force_remove(restored, 21);
+    require_counts(restored, 3, 2);
+    require_graph_result(restored, vector_b, {20, 40});
+    RequireRangeContains(restored, query_b, {20, 40}, 2, 0.01F, kBruteForceSearchParams);
+}
+
+TEST_CASE("HGraph deduplicate_storage rebuilds reverse edges before ForceRemove",
+          "[ut][hgraph][duplicate][force_remove][serialize]") {
+    constexpr int64_t dim = 2;
+    auto common_param = MakeCommonParam(dim);
+    auto hgraph_json = MakeFp32HGraphJson();
+    hgraph_json["support_force_remove"].SetBool(true);
+    hgraph_json["use_reverse_edges"].SetBool(true);
+
+    std::vector<float> vectors = {
+        0.0F,
+        0.0F,
+        0.0F,
+        0.0F,
+        10.0F,
+        0.0F,
+        20.0F,
+        0.0F,
+        30.0F,
+        0.0F,
+    };
+    std::vector<int64_t> ids = {10, 11, 20, 30, 40};
+    auto base = MakeFloatDataset(vectors, ids, dim, 5);
+    auto index = MakeHGraphIndex(hgraph_json, common_param);
+    REQUIRE(index->Build(base).has_value());
+
+    auto binary = index->Serialize();
+    REQUIRE(binary.has_value());
+    auto restored = MakeHGraphIndex(hgraph_json, common_param);
+    REQUIRE(restored->Deserialize(binary.value()).has_value());
+
+    // Removing the restored duplicate group's representative moves its graph node from 0 to 1.
+    // The last unique graph node then moves from 4 to 0, requiring restored incoming edges.
+    auto remove_result = restored->Remove({10}, vsag::RemoveMode::FORCE_REMOVE);
+    REQUIRE(remove_result.has_value());
+    REQUIRE(remove_result.value() == 1);
+
+    std::vector<float> query_vector = {30.0F, 0.0F};
+    auto query = MakeFloatQuery(query_vector, dim);
+    auto result = restored->KnnSearch(query, 4, R"({"hgraph": {"ef_search": 32}})");
+    REQUIRE(result.has_value());
+    REQUIRE(result.value()->GetDim() == 4);
+    for (const auto expected_id : std::vector<int64_t>{11, 20, 30, 40}) {
+        REQUIRE(ResultContainsId(result.value(), expected_id));
+    }
+}
+
 TEST_CASE("HGraph deduplicate_storage skips duplicate external labels without binding storage",
           "[ut][hgraph][duplicate][label][add]") {
     constexpr int64_t dim = 2;
@@ -749,6 +899,8 @@ TEST_CASE("HGraph deduplicate_storage supports precise reorder code path",
     constexpr int64_t dim = 4;
     auto common_param = MakeCommonParam(dim);
     auto hgraph_json = MakeFp32ReorderHGraphJson();
+    hgraph_json["support_force_remove"].SetBool(true);
+    hgraph_json["use_reverse_edges"].SetBool(true);
     auto index = MakeHGraphIndex(hgraph_json, common_param);
 
     std::vector<float> base_vectors = {
@@ -779,6 +931,20 @@ TEST_CASE("HGraph deduplicate_storage supports precise reorder code path",
     REQUIRE(knn.value()->GetDim() == 2);
     REQUIRE(ResultContainsId(knn.value(), 20));
     REQUIRE(ResultContainsId(knn.value(), 30));
+
+    auto remove_result = index->Remove({10}, vsag::RemoveMode::FORCE_REMOVE);
+    REQUIRE(remove_result.has_value());
+    REQUIRE(remove_result.value() == 1);
+    auto hgraph = std::dynamic_pointer_cast<vsag::HGraph>(index->GetInnerIndex());
+    REQUIRE(hgraph != nullptr);
+    REQUIRE(hgraph->GetCodeStorageCounts() ==
+            std::pair<vsag::InnerIdType, vsag::CodeSlotIdType>{2, 1});
+    auto base_distance = index->CalcDistanceById(duplicate_vector.data(), 20, false);
+    auto precise_distance = index->CalcDistanceById(duplicate_vector.data(), 20, true);
+    REQUIRE(base_distance.has_value());
+    REQUIRE(precise_distance.has_value());
+    REQUIRE(base_distance.value() == 0.0F);
+    REQUIRE(precise_distance.value() == 0.0F);
 }
 
 TEST_CASE("HGraph deduplicate_storage supports RabitQ raw-vector graph read path",
@@ -786,6 +952,8 @@ TEST_CASE("HGraph deduplicate_storage supports RabitQ raw-vector graph read path
     constexpr int64_t dim = 960;
     auto common_param = MakeCommonParam(dim);
     auto hgraph_json = MakeRabitQRawVectorHGraphJson();
+    hgraph_json["support_force_remove"].SetBool(true);
+    hgraph_json["use_reverse_edges"].SetBool(true);
     auto index = MakeHGraphIndex(hgraph_json, common_param);
 
     std::vector<float> base_vectors(dim * 3);
@@ -818,12 +986,30 @@ TEST_CASE("HGraph deduplicate_storage supports RabitQ raw-vector graph read path
     auto unique_distance = index->CalcDistanceById(unique_vector.data(), unique_id[0]);
     REQUIRE(unique_distance.has_value());
     REQUIRE(unique_distance.value() == 0.0F);
+    auto original_base_distance =
+        index->CalcDistanceById(unique_vector.data(), unique_id[0], false);
+    REQUIRE(original_base_distance.has_value());
 
     auto duplicate_query = MakeFloatQuery(duplicate_vector, dim);
     RequireRangeContains(index, duplicate_query, {20, 40}, 2, 0.01F, kBruteForceSearchParams);
 
     auto unique_query = MakeFloatQuery(unique_vector, dim);
     RequireRangeContains(index, unique_query, {50}, 1, 0.01F, kBruteForceSearchParams);
+
+    auto remove_result = index->Remove({10}, vsag::RemoveMode::FORCE_REMOVE);
+    REQUIRE(remove_result.has_value());
+    REQUIRE(remove_result.value() == 1);
+    auto hgraph = std::dynamic_pointer_cast<vsag::HGraph>(index->GetInnerIndex());
+    REQUIRE(hgraph != nullptr);
+    REQUIRE(hgraph->GetCodeStorageCounts() ==
+            std::pair<vsag::InnerIdType, vsag::CodeSlotIdType>{4, 3});
+    auto compacted_base_distance =
+        index->CalcDistanceById(unique_vector.data(), unique_id[0], false);
+    auto compacted_raw_distance = index->CalcDistanceById(unique_vector.data(), unique_id[0], true);
+    REQUIRE(compacted_base_distance.has_value());
+    REQUIRE(compacted_raw_distance.has_value());
+    REQUIRE(compacted_base_distance.value() == original_base_distance.value());
+    REQUIRE(compacted_raw_distance.value() == 0.0F);
 }
 
 TEST_CASE("HGraph deduplicate_storage Tune keeps physical slots isolated",

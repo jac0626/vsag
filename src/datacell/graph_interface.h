@@ -102,6 +102,14 @@ public:
         }
     }
 
+    /**
+     * Rebuild in-memory reverse edges from the persisted forward graph.
+     *
+     * Reverse edges are an acceleration structure and are not part of graph serialization.
+     */
+    void
+    RebuildReverseEdges(InnerIdType total_count);
+
     virtual void
     Move(InnerIdType from, InnerIdType to) {
         throw VsagException(ErrorType::INTERNAL_ERROR, "Move not implemented in GraphInterface");

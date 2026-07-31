@@ -237,6 +237,91 @@ TEST_CASE("CodeSlotMap rejects invalid mappings", "[ut][datacell][code_slot_map]
     REQUIRE_THROWS(mapping.PublishSlot(1, slot + 1));
 }
 
+TEST_CASE("CodeSlotMap compacts logical and physical slots", "[ut][datacell][code_slot_map]") {
+    auto allocator = vsag::SafeAllocator::FactoryDefaultAllocator();
+    vsag::CodeSlotMap mapping(allocator.get());
+
+    mapping.ReserveLogicalSize(6);
+    mapping.PublishSlot(0, mapping.AllocateSlot());
+    auto shared_slot1 = mapping.AllocateSlot();
+    mapping.PublishSlot(1, shared_slot1);
+    mapping.PublishSlot(2, shared_slot1);
+    mapping.PublishSlot(3, mapping.AllocateSlot());
+    auto shared_slot3 = mapping.AllocateSlot();
+    mapping.PublishSlot(4, shared_slot3);
+    mapping.PublishSlot(5, shared_slot3);
+
+    mapping.RemoveAndSwapLast(0, 5);
+    mapping.RemoveAndSwapLast(3, 4);
+
+    std::vector<std::pair<vsag::CodeSlotIdType, vsag::CodeSlotIdType>> moves;
+    auto physical_count =
+        mapping.CompactSlots([&moves](vsag::CodeSlotIdType from, vsag::CodeSlotIdType to) {
+            moves.emplace_back(from, to);
+        });
+
+    REQUIRE(mapping.PublishedLogicalCount() == 4);
+    REQUIRE(physical_count == 2);
+    REQUIRE(mapping.PhysicalCount() == 2);
+    REQUIRE(moves ==
+            std::vector<std::pair<vsag::CodeSlotIdType, vsag::CodeSlotIdType>>{{shared_slot3, 0}});
+    REQUIRE(mapping.Resolve(0) == 0);
+    REQUIRE(mapping.Resolve(1) == 1);
+    REQUIRE(mapping.Resolve(2) == 1);
+    REQUIRE(mapping.Resolve(3) == 0);
+    REQUIRE_THROWS(mapping.Resolve(4));
+    REQUIRE_THROWS(mapping.Resolve(5));
+}
+
+TEST_CASE("CodeSlotMap keeps bindings serializable when physical compaction fails",
+          "[ut][datacell][code_slot_map]") {
+    auto allocator = vsag::SafeAllocator::FactoryDefaultAllocator();
+    vsag::CodeSlotMap mapping(allocator.get());
+
+    mapping.ReserveLogicalSize(6);
+    mapping.PublishSlot(0, mapping.AllocateSlot());
+    mapping.PublishSlot(1, mapping.AllocateSlot());
+    mapping.PublishSlot(2, mapping.AllocateSlot());
+    mapping.PublishSlot(3, mapping.AllocateSlot());
+    auto slot4 = mapping.AllocateSlot();
+    mapping.PublishSlot(4, slot4);
+    auto slot5 = mapping.AllocateSlot();
+    mapping.PublishSlot(5, slot5);
+    mapping.RemoveAndSwapLast(0, 5);
+    mapping.RemoveAndSwapLast(1, 4);
+
+    uint64_t move_count = 0;
+    REQUIRE_THROWS(mapping.CompactSlots([&move_count](vsag::CodeSlotIdType, vsag::CodeSlotIdType) {
+        if (++move_count == 2) {
+            throw std::bad_alloc();
+        }
+    }));
+    REQUIRE(move_count == 2);
+    REQUIRE(mapping.PublishedLogicalCount() == 4);
+    REQUIRE(mapping.PhysicalCount() == 6);
+    REQUIRE(mapping.Resolve(0) == slot5);
+    REQUIRE(mapping.Resolve(1) == slot4);
+    REQUIRE(mapping.Resolve(2) == 2);
+    REQUIRE(mapping.Resolve(3) == 3);
+
+    std::stringstream stream;
+    vsag::IOStreamWriter writer(stream);
+    mapping.Serialize(writer);
+
+    vsag::CodeSlotMap restored(allocator.get());
+    vsag::IOStreamReader reader(stream);
+    restored.Deserialize(reader);
+    REQUIRE(restored.PublishedLogicalCount() == 4);
+    REQUIRE(restored.PhysicalCount() == 6);
+    REQUIRE(restored.Resolve(0) == slot5);
+    REQUIRE(restored.Resolve(1) == slot4);
+    REQUIRE(restored.Resolve(2) == 2);
+    REQUIRE(restored.Resolve(3) == 3);
+
+    restored.ReserveLogicalSize(7);
+    REQUIRE(restored.AllocateSlot() == 6);
+}
+
 TEST_CASE("CodeSlotMap serializes logical to physical slots", "[ut][datacell][code_slot_map]") {
     auto allocator = vsag::SafeAllocator::FactoryDefaultAllocator();
     vsag::CodeSlotMap mapping(allocator.get());

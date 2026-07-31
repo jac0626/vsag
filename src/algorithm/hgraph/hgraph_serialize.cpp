@@ -897,10 +897,24 @@ HGraph::read_streaming_body(StreamReader& reader,
     if (this->raw_vector_ != nullptr) {
         this->has_raw_vector_ = true;
     }
+    this->rebuild_reverse_edges_for_deduplicated_force_remove();
     this->cal_memory_usage();
 
     if (use_elp_optimizer_) {
         elp_optimize();
+    }
+}
+
+void
+HGraph::rebuild_reverse_edges_for_deduplicated_force_remove() {
+    if (not this->using_dedup_storage() or not this->support_force_remove()) {
+        return;
+    }
+
+    const auto total_count = this->total_count_.load(std::memory_order_acquire);
+    this->bottom_graph_->RebuildReverseEdges(total_count);
+    for (const auto& route_graph : this->route_graphs_) {
+        route_graph->RebuildReverseEdges(total_count);
     }
 }
 
@@ -1069,6 +1083,7 @@ HGraph::Deserialize(StreamReader& reader) {
             (void)this->code_slot_map_->Resolve(inner_id);
         }
     }
+    this->rebuild_reverse_edges_for_deduplicated_force_remove();
     this->cal_memory_usage();
 
     // post serialize procedure
