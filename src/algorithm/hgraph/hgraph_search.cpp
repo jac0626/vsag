@@ -15,7 +15,6 @@
 #include <fmt/format.h>
 
 #include <algorithm>
-#include <set>
 
 #include "attr/argparse.h"
 #include "dataset_impl.h"
@@ -120,10 +119,20 @@ HGraph::KnnSearch(const DatasetPtr& query,
     // non-iterator KnnSearch overload (which delegates to SearchWithRequest)
     // still benefits from the brute-force fallback.
     if (is_last_filter) {
+        if (const auto* pending_duplicates = iter_filter_ctx->GetPendingDuplicates();
+            pending_duplicates != nullptr) {
+            for (const auto& [pending_id, pending_dist] : *pending_duplicates) {
+                if (iter_filter_ctx->CheckPoint(pending_id)) {
+                    search_result->Push(pending_dist, pending_id);
+                }
+            }
+        }
         while (!iter_filter_ctx->Empty()) {
             uint32_t cur_inner_id = iter_filter_ctx->GetTopID();
             float cur_dist = iter_filter_ctx->GetTopDist();
-            search_result->Push(cur_dist, cur_inner_id);
+            if (not iter_filter_ctx->IsPendingDuplicate(cur_inner_id)) {
+                search_result->Push(cur_dist, cur_inner_id);
+            }
             iter_filter_ctx->PopDiscard();
         }
     } else {
@@ -153,6 +162,8 @@ HGraph::KnnSearch(const DatasetPtr& query,
         search_param.topk = static_cast<int64_t>(search_param.ef);
         search_param.parallel_search_thread_count = params.parallel_search_thread_count;
         search_param.enable_reorder = params.enable_reorder;
+        search_param.consider_duplicate = true;
+        search_param.max_duplicates_per_group = params.max_duplicates_per_group;
         search_param.enable_rabitq_one_bit_search = params.rabitq_one_bit_search;
         search_param.skip_ratio = params.skip_ratio;
         search_param.skip_strategy_type = params.skip_strategy_type;
@@ -206,12 +217,12 @@ HGraph::KnnSearch(const DatasetPtr& query,
             ->ExtraInfoSize(static_cast<int64_t>(extra_info_size_));
     }
     for (int64_t j = count - 1; j >= 0; --j) {
-        dists[j] = search_result->Top().first;
-        ids[j] = this->label_table_->GetLabelById(search_result->Top().second);
-        iter_filter_ctx->SetPoint(search_result->Top().second);
+        const auto result = search_result->Top();
+        dists[j] = result.first;
+        ids[j] = this->label_table_->GetLabelById(result.second);
+        iter_filter_ctx->SetPoint(result.second);
         if (extra_infos != nullptr) {
-            this->extra_infos_->GetExtraInfoById(search_result->Top().second,
-                                                 extra_infos + extra_info_size_ * j);
+            this->extra_infos_->GetExtraInfoById(result.second, extra_infos + extra_info_size_ * j);
         }
         search_result->Pop();
     }
@@ -292,8 +303,6 @@ HGraph::brute_force_search(const void* query,
                            const FilterPtr& filter,
                            int64_t topk,
                            float radius,
-                           bool consider_duplicate,
-                           int64_t max_duplicates_per_group,
                            QueryContext* ctx) const {
     Allocator* alloc = (ctx != nullptr && ctx->alloc != nullptr) ? ctx->alloc : this->allocator_;
 
@@ -321,88 +330,6 @@ HGraph::brute_force_search(const void* query,
     }
 
     auto computer = flatten->FactoryComputer(query);
-    const bool has_duplicate_groups = this->support_duplicate_ && bottom_graph_ != nullptr;
-    const bool limit_result_size =
-        mode == InnerSearchMode::KNN_SEARCH || (mode == InnerSearchMode::RANGE_SEARCH && topk > 0);
-    const auto result_limit = topk > 0 ? static_cast<uint64_t>(topk) : uint64_t(0);
-    const auto selection_capacity = limit_result_size
-                                        ? std::min(result_limit, static_cast<uint64_t>(total))
-                                        : static_cast<uint64_t>(total);
-    const bool suppress_duplicate_members =
-        has_duplicate_groups && (not consider_duplicate || max_duplicates_per_group == 0);
-    const bool use_group_aware_selection =
-        has_duplicate_groups && consider_duplicate && max_duplicates_per_group > 0 &&
-        static_cast<uint64_t>(max_duplicates_per_group) < selection_capacity;
-
-    using DistanceRecord = DistanceHeap::DistanceRecord;
-    using DistanceRecordSet =
-        std::set<DistanceRecord, std::less<DistanceRecord>, AllocatorWrapper<DistanceRecord>>;
-    DistanceRecordSet selected_records{std::less<DistanceRecord>{},
-                                       AllocatorWrapper<DistanceRecord>(alloc)};
-    UnorderedMap<InnerIdType, DistanceRecordSet> selected_duplicates(alloc);
-
-    auto insert_selected_record = [&](const DistanceRecord& record, InnerIdType group_id) {
-        selected_records.insert(record);
-        if (group_id == record.second) {
-            return;
-        }
-
-        auto group_iter = selected_duplicates.find(group_id);
-        if (group_iter == selected_duplicates.end()) {
-            group_iter = selected_duplicates
-                             .try_emplace(group_id,
-                                          std::less<DistanceRecord>{},
-                                          AllocatorWrapper<DistanceRecord>(alloc))
-                             .first;
-        }
-        group_iter.value().insert(record);
-    };
-    auto erase_selected_record = [&](const DistanceRecord& record, InnerIdType group_id) {
-        selected_records.erase(record);
-        if (group_id == record.second) {
-            return;
-        }
-
-        auto group_iter = selected_duplicates.find(group_id);
-        if (group_iter == selected_duplicates.end()) {
-            return;
-        }
-        group_iter.value().erase(record);
-        if (group_iter.value().empty()) {
-            selected_duplicates.erase(group_id);
-        }
-    };
-    auto try_select_record = [&](float dist, InnerIdType inner_id) {
-        const DistanceRecord record{dist, inner_id};
-        if (limit_result_size && static_cast<uint64_t>(selected_records.size()) >= result_limit &&
-            dist >= selected_records.rbegin()->first) {
-            return;
-        }
-
-        const auto group_id = bottom_graph_->GetGroupId(inner_id);
-        const bool is_duplicate = group_id != inner_id;
-        if (is_duplicate) {
-            auto group_iter = selected_duplicates.find(group_id);
-            if (group_iter != selected_duplicates.end() &&
-                static_cast<uint64_t>(group_iter.value().size()) >=
-                    static_cast<uint64_t>(max_duplicates_per_group)) {
-                const auto group_worst = *group_iter.value().rbegin();
-                if (dist >= group_worst.first) {
-                    return;
-                }
-                erase_selected_record(group_worst, group_id);
-                insert_selected_record(record, group_id);
-                return;
-            }
-        }
-
-        if (limit_result_size && static_cast<uint64_t>(selected_records.size()) >= result_limit) {
-            const auto global_worst = *selected_records.rbegin();
-            const auto global_worst_group_id = bottom_graph_->GetGroupId(global_worst.second);
-            erase_selected_record(global_worst, global_worst_group_id);
-        }
-        insert_selected_record(record, group_id);
-    };
 
     constexpr InnerIdType brute_force_batch_size = 64;
     Vector<InnerIdType> batch_ids(brute_force_batch_size, alloc);
@@ -425,28 +352,12 @@ HGraph::brute_force_search(const void* query,
             float dist = batch_dists[i];
             InnerIdType inner_id = batch_ids[i];
             if constexpr (mode == InnerSearchMode::RANGE_SEARCH) {
-                if (not(dist <= radius)) {
-                    continue;
+                if (dist <= radius) {
+                    result->Push(dist, inner_id);
                 }
-            }
-            if (not use_group_aware_selection) {
-                if constexpr (mode == InnerSearchMode::KNN_SEARCH) {
-                    if (result->Size() >= result_limit && dist >= result->Top().first) {
-                        continue;
-                    }
-                }
-                if (suppress_duplicate_members && bottom_graph_->GetGroupId(inner_id) != inner_id) {
-                    continue;
-                }
+            } else {
                 result->Push(dist, inner_id);
-                continue;
             }
-            try_select_record(dist, inner_id);
-        }
-    }
-    if (use_group_aware_selection) {
-        for (const auto& record : selected_records) {
-            result->Push(record);
         }
     }
     return result;
@@ -580,8 +491,7 @@ HGraph::SearchWithRequest(const SearchRequest& request) const {
         search_param.is_inner_id_allowed = ft;
         search_param.radius = request.radius_;
         search_param.search_mode = RANGE_SEARCH;
-        search_param.consider_duplicate = this->support_duplicate_ && params.consider_duplicate;
-        search_param.max_duplicates_per_group = params.max_duplicates_per_group;
+        search_param.consider_duplicate = true;
         search_param.range_search_limit_size = static_cast<int>(request.limited_size_);
         search_param.parallel_search_thread_count = params.parallel_search_thread_count;
         search_param.enable_reorder = params.enable_reorder;
@@ -596,7 +506,7 @@ HGraph::SearchWithRequest(const SearchRequest& request) const {
                          static_cast<int64_t>(static_cast<float>(k) * params.topk_factor));
         }
         search_param.enable_reorder = params.enable_reorder;
-        search_param.consider_duplicate = this->support_duplicate_ && params.consider_duplicate;
+        search_param.consider_duplicate = true;
         search_param.max_duplicates_per_group = params.max_duplicates_per_group;
         search_param.enable_rabitq_one_bit_search = params.rabitq_one_bit_search;
         if (params.enable_time_record) {
@@ -636,22 +546,10 @@ HGraph::SearchWithRequest(const SearchRequest& request) const {
         mci_result.valid_ratio <= params.brute_force_threshold) {
         if (is_range) {
             search_result = this->brute_force_search<InnerSearchMode::RANGE_SEARCH>(
-                raw_query,
-                ft,
-                request.limited_size_,
-                request.radius_,
-                search_param.consider_duplicate,
-                search_param.max_duplicates_per_group,
-                &ctx);
+                raw_query, ft, request.limited_size_, request.radius_, &ctx);
         } else {
-            search_result = this->brute_force_search<InnerSearchMode::KNN_SEARCH>(
-                raw_query,
-                ft,
-                k,
-                0.0F,
-                search_param.consider_duplicate,
-                search_param.max_duplicates_per_group,
-                &ctx);
+            search_result =
+                this->brute_force_search<InnerSearchMode::KNN_SEARCH>(raw_query, ft, k, 0.0F, &ctx);
         }
         brute_force_used = true;
         mci_result.route = "brute_force";

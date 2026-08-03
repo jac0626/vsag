@@ -355,55 +355,6 @@ TEST_CASE("HGraph companion MCI incrementally updates cliques after Add", "[ut][
     REQUIRE(stale_filter->CheckCount() == 0);
 }
 
-TEST_CASE("HGraph companion MCI falls back for duplicate-controlled search",
-          "[ut][hgraph][mci][duplicate]") {
-    constexpr int64_t dim = 4;
-    constexpr int64_t total = 24;
-    std::vector<int64_t> ids(total);
-    std::iota(ids.begin(), ids.end(), 2000);
-    std::vector<float> vectors(total * dim, 0.0F);
-    for (int64_t i = 0; i < total; ++i) {
-        vectors[i * dim] = static_cast<float>(i / 4);
-        vectors[i * dim + 1] = static_cast<float>(i % 4);
-        vectors[i * dim + 2] = static_cast<float>((i * 3) % 7);
-        vectors[i * dim + 3] = static_cast<float>((i * 5) % 11);
-    }
-
-    auto params = vsag::JsonType::Parse(generate_hgraph_mci_params(dim));
-    params["index_param"]["support_duplicate"].SetBool(true);
-    params["index_param"]["duplicate_distance_threshold"].SetFloat(0.001F);
-    auto index = vsag::Factory::CreateIndex("hgraph", params.Dump());
-    REQUIRE(index.has_value());
-    REQUIRE(index.value()->Build(make_dataset(ids, vectors, 0, total, dim)).has_value());
-
-    auto query = vsag::Dataset::Make();
-    query->NumElements(1)->Dim(dim)->Float32Vectors(vectors.data())->Owner(false);
-    auto filter = std::make_shared<HalfRatioAllValidFilter>(ids);
-    constexpr auto common_params = R"("ef_search":16,"use_mci":true,"mci_seed_ratio":0.5,)"
-                                   R"("hgraph_valid_ratio_threshold":1.0)";
-
-    auto result = index.value()->KnnSearch(
-        query, 3, R"({"hgraph":{)" + std::string(common_params) + R"(}})", filter);
-    REQUIRE(result.has_value());
-    REQUIRE(result.value()->GetStatistics({"mci_hybrid_route"})[0] == R"("mci")");
-
-    result = index.value()->KnnSearch(
-        query,
-        3,
-        R"({"hgraph":{)" + std::string(common_params) + R"(,"consider_duplicate":false}})",
-        filter);
-    REQUIRE(result.has_value());
-    REQUIRE(result.value()->GetStatistics({"mci_hybrid_route"})[0] == R"("disabled")");
-
-    result = index.value()->KnnSearch(
-        query,
-        3,
-        R"({"hgraph":{)" + std::string(common_params) + R"(,"max_duplicates_per_group":1}})",
-        filter);
-    REQUIRE(result.has_value());
-    REQUIRE(result.value()->GetStatistics({"mci_hybrid_route"})[0] == R"("disabled")");
-}
-
 TEST_CASE("HGraph cache-accelerated NSW build creates MCI companion", "[ut][hgraph][mci]") {
     constexpr int64_t dim = 4;
     constexpr int64_t count = 16;
