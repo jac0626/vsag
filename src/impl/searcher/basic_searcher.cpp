@@ -451,6 +451,24 @@ BasicSearcher::search_impl(const GraphInterfacePtr& graph,
                (attr_ft == nullptr or attr_ft->CheckValid(id));
     };
     auto* reasoning = ctx == nullptr ? nullptr : ctx->reasoning_ctx;
+    auto add_duplicate_results = [&](float duplicate_dist, InnerIdType group_member_id) {
+        if (not inner_search_param.consider_duplicate or
+            inner_search_param.max_duplicates_per_group == 0) {
+            return;
+        }
+
+        int64_t duplicate_count = 0;
+        for (const auto duplicate_id : graph->GetDuplicateIds(group_member_id)) {
+            if (inner_search_param.max_duplicates_per_group >= 0 and
+                duplicate_count >= inner_search_param.max_duplicates_per_group) {
+                break;
+            }
+            if (check_func(duplicate_id)) {
+                top_candidates->Push(duplicate_dist, duplicate_id);
+                ++duplicate_count;
+            }
+        }
+    };
 
     if (inner_search_param.enable_rabitq_one_bit_search) {
         flatten->QueryWithDistanceLowerBound(&dist, nullptr, computer, &ep, 1, ctx);
@@ -461,6 +479,18 @@ BasicSearcher::search_impl(const GraphInterfacePtr& graph,
     if (check_func(ep)) {
         top_candidates->Push(dist, ep);
         lower_bound = top_candidates->Top().first;
+    }
+    if constexpr (mode == InnerSearchMode::KNN_SEARCH) {
+        add_duplicate_results(dist, ep);
+        while (top_candidates->Size() > ef) {
+            if (reasoning != nullptr) {
+                reasoning->RecordEviction(top_candidates->Top().second, hops);
+            }
+            top_candidates->Pop();
+        }
+        if (not top_candidates->Empty()) {
+            lower_bound = top_candidates->Top().first;
+        }
     }
     if constexpr (mode == InnerSearchMode::RANGE_SEARCH) {
         if (dist > inner_search_param.radius and not top_candidates->Empty()) {
@@ -560,21 +590,7 @@ BasicSearcher::search_impl(const GraphInterfacePtr& graph,
                 } else if (reasoning != nullptr) {
                     reasoning->RecordFilterReject(cur_id);
                 }
-                if (inner_search_param.consider_duplicate &&
-                    inner_search_param.max_duplicates_per_group != 0) {
-                    const auto duplicate_ids = graph->GetDuplicateIds(cur_id);
-                    int64_t dup_count = 0;
-                    for (const auto& item : duplicate_ids) {
-                        if (inner_search_param.max_duplicates_per_group >= 0 &&
-                            dup_count >= inner_search_param.max_duplicates_per_group) {
-                            break;
-                        }
-                        if (check_func(item)) {
-                            top_candidates->Push(dist, item);
-                            ++dup_count;
-                        }
-                    }
-                }
+                add_duplicate_results(dist, cur_id);
 
                 if constexpr (mode == KNN_SEARCH) {
                     while (top_candidates->Size() > ef) {

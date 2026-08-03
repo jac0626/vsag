@@ -50,13 +50,17 @@ make_build_param(bool support_duplicate, float dup_threshold = 0.0F) {
 }
 
 std::string
-make_search_param(int64_t ef_search = 100, int64_t max_duplicates_per_group = -1) {
+make_search_param(int64_t ef_search = 100,
+                  int64_t max_duplicates_per_group = -1,
+                  int64_t parallelism = 1) {
     return fmt::format(R"({{
+        "parallelism": {},
         "hgraph": {{
             "ef_search": {},
             "max_duplicates_per_group": {}
         }}
     }})",
+                       parallelism,
                        ef_search,
                        max_duplicates_per_group);
 }
@@ -205,6 +209,61 @@ collect_iterator_results(const vsag::IndexPtr& index,
 }
 
 }  // namespace
+
+TEST_CASE("HGraph dedup search expands the entry-point group",
+          "[ft][hgraph][duplicate][search_control][entry_point]") {
+    constexpr int64_t entry_base_count = 1;
+    constexpr int64_t entry_duplicate_count = 3;
+    constexpr int64_t duplicate_limit = 2;
+    auto tv = generate_test_data(DIM, entry_base_count, entry_duplicate_count);
+    auto index = build_index_with_duplicates(tv, make_build_param(true, 0.001F));
+    auto query = vsag::Dataset::Make();
+    query->NumElements(1)->Dim(DIM)->Float32Vectors(tv.queries.data())->Owner(false);
+
+    for (const auto parallelism : {1, 2}) {
+        DYNAMIC_SECTION("parallelism=" << parallelism) {
+            auto result = index->KnnSearch(
+                query, 1 + duplicate_limit, make_search_param(4, duplicate_limit, parallelism));
+            REQUIRE(result.has_value());
+            REQUIRE(result.value()->GetDim() == 1 + duplicate_limit);
+            REQUIRE(count_duplicate_ids(result.value(), entry_base_count) == duplicate_limit);
+
+            std::set<int64_t> ids(result.value()->GetIds(),
+                                  result.value()->GetIds() + result.value()->GetDim());
+            REQUIRE(ids.count(0) == 1);
+        }
+    }
+}
+
+TEST_CASE("HGraph dedup iterator expands the entry-point group across pages",
+          "[ft][hgraph][duplicate][search_control][iterator][entry_point]") {
+    constexpr int64_t entry_base_count = 1;
+    constexpr int64_t entry_duplicate_count = 3;
+    constexpr int64_t duplicate_limit = 2;
+    auto tv = generate_test_data(DIM, entry_base_count, entry_duplicate_count);
+    auto index = build_index_with_duplicates(tv, make_build_param(true, 0.001F));
+    auto query = vsag::Dataset::Make();
+    query->NumElements(1)->Dim(DIM)->Float32Vectors(tv.queries.data())->Owner(false);
+
+    const auto items =
+        collect_iterator_results(index, query, make_search_param(4, duplicate_limit), 1);
+    REQUIRE(items.size() == static_cast<uint64_t>(1 + duplicate_limit));
+
+    int64_t root_count = 0;
+    int64_t duplicate_count = 0;
+    std::set<int64_t> duplicate_pages;
+    for (const auto& item : items) {
+        if (item.id == 0) {
+            ++root_count;
+        } else {
+            ++duplicate_count;
+            duplicate_pages.insert(item.page);
+        }
+    }
+    REQUIRE(root_count == 1);
+    REQUIRE(duplicate_count == duplicate_limit);
+    REQUIRE(duplicate_pages.size() == static_cast<uint64_t>(duplicate_limit));
+}
 
 TEST_CASE("HGraph dedup search: max_duplicates_per_group=1 limits expansion",
           "[ft][hgraph][duplicate][search_control]") {
