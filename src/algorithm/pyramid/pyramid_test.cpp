@@ -16,6 +16,7 @@
 #include "pyramid.h"
 
 #include <cmath>
+#include <numeric>
 #include <vector>
 
 #include "impl/allocator/safe_allocator.h"
@@ -85,6 +86,12 @@ GetPyramidSubindexCount(const std::shared_ptr<vsag::Pyramid>& index, const char*
     return stats["subindex_quality"][status].GetInt();
 }
 
+float
+GetPyramidDuplicateRatio(const std::shared_ptr<vsag::Pyramid>& index) {
+    auto stats = vsag::JsonType::Parse(index->GetStats());
+    return stats["duplicate_ratio"].GetFloat();
+}
+
 }  // namespace
 
 TEST_CASE("Split function tests", "[ut][pyramid]") {
@@ -127,6 +134,28 @@ TEST_CASE("Split function tests", "[ut][pyramid]") {
         auto result = vsag::split("  , hello,  world  ", ',');
         REQUIRE(result == std::vector<std::string>{"  ", " hello", "  world  "});
     }
+}
+
+TEST_CASE("Pyramid stats count duplicates within each leaf", "[ut][pyramid][analyzer]") {
+    constexpr int64_t count = 7;
+    auto test_index = MakePyramidIndex(100, 1, true);
+    const auto& index = test_index.index;
+    std::vector<float> vectors = {
+        1.0F, 2.0F, 3.0F, 4.0F,  // leaf a: representative
+        1.0F, 2.0F, 3.0F, 4.0F,  // leaf a: duplicate
+        2.0F, 3.0F, 4.0F, 5.0F,  // leaf a: unique
+        1.0F, 2.0F, 3.0F, 4.0F,  // leaf b: not a cross-leaf duplicate
+        6.0F, 7.0F, 8.0F, 9.0F,  // leaf c: representative
+        6.0F, 7.0F, 8.0F, 9.0F,  // leaf c: duplicate
+        9.0F, 8.0F, 7.0F, 6.0F,  // leaf d: singleton
+    };
+    std::vector<int64_t> ids(count);
+    std::iota(ids.begin(), ids.end(), 0);
+    std::vector<std::string> paths = {"a", "a", "a", "b", "c", "c", "d"};
+
+    REQUIRE(
+        index->Build(MakePyramidDataset(vectors.data(), ids.data(), paths.data(), count)).empty());
+    REQUIRE(std::abs(GetPyramidDuplicateRatio(index) - 2.0F / static_cast<float>(count)) < 1e-6F);
 }
 
 TEST_CASE("Pyramid promotes flat node at index minimum size", "[ut][pyramid]") {
