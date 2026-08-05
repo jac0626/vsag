@@ -186,6 +186,19 @@ Notes on the filter argument:
 - Overload (4) powers [Iterator Search](../advanced/iterator_search.md); pass the same `iter_ctx`
   across calls and set `is_last_search` on the final call.
 
+### Target-recall `KnnSearch` overload
+
+```cpp
+tl::expected<DatasetPtr, Error>
+KnnSearch(const DatasetPtr& query, int64_t k, double target_recall) const;
+```
+
+HGraph, IVF, and Pyramid can resolve index-specific search parameters from operating points produced
+by [AutoTune](../resources/autotune.md#target-recall-search). The exact `k` and, for Pyramid, query
+path must have a calibrated curve. The call returns an error rather than silently using default
+parameters when no point reaches the requested target. Recall is an empirical workload-level
+calibration, not a per-query guarantee.
+
 ### `RangeSearch` overloads
 
 ```cpp

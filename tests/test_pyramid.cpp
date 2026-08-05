@@ -1673,3 +1673,62 @@ TEST_CASE_PERSISTENT_FIXTURE(fixtures::PyramidTestIndex,
         }
     }
 }
+
+TEST_CASE("Pyramid recall search profile serialization",
+          "[ft][pyramid][serialization][recall_profile]") {
+    constexpr int64_t dim = 16;
+    PyramidParam pyramid_param;
+    auto parameters =
+        fixtures::PyramidTestIndex::GeneratePyramidBuildParametersString("l2", dim, pyramid_param);
+    auto dataset = fixtures::PyramidTestIndex::pool.GetDatasetAndCreate(dim, 64, "l2", true);
+    auto index = fixtures::TestIndex::TestFactory("pyramid", parameters, true);
+    fixtures::TestIndex::TestBuildIndex(index, dataset, true);
+
+    const std::string path = dataset->query_->GetPaths()[0];
+    vsag::RecallSearchProfileEntry profile{1, 0.9, 0.95, path, R"({"pyramid":{"ef_search":16}})"};
+    REQUIRE(index->UpdateRecallSearchProfile(profile).has_value());
+
+    auto hierarchy_profile = profile;
+    hierarchy_profile.search_parameters =
+        R"({"pyramid":{"ef_search":16,"hierarchies":["default"]}})";
+    auto hierarchy_update = index->UpdateRecallSearchProfile(hierarchy_profile);
+    REQUIRE_FALSE(hierarchy_update.has_value());
+    REQUIRE(hierarchy_update.error().type == vsag::ErrorType::INVALID_ARGUMENT);
+
+    auto query = vsag::Dataset::Make()
+                     ->NumElements(1)
+                     ->Dim(dim)
+                     ->Float32Vectors(dataset->query_->GetFloat32Vectors())
+                     ->Paths(dataset->query_->GetPaths())
+                     ->Owner(false);
+    auto require_profile = [&](const vsag::IndexPtr& restored) {
+        auto result = restored->KnnSearch(query, 1, 0.9);
+        REQUIRE(result.has_value());
+        REQUIRE(result.value()->GetDim() == 1);
+
+        std::string other_path = "other/path";
+        auto other_query = vsag::Dataset::Make()
+                               ->NumElements(1)
+                               ->Dim(dim)
+                               ->Float32Vectors(dataset->query_->GetFloat32Vectors())
+                               ->Paths(&other_path)
+                               ->Owner(false);
+        REQUIRE_FALSE(restored->KnnSearch(other_query, 1, 0.9).has_value());
+    };
+
+    SECTION("binary") {
+        auto serialized = index->Serialize();
+        REQUIRE(serialized.has_value());
+        auto restored = fixtures::TestIndex::TestFactory("pyramid", parameters, true);
+        REQUIRE(restored->Deserialize(serialized.value()).has_value());
+        require_profile(restored);
+    }
+
+    SECTION("streaming") {
+        std::stringstream stream;
+        REQUIRE(index->SerializeStreaming(stream).has_value());
+        auto restored = fixtures::TestIndex::TestFactory("pyramid", parameters, true);
+        REQUIRE(restored->DeserializeStreaming(stream).has_value());
+        require_profile(restored);
+    }
+}

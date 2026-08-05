@@ -26,6 +26,7 @@
 #include <unordered_map>
 
 #include "../inner_index_interface.h"
+#include "../recall_search_profile_store.h"
 #include "common.h"
 #include "datacell/attribute_inverted_interface.h"
 #include "datacell/clique_datacell.h"
@@ -180,6 +181,11 @@ public:
               const FilterPtr& filter) const override;
 
     [[nodiscard]] DatasetPtr
+    KnnSearchByTargetRecall(const DatasetPtr& query,
+                            int64_t k,
+                            double target_recall) const override;
+
+    [[nodiscard]] DatasetPtr
     KnnSearch(const DatasetPtr& query,
               int64_t k,
               const std::string& parameters,
@@ -243,6 +249,9 @@ public:
 
     void
     Train(const DatasetPtr& base) override;
+
+    void
+    UpdateRecallSearchProfile(const RecallSearchProfileEntry& entry) override;
 
     bool
     UpdateVector(int64_t id, const DatasetPtr& new_base, bool force_update = false) override;
@@ -378,6 +387,9 @@ public:
                      DistanceRecordVector* rabitq_lower_bound_candidates = nullptr) const;
 
 private:
+    static void
+    ValidateRecallSearchProfile(const RecallSearchProfileEntry& entry);
+
     [[nodiscard]] std::shared_lock<std::shared_mutex>
     acquire_global_read_lock() const {
         if (not this->physical_code_resize_pending_.load(std::memory_order_acquire)) {
@@ -885,6 +897,8 @@ private:
     std::atomic<int64_t> delete_count_{0};  // number of force-removed vectors
 
     std::shared_ptr<Optimizer<BasicSearcher>> optimizer_;  // search parameter optimizer
+
+    RecallSearchProfileStore recall_search_profiles_{};
 
     bool create_new_raw_vector_{false};        // whether a separate raw vector exists
     FlattenInterfacePtr raw_vector_{nullptr};  // raw float vectors (for distance calc)

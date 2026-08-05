@@ -56,8 +56,7 @@ request.objective = vsag::autotune::Metric::LATENCY_AVG_MS;
 
 auto result = vsag::autotune::TuneIndex(request);
 if (result.has_value() && result->status == vsag::autotune::TuneStatus::SUCCESS) {
-    auto neighbors =
-        result->index->KnnSearch(query, 10, result->search_parameters).value();
+    auto neighbors = result->index->KnnSearch(query, 10, 0.95).value();
 }
 ```
 
@@ -181,7 +180,7 @@ request.objective = vsag::autotune::Metric::LATENCY_AVG_MS;
 
 auto result = vsag::autotune::TuneSearch(request);
 if (result.has_value() && result->status == vsag::autotune::TuneStatus::SUCCESS) {
-    auto neighbors = existing_index->KnnSearch(query, 10, result->parameters).value();
+    auto neighbors = existing_index->KnnSearch(query, 10, 0.95).value();
 }
 ```
 
@@ -199,19 +198,55 @@ Pyramid is supported in this search-only mode. The HDF5 CLI adapter does not pro
 so it can evaluate only Pyramid's native default/root search. Typed requests take paths directly
 from `workload.queries->GetPaths()`: when paths are present, each query is evaluated against its
 path; when absent, Pyramid applies its native root-search behavior. V1 supports only the default
-unnamed hierarchy. To select different `ef_search` values for different paths, run one typed
-AutoTune request per representative path workload, with the matching ground truth. V1 does not
-aggregate path-specific recommendations into one result.
+unnamed hierarchy. A Pyramid request with a recall constraint must contain queries for one path;
+mixed-path workloads are rejected. Run one typed request per representative path, with matching
+ground truth. Each successful request adds that path's operating point to the same index.
 
-A complete example is available at
+A complete HGraph example is available at
 [`examples/cpp/327_feature_autotune_existing_index.cpp`][existing-index-example].
+The corresponding IVF flow, including tuning `scan_buckets_count` and then searching by target
+recall, is shown in
+[`examples/cpp/329_feature_autotune_existing_ivf.cpp`][ivf-example].
 For Pyramid path tuning, see
 [`examples/cpp/328_feature_autotune_existing_pyramid.cpp`][pyramid-example].
 It tunes the same Pyramid index separately for 512-vector and 4096-vector leaf subgraphs under the
 same recall target, illustrating why different paths may need different `ef_search` values.
 
 [existing-index-example]: https://github.com/antgroup/vsag/blob/main/examples/cpp/327_feature_autotune_existing_index.cpp
+[ivf-example]: https://github.com/antgroup/vsag/blob/main/examples/cpp/329_feature_autotune_existing_ivf.cpp
 [pyramid-example]: https://github.com/antgroup/vsag/blob/main/examples/cpp/328_feature_autotune_existing_pyramid.cpp
+
+## Target-recall Search
+
+A successful `TuneIndex` or `TuneSearch` call with a `RECALL_AT_K` constraint publishes one
+calibrated operating point to the index. The point contains the workload's exact `top_k`, the
+constraint as its target recall, the measured recall, and the selected complete search parameters.
+Pyramid points additionally contain the workload path. Failed and infeasible tuning calls do not
+change the profile. A recall objective without a recall constraint also does not publish a point.
+
+The stored point lets applications query by intent instead of by an index-specific parameter:
+
+```cpp
+auto neighbors = index->KnnSearch(query, 10, 0.95);
+```
+
+`top_k` and, for Pyramid, the query path must have a calibrated curve. The lookup selects the
+point with the lowest validated recall that is at least the requested target. It returns an error
+instead of silently falling back when no suitable point exists.
+
+`TuneSearch` updates the supplied in-memory index; serialize it afterwards when the update must
+survive process restart. `TuneIndex` installs the point in both its returned index and selected
+artifact. The CLI build flow also rewrites the selected artifact with the point, which requires one
+additional load-and-serialize pass for that artifact. The CLI existing-index/search-only flow never
+rewrites its input `index_path`. Profiles are serialized as optional index metadata, so indexes
+written before this feature remain readable. Reported index size and memory describe the evaluated
+index before this small profile metadata is added.
+
+Target recall is an empirical calibration over the supplied workload, not a per-query guarantee
+or an online SLA. Data changes do not automatically discard a curve. Re-running AutoTune merges a
+new point atomically; re-running the same top-k, path, and target recall replaces its previous
+point. This allows later offline tuning or a background sampler to improve the curve without
+changing the query API. V1 does not implement background sampling or drift detection.
 
 ## Metrics
 

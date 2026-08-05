@@ -2200,3 +2200,55 @@ TEST_CASE("IVF GraphBucketSearcher Without Graph", "[ft][ivf][graph]") {
     REQUIRE(result.has_value());
     REQUIRE(result.value()->GetDim() > 0);
 }
+
+TEST_CASE("IVF recall search profile serialization", "[ft][ivf][serialization][recall_profile]") {
+    constexpr int64_t dim = 16;
+    constexpr int64_t count = 512;
+    auto parameters = fixtures::IVFTestIndex::GenerateIVFBuildParametersString(
+        "l2", dim, "fp32", 4, "random", false, 1, false, 1, count);
+    auto dataset = fixtures::IVFTestIndex::pool.GetDatasetAndCreate(dim, count, "l2");
+    auto index = fixtures::TestIndex::TestFactory("ivf", parameters, true);
+    fixtures::TestIndex::TestBuildIndex(index, dataset, true);
+
+    vsag::RecallSearchProfileEntry profile{1, 0.9, 0.95, "", R"({"ivf":{"scan_buckets_count":4}})"};
+    REQUIRE(index->UpdateRecallSearchProfile(profile).has_value());
+
+    auto path_profile = profile;
+    path_profile.path = "catalog/leaf";
+    auto path_update = index->UpdateRecallSearchProfile(path_profile);
+    REQUIRE_FALSE(path_update.has_value());
+    REQUIRE(path_update.error().type == vsag::ErrorType::INVALID_ARGUMENT);
+
+    auto invalid_profile = profile;
+    invalid_profile.search_parameters = R"({"hgraph":{"ef_search":16}})";
+    auto invalid_update = index->UpdateRecallSearchProfile(invalid_profile);
+    REQUIRE_FALSE(invalid_update.has_value());
+    REQUIRE(invalid_update.error().type == vsag::ErrorType::INVALID_ARGUMENT);
+
+    auto query = vsag::Dataset::Make()
+                     ->NumElements(1)
+                     ->Dim(dim)
+                     ->Float32Vectors(dataset->query_->GetFloat32Vectors())
+                     ->Owner(false);
+    auto require_profile = [&](const vsag::IndexPtr& restored) {
+        auto result = restored->KnnSearch(query, 1, 0.9);
+        REQUIRE(result.has_value());
+        REQUIRE(result.value()->GetDim() == 1);
+    };
+
+    SECTION("binary") {
+        auto serialized = index->Serialize();
+        REQUIRE(serialized.has_value());
+        auto restored = fixtures::TestIndex::TestFactory("ivf", parameters, true);
+        REQUIRE(restored->Deserialize(serialized.value()).has_value());
+        require_profile(restored);
+    }
+
+    SECTION("streaming") {
+        std::stringstream stream;
+        REQUIRE(index->SerializeStreaming(stream).has_value());
+        auto restored = fixtures::TestIndex::TestFactory("ivf", parameters, true);
+        REQUIRE(restored->DeserializeStreaming(stream).has_value());
+        require_profile(restored);
+    }
+}

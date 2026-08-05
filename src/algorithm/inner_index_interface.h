@@ -481,6 +481,18 @@ public:
                             "Index doesn't support SearchWithRequest");
     }
 
+    [[nodiscard]] virtual DatasetPtr
+    KnnSearchByTargetRecall(const DatasetPtr& query, int64_t k, double target_recall) const {
+        throw VsagException(ErrorType::UNSUPPORTED_INDEX_OPERATION,
+                            "Index doesn't support target-recall KNN search");
+    }
+
+    virtual void
+    UpdateRecallSearchProfile(const RecallSearchProfileEntry& entry) {
+        throw VsagException(ErrorType::UNSUPPORTED_INDEX_OPERATION,
+                            "Index doesn't support recall search profiles");
+    }
+
     virtual void
     Serialize(std::ostream& out_stream) const;
 

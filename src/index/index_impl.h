@@ -101,6 +101,11 @@ public:
         SAFE_CALL(return this->inner_index_->Tune(parameters, disable_future_tuning));
     }
 
+    tl::expected<void, Error>
+    UpdateRecallSearchProfile(const RecallSearchProfileEntry& entry) override {
+        SAFE_CALL(this->inner_index_->UpdateRecallSearchProfile(entry));
+    }
+
     tl::expected<float, Error>
     CalcDistanceById(const DatasetPtr& vector,
                      int64_t id,
@@ -295,6 +300,12 @@ public:
     [[nodiscard]] std::string
     GetStats() const override {
         return this->inner_index_->GetStats();
+    }
+
+    tl::expected<DatasetPtr, Error>
+    KnnSearch(const DatasetPtr& query, int64_t k, double target_recall) const override {
+        CHECK_QUERY_RETURN_EMPTY_DATASET(query);
+        SAFE_CALL(return this->inner_index_->KnnSearchByTargetRecall(query, k, target_recall));
     }
 
     tl::expected<DatasetPtr, Error>

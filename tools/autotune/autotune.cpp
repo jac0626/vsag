@@ -576,6 +576,18 @@ ParseRequest(const SearchRequest& input) {
     space.search_parameter_space = input.parameter_space;
     request.index_input = parse_index_space(space, 0, true);
     request.index = input.index;
+    if (request.index_input.name == INDEX_PYRAMID &&
+        request.context.constraints.find("recall_at_k") != request.context.constraints.end()) {
+        const auto* paths = input.workload.queries->GetPaths();
+        if (paths != nullptr) {
+            request.context.recall_profile_path = paths[0];
+            for (uint64_t i = 1; i < request.context.query_count; ++i) {
+                require(paths[i] == request.context.recall_profile_path,
+                        "Pyramid recall tuning requires every workload query to use the same "
+                        "path");
+            }
+        }
+    }
     request.context.effective_request["index_name"] = request.index_input.name;
     request.context.effective_request["parameter_space"] = request.index_input.search_params;
     return request;
@@ -853,6 +865,89 @@ finalize_artifacts(JsonType& report, bool keep_all, const std::optional<std::str
 std::optional<std::string>
 selected_artifact(const JsonType& report);
 
+std::optional<RecallSearchProfileEntry>
+recall_profile_entry(const internal::RequestContext& context, const JsonType& report) {
+    const auto target = context.constraints.find("recall_at_k");
+    if (target == context.constraints.end() || report.value("status", std::string()) != "success") {
+        return std::nullopt;
+    }
+
+    const auto& recommendation = report.at("recommendation");
+    RecallSearchProfileEntry entry;
+    entry.top_k = static_cast<int64_t>(context.top_k);
+    entry.target_recall = target->second;
+    entry.validated_recall = recommendation.at("metrics").at("recall_at_k").get<double>();
+    entry.path = context.recall_profile_path;
+    entry.search_parameters = recommendation.at("search_params").dump();
+    return entry;
+}
+
+void
+update_recall_profile(const IndexPtr& index, const RecallSearchProfileEntry& entry) {
+    auto updated = index->UpdateRecallSearchProfile(entry);
+    if (!updated.has_value()) {
+        throw std::runtime_error("failed to update recall search profile: " +
+                                 updated.error().message);
+    }
+}
+
+void
+update_selected_artifact(const JsonType& report, const RecallSearchProfileEntry& entry) {
+    const auto& recommendation = report.at("recommendation");
+    const auto index_name = recommendation.at("index_name").get<std::string>();
+    const auto create_parameters = recommendation.at("create_params").dump();
+    const auto artifact_path = recommendation.at("artifacts").at("index_path").get<std::string>();
+
+    auto created = Factory::CreateIndex(index_name, create_parameters);
+    if (!created.has_value()) {
+        throw std::runtime_error("failed to recreate selected index: " + created.error().message);
+    }
+    {
+        std::ifstream input(artifact_path, std::ios::binary);
+        if (!input.good()) {
+            throw std::runtime_error("failed to open selected index artifact: " + artifact_path);
+        }
+        auto loaded = created.value()->Deserialize(input);
+        if (!loaded.has_value()) {
+            throw std::runtime_error("failed to load selected index artifact: " +
+                                     loaded.error().message);
+        }
+    }
+    update_recall_profile(created.value(), entry);
+
+    const auto temporary_path = artifact_path + ".recall-profile.tmp";
+    try {
+        std::ofstream output(temporary_path, std::ios::binary | std::ios::trunc);
+        if (!output.good()) {
+            throw std::runtime_error("failed to open temporary index artifact: " + temporary_path);
+        }
+        auto serialized = created.value()->Serialize(output);
+        if (!serialized.has_value()) {
+            throw std::runtime_error("failed to serialize selected index artifact: " +
+                                     serialized.error().message);
+        }
+        output.flush();
+        if (!output.good()) {
+            throw std::runtime_error("failed to flush temporary index artifact: " + temporary_path);
+        }
+        output.close();
+        if (!output.good()) {
+            throw std::runtime_error("failed to close temporary index artifact: " + temporary_path);
+        }
+
+        std::error_code error;
+        std::filesystem::rename(temporary_path, artifact_path, error);
+        if (error) {
+            throw std::runtime_error("failed to replace selected index artifact: " +
+                                     error.message());
+        }
+    } catch (...) {
+        std::error_code error;
+        std::filesystem::remove(temporary_path, error);
+        throw;
+    }
+}
+
 template <typename Parser>
 JsonType
 run_tuning_locked(Parser parser, bool persist_report, std::chrono::steady_clock::time_point start) {
@@ -907,6 +1002,15 @@ run_tuning_locked(Parser parser, bool persist_report, std::chrono::steady_clock:
             evaluation = internal::EvaluateCandidates(request, candidates);
         }
         auto report = internal::SelectResult(context, evaluation);
+        stage = "profile";
+        const auto profile = recall_profile_entry(context, report);
+        if (profile.has_value()) {
+            if constexpr (std::is_same_v<decltype(request), internal::IndexTuningRequest>) {
+                update_selected_artifact(report, *profile);
+            } else {
+                update_recall_profile(request.index, *profile);
+            }
+        }
         report["version"] = 1;
         report["request"] = context.effective_request;
         if (!report_path.empty()) {

@@ -130,6 +130,27 @@ HGraph::HGraph(const HGraphParameterPtr& hgraph_param, const vsag::IndexCommonPa
     resize(bottom_graph_->max_capacity_);
 }
 
+DatasetPtr
+HGraph::KnnSearchByTargetRecall(const DatasetPtr& query, int64_t k, double target_recall) const {
+    const auto parameters = this->recall_search_profiles_.Resolve(k, target_recall, "");
+    return this->KnnSearch(query, k, *parameters, nullptr);
+}
+
+void
+HGraph::ValidateRecallSearchProfile(const RecallSearchProfileEntry& entry) {
+    if (not entry.path.empty()) {
+        throw VsagException(ErrorType::INVALID_ARGUMENT,
+                            "HGraph recall search profile path must be empty");
+    }
+    (void)HGraphSearchParameters::FromJson(entry.search_parameters);
+}
+
+void
+HGraph::UpdateRecallSearchProfile(const RecallSearchProfileEntry& entry) {
+    ValidateRecallSearchProfile(entry);
+    this->recall_search_profiles_.Update(entry);
+}
+
 bool
 HGraph::Tune(const std::string& parameters, bool disable_future_tuning) {
     std::scoped_lock lock(this->add_mutex_);

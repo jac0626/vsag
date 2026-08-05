@@ -38,6 +38,7 @@
 #include "vsag/iterator_context.h"
 #include "vsag/load_parameters.h"
 #include "vsag/readerset.h"
+#include "vsag/recall_search_profile.h"
 #include "vsag/search_param.h"
 #include "vsag/search_request.h"
 
@@ -1094,6 +1095,36 @@ public:
 
 public:
     virtual ~Index() = default;
+
+    /**
+     * @brief Perform KNN search using parameters calibrated for a target recall.
+     *
+     * @param query query dataset containing one vector
+     * @param k number of nearest neighbors to return
+     * @param target_recall desired recall in the inclusive range [0, 1]
+     * @return search result, or an error if no calibrated operating point can satisfy the request
+     * @note Recall is an empirical workload-level calibration, not a per-query guarantee.
+     *       V1 supports HGraph, IVF, and Pyramid.
+     */
+    [[nodiscard]] virtual tl::expected<DatasetPtr, Error>
+    KnnSearch(const DatasetPtr& query, int64_t k, double target_recall) const {
+        return tl::unexpected(Error(ErrorType::UNSUPPORTED_INDEX_OPERATION,
+                                    "Index doesn't support target-recall KNN search"));
+    }
+
+    /**
+     * @brief Add or replace one calibrated target-recall search operating point.
+     *
+     * Existing searches keep using an immutable profile snapshot while the update is published.
+     * An entry with the same top-k, path, and target recall replaces the previous entry.
+     *
+     * @param entry calibrated operating point
+     */
+    virtual tl::expected<void, Error>
+    UpdateRecallSearchProfile(const RecallSearchProfileEntry& entry) {
+        return tl::unexpected(Error(ErrorType::UNSUPPORTED_INDEX_OPERATION,
+                                    "Index doesn't support recall search profiles"));
+    }
 
     // Keep this bridge nonvirtual: an old binary Index subclass has no corrected slot in its
     // vtable. Dispatching through the pre-existing legacy virtuals keeps that ABI safe.

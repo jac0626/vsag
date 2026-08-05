@@ -47,6 +47,7 @@ struct RequestContext {
     std::string workspace_path{"/tmp/vsag_autotune"};
     std::string result_path;
     std::string objective;
+    std::string recall_profile_path;
     MetricMap constraints;
     uint64_t top_k{0};
     uint64_t concurrency{1};

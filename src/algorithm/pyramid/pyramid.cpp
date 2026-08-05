@@ -409,6 +409,33 @@ Pyramid::search_impl(const DatasetPtr& query,
     return result;
 }
 
+DatasetPtr
+Pyramid::KnnSearchByTargetRecall(const DatasetPtr& query, int64_t k, double target_recall) const {
+    CHECK_ARGUMENT(query != nullptr, "query dataset cannot be null");
+    CHECK_ARGUMENT(query->GetNumElements() == 1, "target-recall search requires exactly one query");
+    std::string path;
+    if (query->GetPaths() != nullptr) {
+        path = query->GetPaths()[0];
+    }
+    auto parameters = this->recall_search_profiles_.Resolve(k, target_recall, path);
+    return this->KnnSearch(query, k, *parameters, nullptr);
+}
+
+void
+Pyramid::ValidateRecallSearchProfile(const RecallSearchProfileEntry& entry) {
+    auto parameters = PyramidSearchParameters::FromJson(entry.search_parameters);
+    if (parameters.HasHierarchySelector()) {
+        throw VsagException(ErrorType::INVALID_ARGUMENT,
+                            "Pyramid V1 recall search profiles support only the default hierarchy");
+    }
+}
+
+void
+Pyramid::UpdateRecallSearchProfile(const RecallSearchProfileEntry& entry) {
+    ValidateRecallSearchProfile(entry);
+    this->recall_search_profiles_.Update(entry);
+}
+
 int64_t
 Pyramid::GetNumElements() const {
     auto total = static_cast<int64_t>(base_codes_->TotalCount());
@@ -456,6 +483,7 @@ Pyramid::Serialize(StreamWriter& writer) const {
     JsonType basic_info;
     basic_info["max_capacity"].SetInt(max_capacity_);
     basic_info[INDEX_PARAM].SetString(this->create_param_ptr_->ToString());
+    this->recall_search_profiles_.AppendTo(basic_info);
     write_index_footer(writer, basic_info);
 }
 
@@ -472,6 +500,7 @@ Pyramid::collect_streaming_header() const {
     basic_info["data_type"].SetInt(static_cast<int64_t>(data_type_));
     basic_info["extra_info_size"].SetInt(static_cast<int64_t>(extra_info_size_));
     basic_info[INDEX_PARAM].SetString(this->create_param_ptr_->ToString());
+    this->recall_search_profiles_.AppendTo(basic_info);
     metadata->Set(BASIC_INFO, basic_info);
 
     JsonType manifest;
@@ -587,6 +616,8 @@ void
 Pyramid::read_streaming_body(StreamReader& reader, const MetadataPtr& metadata) {
     auto basic_info = metadata->Get(BASIC_INFO);
     auto max_capacity = basic_info["max_capacity"].GetInt();
+    this->recall_search_profiles_.RestoreFrom(
+        basic_info, [](const auto& entry) { Pyramid::ValidateRecallSearchProfile(entry); });
     if (basic_info.Contains(INDEX_PARAM)) {
         auto index_param = std::make_shared<PyramidParameters>();
         index_param->FromString(basic_info[INDEX_PARAM].GetString());
@@ -699,6 +730,8 @@ Pyramid::Deserialize(StreamReader& reader) {
         throw VsagException(ErrorType::READ_ERROR, "failed to read index footer");
     }
     auto max_capacity = basic_info["max_capacity"].GetInt();
+    this->recall_search_profiles_.RestoreFrom(
+        basic_info, [](const auto& entry) { Pyramid::ValidateRecallSearchProfile(entry); });
 
     BufferStreamReader buffer_reader(
         &reader, std::numeric_limits<uint64_t>::max(), this->allocator_);

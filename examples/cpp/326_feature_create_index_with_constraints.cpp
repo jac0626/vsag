@@ -79,7 +79,7 @@ main() {
     auto query = vsag::Dataset::Make();
     query->NumElements(1)->Dim(DIM)->Float32Vectors(query_vectors.data())->Owner(false);
 
-    auto neighbors = result.index->KnnSearch(query, 1, result.search_parameters);
+    auto neighbors = result.index->KnnSearch(query, 1, 1.0);
     if (!neighbors.has_value()) {
         std::cerr << "The selected index could not be queried: " << neighbors.error().message
                   << std::endl;

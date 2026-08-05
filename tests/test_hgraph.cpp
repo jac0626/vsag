@@ -3962,3 +3962,60 @@ TEST_CASE_PERSISTENT_FIXTURE(fixtures::HGraphTestIndex,
     TestIndex::TestBuildIndex(cache_index, dataset, true);
     HGraphTestIndex::TestGeneral(cache_index, dataset, search_param, 0.98f);
 }
+
+TEST_CASE("HGraph recall search profile serialization",
+          "[ft][hgraph][serialization][recall_profile]") {
+    constexpr int64_t dim = 16;
+    fixtures::HGraphTestIndex::HGraphBuildParam build_param("l2", dim, "fp32");
+    auto parameters = fixtures::HGraphTestIndex::GenerateHGraphBuildParametersString(build_param);
+    auto dataset = fixtures::HGraphTestIndex::pool.GetDatasetAndCreate(dim, 64, "l2");
+    auto index = fixtures::TestIndex::TestFactory("hgraph", parameters, true);
+    fixtures::TestIndex::TestBuildIndex(index, dataset, true);
+
+    vsag::RecallSearchProfileEntry profile{1, 0.9, 0.95, "", R"({"hgraph":{"ef_search":16}})"};
+    REQUIRE(index->UpdateRecallSearchProfile(profile).has_value());
+
+    auto path_profile = profile;
+    path_profile.path = "unsupported";
+    auto path_update = index->UpdateRecallSearchProfile(path_profile);
+    REQUIRE_FALSE(path_update.has_value());
+    REQUIRE(path_update.error().type == vsag::ErrorType::INVALID_ARGUMENT);
+
+    auto invalid_profile = profile;
+    invalid_profile.search_parameters = R"({"ivf":{"scan_buckets_count":4}})";
+    auto invalid_update = index->UpdateRecallSearchProfile(invalid_profile);
+    REQUIRE_FALSE(invalid_update.has_value());
+    REQUIRE(invalid_update.error().type == vsag::ErrorType::INVALID_ARGUMENT);
+
+    auto query = vsag::Dataset::Make()
+                     ->NumElements(1)
+                     ->Dim(dim)
+                     ->Float32Vectors(dataset->query_->GetFloat32Vectors())
+                     ->Owner(false);
+    auto empty_index = fixtures::TestIndex::TestFactory("hgraph", parameters, true);
+    auto empty_search = empty_index->KnnSearch(query, 1, 0.9);
+    REQUIRE_FALSE(empty_search.has_value());
+    REQUIRE(empty_search.error().type == vsag::ErrorType::INVALID_ARGUMENT);
+
+    auto require_profile = [&](const vsag::IndexPtr& restored) {
+        auto result = restored->KnnSearch(query, 1, 0.9);
+        REQUIRE(result.has_value());
+        REQUIRE(result.value()->GetDim() == 1);
+    };
+
+    SECTION("binary") {
+        auto serialized = index->Serialize();
+        REQUIRE(serialized.has_value());
+        auto restored = fixtures::TestIndex::TestFactory("hgraph", parameters, true);
+        REQUIRE(restored->Deserialize(serialized.value()).has_value());
+        require_profile(restored);
+    }
+
+    SECTION("streaming") {
+        std::stringstream stream;
+        REQUIRE(index->SerializeStreaming(stream).has_value());
+        auto restored = fixtures::TestIndex::TestFactory("hgraph", parameters, true);
+        REQUIRE(restored->DeserializeStreaming(stream).has_value());
+        require_profile(restored);
+    }
+}

@@ -15,6 +15,7 @@
 
 #pragma once
 
+#include "../recall_search_profile_store.h"
 #include "algorithm/inner_index_interface.h"
 #include "datacell/attribute_bucket_inverted_datacell.h"
 #include "datacell/bucket_datacell.h"
@@ -149,6 +150,11 @@ public:
               const std::string& parameters,
               const FilterPtr& filter) const override;
 
+    [[nodiscard]] DatasetPtr
+    KnnSearchByTargetRecall(const DatasetPtr& query,
+                            int64_t k,
+                            double target_recall) const override;
+
     void
     Merge(const std::vector<MergeUnit>& merge_units) override;
 
@@ -172,6 +178,9 @@ public:
     Train(const DatasetPtr& data) override;
 
     void
+    UpdateRecallSearchProfile(const RecallSearchProfileEntry& entry) override;
+
+    void
     UpdateAttribute(int64_t id, const AttributeSet& new_attrs) override;
 
     void
@@ -183,6 +192,9 @@ public:
     GetMemoryUsage() const override;
 
 private:
+    static void
+    ValidateRecallSearchProfile(const RecallSearchProfileEntry& entry);
+
     /**
      * @brief Parse the JSON search parameter string and populate an
      *        InnerSearchParam (nprobe, ef_search, etc.).
@@ -290,6 +302,8 @@ private:
     ReorderInterfacePtr reorder_{nullptr};        // reordering engine
 
     std::shared_ptr<SafeThreadPool> thread_pool_{nullptr};  // for parallel bucket scans
+
+    RecallSearchProfileStore recall_search_profiles_{};
 
     /**
      * Packed mapping: location_map_[inner_id] = (bucket_id << 32) | local_id.

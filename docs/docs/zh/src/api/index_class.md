@@ -181,6 +181,18 @@ KnnSearch(const DatasetPtr& query, int64_t k, SearchParam& search_param) const;
 - 重载 (4) 支撑[迭代式搜索](../advanced/iterator_search.md)；跨调用传入同一个 `iter_ctx`，并在最后一次
   调用时设置 `is_last_search`。
 
+### 基于目标 Recall 的 `KnnSearch` 重载
+
+```cpp
+tl::expected<DatasetPtr, Error>
+KnnSearch(const DatasetPtr& query, int64_t k, double target_recall) const;
+```
+
+HGraph、IVF 和 Pyramid 可以使用 [AutoTune](../resources/autotune.md#基于目标-recall-搜索) 生成的
+operating point，自动解析索引特定的查询参数。调用时必须存在精确 `k` 对应的校准 curve；对 Pyramid，
+query path 也必须匹配。没有达到目标的点时会返回错误，不会静默使用默认参数。Recall 是 workload
+级别的经验校准，不是单条 query 的保证。
+
 ### `RangeSearch` 重载
 
 ```cpp

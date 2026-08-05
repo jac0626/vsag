@@ -53,8 +53,7 @@ request.objective = vsag::autotune::Metric::LATENCY_AVG_MS;
 
 auto result = vsag::autotune::TuneIndex(request);
 if (result.has_value() && result->status == vsag::autotune::TuneStatus::SUCCESS) {
-    auto neighbors =
-        result->index->KnnSearch(query, 10, result->search_parameters).value();
+    auto neighbors = result->index->KnnSearch(query, 10, 0.95).value();
 }
 ```
 
@@ -172,7 +171,7 @@ request.objective = vsag::autotune::Metric::LATENCY_AVG_MS;
 
 auto result = vsag::autotune::TuneSearch(request);
 if (result.has_value() && result->status == vsag::autotune::TuneStatus::SUCCESS) {
-    auto neighbors = existing_index->KnnSearch(query, 10, result->parameters).value();
+    auto neighbors = existing_index->KnnSearch(query, 10, 0.95).value();
 }
 ```
 
@@ -188,19 +187,50 @@ CLI 的 `index_path` 仍是离线适配：它先使用具体 create 参数创建
 Pyramid 通过这个 search-only 模式接入。HDF5 CLI 适配器不提供 query path，因此只能评测
 Pyramid 原生的默认/root 搜索。typed 请求直接从 `workload.queries->GetPaths()` 取得 path：
 提供 path 时，每条 query 按自己的 path 评测；不提供时沿用 root 搜索语义。V1 只支持默认
-未命名 hierarchy。若不同 path 需要不同 `ef_search`，应为每个代表性 path workload 分别
-发起一次 typed AutoTune 请求，并提供与该 path 对应的 ground truth。V1 不把多个 path 的
-推荐聚合成一条结果。
+未命名 hierarchy。带 recall 约束的 Pyramid 请求必须只包含一个 path 的 query，混合 path
+workload 会被拒绝。应为每个代表性 path 分别调用，每次成功调用都会向同一索引补充该
+path 的 operating point。
 
-完整示例见
+完整 HGraph 示例见
 [`examples/cpp/327_feature_autotune_existing_index.cpp`][existing-index-example]。
+IVF 的对应流程见
+[`examples/cpp/329_feature_autotune_existing_ivf.cpp`][ivf-example]，其中先调优
+`scan_buckets_count`，再按目标 recall 搜索。
 Pyramid path 调优示例见
 [`examples/cpp/328_feature_autotune_existing_pyramid.cpp`][pyramid-example]。
 它对同一个 Pyramid 索引中的 512-vector 和 4096-vector 叶子子图使用相同 recall 目标分别
 调优，用于展示不同 path 可能需要不同的 `ef_search`。
 
 [existing-index-example]: https://github.com/antgroup/vsag/blob/main/examples/cpp/327_feature_autotune_existing_index.cpp
+[ivf-example]: https://github.com/antgroup/vsag/blob/main/examples/cpp/329_feature_autotune_existing_ivf.cpp
 [pyramid-example]: https://github.com/antgroup/vsag/blob/main/examples/cpp/328_feature_autotune_existing_pyramid.cpp
+
+## 基于目标 Recall 搜索
+
+`TuneIndex` 或 `TuneSearch` 成功完成且请求包含 `RECALL_AT_K` 约束时，会向索引发布一个
+校准 operating point。该点保存 workload 的精确 `top_k`、作为目标的 recall 约束、实测 recall 和
+完整的推荐查询参数。Pyramid 的点还保存 workload path。调优失败或没有可行候选时不更新；
+仅将 recall 设为优化目标而没有 recall 约束时也不发布。
+
+应用随后可以表达意图，而不需要知道索引特定的查询参数：
+
+```cpp
+auto neighbors = index->KnnSearch(query, 10, 0.95);
+```
+
+`top_k` 以及 Pyramid 的 query path 必须有已校准的 curve。查找会选择实测 recall 不低于请求目标的
+最小已校准点；没有合适点时返回错误，不会静默回退到默认参数。
+
+`TuneSearch` 会更新传入的内存索引；若更新需要在进程重启后保留，调用方应在调优后序列化索引。
+`TuneIndex` 同时更新返回的索引和最终 artifact；CLI build 流程也会将该点写入最终 artifact，
+因此会对选中的 artifact 额外执行一次加载和序列化。CLI existing-index/search-only 流程绝不会
+改写输入的 `index_path`。profile 作为可选的索引 metadata 序列化，因此旧版索引仍可读取。
+报告中的索引大小和内存描述的是加入这份少量 profile metadata 之前的被评测索引。
+
+目标 recall 是在输入 workload 上实测得到的经验校准，不是单条 query 保证或线上 SLA。数据变化不会
+自动删除 curve。重新运行 AutoTune 会原子合并新点；相同 top-k、path 和 target recall 的再次校准会
+替换旧点。以后的离线调优或后台采样器可以在不改变查询 API 的情况下持续改进 curve。V1 不实现
+后台采样和漂移检测。
 
 ## 指标
 

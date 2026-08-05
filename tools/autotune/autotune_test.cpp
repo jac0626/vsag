@@ -25,6 +25,7 @@
 #include <cmath>
 #include <filesystem>
 #include <fstream>
+#include <iterator>
 #include <limits>
 #include <string>
 #include <thread>
@@ -127,6 +128,12 @@ load_json_reports(const std::string& path) {
         reports.emplace_back(std::move(report));
     }
     return reports;
+}
+
+std::string
+read_file(const std::string& path) {
+    std::ifstream input(path, std::ios::binary);
+    return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
 }
 
 float
@@ -794,6 +801,7 @@ TEST_CASE("AutoTune builds once per create candidate and supports an existing in
     existing["constraints"] = {{"recall_at_k", 0.0}};
     existing["tuning_config"]["max_trials"] = 2;
 
+    const auto original_index = read_file(existing["index_path"].get<std::string>());
     const auto existing_result = vsag::autotune::RunAutoTune(existing);
     INFO(existing_result.dump(2));
     REQUIRE(existing_result["status"] == "success");
@@ -805,6 +813,7 @@ TEST_CASE("AutoTune builds once per create candidate and supports an existing in
     REQUIRE(existing_result["request"]["create_params"]["dim"] == 8);
     REQUIRE(existing_result["request"]["create_params"]["dtype"] == "float32");
     REQUIRE(existing_result["request"]["create_params"]["metric_type"] == "l2");
+    REQUIRE(read_file(existing["index_path"].get<std::string>()) == original_index);
 }
 
 TEST_CASE("AutoTune CLI keeps only the recommended artifact by default") {
@@ -825,8 +834,26 @@ TEST_CASE("AutoTune CLI keeps only the recommended artifact by default") {
     REQUIRE(result["recommendation"]["artifacts"]["retained"] == true);
     REQUIRE(std::filesystem::is_regular_file(
         result["recommendation"]["artifacts"]["index_path"].get<std::string>()));
+    REQUIRE_FALSE(std::filesystem::exists(
+        result["recommendation"]["artifacts"]["index_path"].get<std::string>() +
+        ".recall-profile.tmp"));
     REQUIRE(count_index_artifacts(workspace.Get()) == 1);
     REQUIRE(std::filesystem::is_regular_file(result["report_path"].get<std::string>()));
+
+    const auto& recommendation = result["recommendation"];
+    auto restored = vsag::Factory::CreateIndex(recommendation["index_name"].get<std::string>(),
+                                               recommendation["create_params"].dump());
+    REQUIRE(restored.has_value());
+    std::ifstream artifact(recommendation["artifacts"]["index_path"].get<std::string>(),
+                           std::ios::binary);
+    REQUIRE(restored.value()->Deserialize(artifact).has_value());
+    auto loaded_dataset = vsag::eval::EvalDataset::Load(dataset.Get());
+    auto query = vsag::Dataset::Make()
+                     ->NumElements(1)
+                     ->Dim(loaded_dataset->GetDim())
+                     ->Float32Vectors(static_cast<const float*>(loaded_dataset->GetTest()))
+                     ->Owner(false);
+    REQUIRE(restored.value()->KnnSearch(query, 3, 0.0).has_value());
 }
 
 TEST_CASE("AutoTune searches an in-memory existing index") {
@@ -863,7 +890,25 @@ TEST_CASE("AutoTune searches an in-memory existing index") {
         REQUIRE(trial["metrics"].contains("recall_at_k"));
         REQUIRE(trial["metrics"].contains("latency_avg_ms"));
     }
+    auto query = vsag::Dataset::Make()
+                     ->NumElements(1)
+                     ->Dim(MemoryFixture::DIM)
+                     ->Float32Vectors(fixture.test.data())
+                     ->Owner(false);
+    REQUIRE(created.value()->KnnSearch(query, 3, 0.0).has_value());
 
+    auto fresh = vsag::Factory::CreateIndex("hgraph", create_params);
+    REQUIRE(fresh.has_value());
+    REQUIRE(fresh.value()->Build(fixture.base).has_value());
+    input.index = fresh.value();
+    input.constraints = {{vsag::autotune::Metric::RECALL_AT_K, 0.0},
+                         {vsag::autotune::Metric::QPS, 1e100}};
+    const auto infeasible = vsag::autotune::TuneSearch(input);
+    REQUIRE(infeasible.has_value());
+    REQUIRE(infeasible->status == vsag::autotune::TuneStatus::NO_FEASIBLE_CANDIDATE);
+    REQUIRE_FALSE(fresh.value()->KnnSearch(query, 3, 0.0).has_value());
+
+    input.index = created.value();
     input.workload.ground_truth = nullptr;
     input.constraints = {{vsag::autotune::Metric::QPS, 0.0}};
     const auto latency_only = vsag::autotune::TuneSearch(input);
@@ -966,6 +1011,14 @@ TEST_CASE("AutoTune searches an existing Pyramid index for one path workload") {
     REQUIRE(result["recommendation"]["search_params"].contains("pyramid"));
     REQUIRE(result["builds"].empty());
 
+    auto query = vsag::Dataset::Make()
+                     ->NumElements(1)
+                     ->Dim(MemoryFixture::DIM)
+                     ->Float32Vectors(fixture.test.data())
+                     ->Paths(query_paths.data())
+                     ->Owner(false);
+    REQUIRE(created.value()->KnnSearch(query, 3, 0.0).has_value());
+
     input.constraints.push_back({vsag::autotune::Metric::INDEX_MEMORY_MB, 1.0});
     const auto memory_constrained = vsag::autotune::TuneSearch(input);
     REQUIRE(memory_constrained.has_value());
@@ -975,6 +1028,17 @@ TEST_CASE("AutoTune searches an existing Pyramid index for one path workload") {
     input.constraints.pop_back();
     input.workload.queries = fixture.queries;
     REQUIRE_NOTHROW(vsag::autotune::internal::ParseRequest(input));
+
+    query_paths[1] = "a/d/g";
+    input.workload.queries = vsag::Dataset::Make()
+                                 ->NumElements(MemoryFixture::QUERY_COUNT)
+                                 ->Dim(MemoryFixture::DIM)
+                                 ->Float32Vectors(fixture.test.data())
+                                 ->Paths(query_paths.data())
+                                 ->Owner(false);
+    REQUIRE_THROWS_WITH(
+        vsag::autotune::internal::ParseRequest(input),
+        Catch::Matchers::ContainsSubstring("every workload query to use the same path"));
 }
 
 TEST_CASE("AutoTune writes concrete trials for an adaptive ef_search range") {
@@ -1028,7 +1092,7 @@ TEST_CASE("TuneIndex returns a queryable selected index") {
         ->Dim(MemoryFixture::DIM)
         ->Float32Vectors(fixture.test.data())
         ->Owner(false);
-    auto neighbors = result.index->KnnSearch(query, 3, result.search_parameters);
+    auto neighbors = result.index->KnnSearch(query, 3, 0.0);
     REQUIRE(neighbors.has_value());
     REQUIRE(neighbors.value()->GetDim() == 3);
     REQUIRE(std::find(fixture.base_ids.begin(),
@@ -1040,7 +1104,7 @@ TEST_CASE("TuneIndex returns a queryable selected index") {
     std::ifstream artifact(result.artifact_path, std::ios::binary);
     REQUIRE(artifact.good());
     REQUIRE(restored.value()->Deserialize(artifact).has_value());
-    REQUIRE(restored.value()->KnnSearch(query, 3, result.search_parameters).has_value());
+    REQUIRE(restored.value()->KnnSearch(query, 3, 0.0).has_value());
 
     const auto& report = result.report;
     REQUIRE(report["status"] == "success");

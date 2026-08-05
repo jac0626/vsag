@@ -204,6 +204,7 @@ HGraph::serialize_basic_info() const {
     jsonify_basic_info["total_count"].SetUint64(this->total_count_.load());
     jsonify_basic_info["max_level"].SetUint64(this->route_graphs_.size());
     jsonify_basic_info[INDEX_PARAM].SetString(this->create_param_ptr_->ToString());
+    this->recall_search_profiles_.AppendTo(jsonify_basic_info);
 
     return jsonify_basic_info;
 }
@@ -275,6 +276,8 @@ HGraph::deserialize_basic_info(const JsonType& jsonify_basic_info) {
         this->create_param_ptr_ = effective_param;
         this->resize_increase_count_bit_ = index_param->resize_increase_count_bit;
     }
+    this->recall_search_profiles_.RestoreFrom(
+        jsonify_basic_info, [](const auto& entry) { HGraph::ValidateRecallSearchProfile(entry); });
 }
 
 // Magic header used to mark presence of an appended source_id_table block,
@@ -906,6 +909,7 @@ HGraph::read_streaming_body(StreamReader& reader,
 
 void
 HGraph::Deserialize(StreamReader& reader) {
+    this->recall_search_profiles_.RestoreFrom(JsonType{});
     // try to deserialize footer (only in new version)
     auto footer = Footer::Parse(reader);
 

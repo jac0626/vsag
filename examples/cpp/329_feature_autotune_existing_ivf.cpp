@@ -4,7 +4,7 @@
 // you may not use this file except in compliance with the License.
 // You may obtain a copy of the License at
 //
-// http://www.apache.org/licenses/LICENSE-2.0
+//     http://www.apache.org/licenses/LICENSE-2.0
 //
 // Unless required by applicable law or agreed to in writing, software
 // distributed under the License is distributed on an "AS IS" BASIS,
@@ -16,6 +16,7 @@
 
 #include <cstdint>
 #include <iostream>
+#include <random>
 #include <string>
 #include <vector>
 
@@ -23,24 +24,26 @@
 
 int
 main() {
-    constexpr int64_t DIM = 4;
-    constexpr int64_t BASE_COUNT = 16;
-    constexpr int64_t QUERY_COUNT = 4;
+    constexpr int64_t DIM = 8;
+    constexpr int64_t BASE_COUNT = 512;
+    constexpr int64_t QUERY_COUNT = 16;
+    vsag::Options::Instance().logger()->SetLevel(vsag::Logger::kOFF);
     vsag::Options::Instance().set_block_size_limit(2UL * 1024 * 1024);
 
     std::vector<int64_t> base_ids(BASE_COUNT);
     std::vector<float> base_vectors(BASE_COUNT * DIM);
-    for (int64_t i = 0; i < BASE_COUNT; ++i) {
-        base_ids[i] = 1000 + i;
-        for (int64_t j = 0; j < DIM; ++j) {
-            base_vectors[i * DIM + j] = static_cast<float>(i * DIM + j);
+    std::mt19937 random(47);
+    std::uniform_real_distribution<float> unit(0.0F, 1.0F);
+    for (int64_t row = 0; row < BASE_COUNT; ++row) {
+        base_ids[row] = 1000 + row;
+        for (int64_t column = 0; column < DIM; ++column) {
+            base_vectors[row * DIM + column] = unit(random);
         }
     }
 
     std::vector<float> query_vectors(base_vectors.begin(),
                                      base_vectors.begin() + QUERY_COUNT * DIM);
     std::vector<int64_t> ground_truth_ids(base_ids.begin(), base_ids.begin() + QUERY_COUNT);
-
     auto base = vsag::Dataset::Make()
                     ->NumElements(BASE_COUNT)
                     ->Dim(DIM)
@@ -60,36 +63,37 @@ main() {
 
     const std::string create_params = R"(
         {
-            "dim": 4,
+            "dim": 8,
             "dtype": "float32",
             "metric_type": "l2",
             "index_param": {
+                "buckets_count": 8,
                 "base_quantization_type": "fp32",
-                "max_degree": 8,
-                "ef_construction": 40
+                "partition_strategy_type": "ivf",
+                "ivf_train_type": "kmeans",
+                "train_sample_count": 512
             }
         })";
-    auto created = vsag::Factory::CreateIndex("hgraph", create_params);
+    auto created = vsag::Factory::CreateIndex("ivf", create_params);
     if (!created.has_value()) {
-        std::cerr << "Failed to create index: " << created.error().message << std::endl;
+        std::cerr << "Failed to create IVF: " << created.error().message << std::endl;
         return 1;
     }
     auto index = created.value();
-    auto built = index->Build(base);
-    if (!built.has_value()) {
-        std::cerr << "Failed to build index: " << built.error().message << std::endl;
+    if (auto built = index->Build(base); !built.has_value()) {
+        std::cerr << "Failed to build IVF: " << built.error().message << std::endl;
         return 1;
     }
 
     vsag::autotune::SearchRequest request;
     request.index = index;
     request.workload = {queries, ground_truth, 1, 1};
-    request.parameter_space = R"({"hgraph":{"ef_search":[4,8,16]}})";
+    request.parameter_space = R"({"ivf":{"scan_buckets_count":[1,2,4,8]}})";
     request.constraints = {{vsag::autotune::Metric::RECALL_AT_K, 1.0}};
     request.objective = vsag::autotune::Metric::LATENCY_AVG_MS;
-    request.config.max_trials = 3;
+    request.config.max_trials = 4;
 
-    const auto tuned = vsag::autotune::TuneSearch(request);
+    auto tuned = vsag::autotune::TuneSearch(request);
     if (!tuned.has_value()) {
         std::cerr << "AutoTune failed: " << tuned.error().message << std::endl;
         return 1;
@@ -100,10 +104,9 @@ main() {
         return 2;
     }
 
-    const auto& result = tuned.value();
-    std::cout << "recommended search_params: " << result.parameters << '\n'
-              << "validated metrics: " << result.metrics.dump() << '\n'
-              << "trials evaluated: " << result.report["trials"].size() << std::endl;
+    std::cout << "recommended search_params: " << tuned->parameters << '\n'
+              << "validated metrics: " << tuned->metrics.dump() << '\n'
+              << "trials evaluated: " << tuned->report["trials"].size() << std::endl;
 
     auto query = vsag::Dataset::Make()
                      ->NumElements(1)
@@ -112,7 +115,7 @@ main() {
                      ->Owner(false);
     auto neighbors = index->KnnSearch(query, 1, 1.0);
     if (!neighbors.has_value()) {
-        std::cerr << "Search failed: " << neighbors.error().message << std::endl;
+        std::cerr << "Target-recall search failed: " << neighbors.error().message << std::endl;
         return 1;
     }
     std::cout << "first neighbor id: " << neighbors.value()->GetIds()[0] << std::endl;

@@ -780,6 +780,27 @@ IVF::KnnSearch(const DatasetPtr& query,
 }
 
 DatasetPtr
+IVF::KnnSearchByTargetRecall(const DatasetPtr& query, int64_t k, double target_recall) const {
+    const auto parameters = this->recall_search_profiles_.Resolve(k, target_recall, "");
+    return this->KnnSearch(query, k, *parameters, nullptr);
+}
+
+void
+IVF::ValidateRecallSearchProfile(const RecallSearchProfileEntry& entry) {
+    if (not entry.path.empty()) {
+        throw VsagException(ErrorType::INVALID_ARGUMENT,
+                            "IVF recall search profile path must be empty");
+    }
+    (void)IVFSearchParameters::FromJson(entry.search_parameters);
+}
+
+void
+IVF::UpdateRecallSearchProfile(const RecallSearchProfileEntry& entry) {
+    ValidateRecallSearchProfile(entry);
+    this->recall_search_profiles_.Update(entry);
+}
+
+DatasetPtr
 IVF::RangeSearch(const DatasetPtr& query,
                  float radius,
                  const std::string& parameters,
@@ -908,6 +929,7 @@ IVF::Serialize(StreamWriter& writer) const {
     basic_info[INDEX_PARAM].SetString(this->create_param_ptr_->ToString());
     basic_info["data_type"].SetInt(static_cast<int64_t>(this->data_type_));
     basic_info["metric"].SetInt(static_cast<int64_t>(this->metric_));
+    this->recall_search_profiles_.AppendTo(basic_info);
 
     auto metadata = std::make_shared<Metadata>();
     metadata->Set(BASIC_INFO, basic_info);
@@ -933,6 +955,7 @@ IVF::collect_streaming_header() const {
     basic_info[INDEX_PARAM].SetString(this->create_param_ptr_->ToString());
     basic_info["data_type"].SetInt(static_cast<int64_t>(this->data_type_));
     basic_info["metric"].SetInt(static_cast<int64_t>(this->metric_));
+    this->recall_search_profiles_.AppendTo(basic_info);
     metadata->Set(BASIC_INFO, basic_info);
 
     JsonType manifest;
@@ -1052,6 +1075,8 @@ IVF::read_streaming_body(StreamReader& reader, const MetadataPtr& metadata) {
     this->total_elements_ = basic_info["total_elements"].GetInt();
     this->use_reorder_ = basic_info["use_reorder"].GetBool();
     this->is_trained_ = basic_info["is_trained"].GetBool();
+    this->recall_search_profiles_.RestoreFrom(
+        basic_info, [](const auto& entry) { IVF::ValidateRecallSearchProfile(entry); });
     if (basic_info.Contains(INDEX_PARAM)) {
         auto index_param = std::make_shared<IVFParameter>();
         index_param->FromString(basic_info[INDEX_PARAM].GetString());
@@ -1233,6 +1258,7 @@ IVF::read_streaming_body(StreamReader& reader, const MetadataPtr& metadata) {
 
 void
 IVF::Deserialize(StreamReader& reader) {
+    this->recall_search_profiles_.RestoreFrom(JsonType{});
     // try to deserialize footer (only in new version)
     auto footer = Footer::Parse(reader);
 
@@ -1269,6 +1295,8 @@ IVF::Deserialize(StreamReader& reader) {
         this->total_elements_ = basic_info["total_elements"].GetInt();
         this->use_reorder_ = basic_info["use_reorder"].GetBool();
         this->is_trained_ = basic_info["is_trained"].GetBool();
+        this->recall_search_profiles_.RestoreFrom(
+            basic_info, [](const auto& entry) { IVF::ValidateRecallSearchProfile(entry); });
         if (basic_info.Contains(INDEX_PARAM)) {
             auto param_str = basic_info[INDEX_PARAM].GetString();
             auto index_param = std::make_shared<IVFParameter>();

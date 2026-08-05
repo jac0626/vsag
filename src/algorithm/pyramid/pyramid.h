@@ -19,6 +19,7 @@
 #include <utility>
 
 #include "algorithm/inner_index_interface.h"
+#include "algorithm/recall_search_profile_store.h"
 #include "datacell/graph_interface.h"
 #include "datacell/sparse_graph_datacell_parameter.h"
 #include "impl/allocator/safe_allocator.h"
@@ -242,6 +243,14 @@ public:
               const FilterPtr& filter) const override;
 
     DatasetPtr
+    KnnSearchByTargetRecall(const DatasetPtr& query,
+                            int64_t k,
+                            double target_recall) const override;
+
+    void
+    UpdateRecallSearchProfile(const RecallSearchProfileEntry& entry) override;
+
+    DatasetPtr
     RangeSearch(const DatasetPtr& query,
                 float radius,
                 const std::string& parameters,
@@ -263,6 +272,9 @@ public:
     friend class PyramidAnalyzer;
 
 private:
+    static void
+    ValidateRecallSearchProfile(const RecallSearchProfileEntry& entry);
+
     MetadataPtr
     collect_streaming_header() const override;
 
@@ -386,6 +398,7 @@ private:
     ReorderInterfacePtr reorder_{nullptr};  // reorder helper (if use_reorder_)
 
     uint32_t index_min_size_{0};  // min node size before graph is built
+    RecallSearchProfileStore recall_search_profiles_{};
 };
 
 }  // namespace vsag

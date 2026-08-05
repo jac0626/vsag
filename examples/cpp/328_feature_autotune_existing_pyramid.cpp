@@ -113,6 +113,23 @@ PrintResult(const std::string& path, const vsag::autotune::SearchResult& result)
               << "trials evaluated: " << result.report["trials"].size() << std::endl;
 }
 
+bool
+SearchPath(const vsag::IndexPtr& index, const PathWorkload& workload) {
+    auto query = vsag::Dataset::Make()
+                     ->NumElements(1)
+                     ->Dim(DIM)
+                     ->Float32Vectors(workload.query_vectors.data())
+                     ->Paths(workload.query_paths.data())
+                     ->Owner(false);
+    auto neighbors = index->KnnSearch(query, TOP_K, 0.80);
+    if (!neighbors.has_value()) {
+        std::cerr << "Target-recall search failed: " << neighbors.error().message << std::endl;
+        return false;
+    }
+    std::cout << "first neighbor id: " << neighbors.value()->GetIds()[0] << std::endl;
+    return true;
+}
+
 }  // namespace
 
 int
@@ -201,5 +218,8 @@ main() {
               << std::endl;
     PrintResult("catalog/easy (512 random vectors)", easy_result.value());
     PrintResult("catalog/hard (4096 random vectors)", hard_result.value());
+    if (!SearchPath(index, easy_workload) || !SearchPath(index, hard_workload)) {
+        return 1;
+    }
     return 0;
 }
