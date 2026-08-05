@@ -248,6 +248,23 @@ TEST_CASE_PERSISTENT_FIXTURE(fixtures::PyramidTestIndex,
 }
 
 TEST_CASE_PERSISTENT_FIXTURE(fixtures::PyramidTestIndex,
+                             "Pyramid RangeSearch Returns Empty Result",
+                             "[ft][pyramid]") {
+    PyramidParam pyramid_param;
+    const auto param = GeneratePyramidBuildParametersString("l2", 4, pyramid_param);
+    auto index = TestFactory("pyramid", param, true);
+
+    auto base = MakeDenseDataset(
+        {{{1.0F, 0.0F, 0.0F, 0.0F}}, {{2.0F, 0.0F, 0.0F, 0.0F}}}, {1, 2}, {"a/d/f", "a/d/f"});
+    REQUIRE(index->Build(base).has_value());
+
+    auto query = MakeSingleQuery({10.0F, 0.0F, 0.0F, 0.0F}, "a/d/f");
+    auto result = index->RangeSearch(query, 0.0F, GeneratePyramidSearchParametersString(20));
+    REQUIRE(result.has_value());
+    REQUIRE(result.value()->GetDim() == 0);
+}
+
+TEST_CASE_PERSISTENT_FIXTURE(fixtures::PyramidTestIndex,
                              "Pyramid Set Immutable",
                              "[ft][immutable][pyramid]") {
     const auto metric_type = "l2";

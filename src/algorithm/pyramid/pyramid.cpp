@@ -551,8 +551,8 @@ Pyramid::search_impl(const DatasetPtr& query,
         return DatasetImpl::MakeEmptyDataset();
     }
 
-    while (search_result->Size() > search_param.topk ||
-           search_result->Top().first > search_param.radius) {
+    while (not search_result->Empty() && (search_result->Size() > search_param.topk ||
+                                          search_result->Top().first > search_param.radius)) {
         search_result->Pop();
     }
 
