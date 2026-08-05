@@ -165,6 +165,7 @@ BasicSearcher::search_impl(const GraphInterfacePtr& graph,
                 not iter_ctx->AddPendingDuplicate(duplicate_dist, duplicate_id)) {
                 continue;
             }
+            top_candidates->Push(duplicate_dist, duplicate_id);
         }
     };
 
@@ -183,6 +184,14 @@ BasicSearcher::search_impl(const GraphInterfacePtr& graph,
             return top_candidates;
         }
 
+        if (const auto* pending_duplicates = iter_ctx->GetPendingDuplicates();
+            pending_duplicates != nullptr) {
+            for (const auto& [pending_id, pending_dist] : *pending_duplicates) {
+                if (iter_ctx->CheckPoint(pending_id)) {
+                    top_candidates->Push(pending_dist, pending_id);
+                }
+            }
+        }
         while (!iter_ctx->Empty()) {
             uint32_t cur_inner_id = iter_ctx->GetTopID();
             float cur_dist = iter_ctx->GetTopDist();
@@ -289,14 +298,6 @@ BasicSearcher::search_impl(const GraphInterfacePtr& graph,
     }
 
     if constexpr (mode == KNN_SEARCH) {
-        if (const auto* pending_duplicates = iter_ctx->GetPendingDuplicates();
-            pending_duplicates != nullptr) {
-            for (const auto& [pending_id, pending_dist] : *pending_duplicates) {
-                if (iter_ctx->CheckPoint(pending_id)) {
-                    top_candidates->Push(pending_dist, pending_id);
-                }
-            }
-        }
         shrink_top_candidates(inner_search_param.topk);
     }
 
