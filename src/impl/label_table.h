@@ -285,20 +285,25 @@ public:
     Serialize(StreamWriter& writer) const {
         StreamWriter::WriteVector(writer, label_table_);
         if (compress_duplicate_data_) {
-            StreamWriter::WriteObj(writer, duplicate_count_);
-            for (InnerIdType i = 0; i < label_table_.size(); ++i) {
-                if (duplicate_records_[i] != nullptr) {
-                    StreamWriter::WriteObj(writer, i);
-                    Vector<InnerIdType> id_list(allocator_);
-                    for (const auto& duplicate_id : duplicate_records_[i]->duplicate_ids) {
-                        id_list.push_back(duplicate_id);
-                    }
-                    StreamWriter::WriteVector(writer, id_list);
-                }
-            }
+            this->SerializeDuplicateRecords(writer);
         }
         if (support_tombstone_) {
             StreamWriter::WriteObj(writer, deleted_ids_);
+        }
+    }
+
+    void
+    SerializeDuplicateRecords(StreamWriter& writer) const {
+        StreamWriter::WriteObj(writer, duplicate_count_);
+        for (InnerIdType i = 0; i < label_table_.size(); ++i) {
+            if (duplicate_records_[i] != nullptr) {
+                StreamWriter::WriteObj(writer, i);
+                Vector<InnerIdType> id_list(allocator_);
+                for (const auto& duplicate_id : duplicate_records_[i]->duplicate_ids) {
+                    id_list.push_back(duplicate_id);
+                }
+                StreamWriter::WriteVector(writer, id_list);
+            }
         }
     }
 
@@ -313,64 +318,66 @@ public:
             }
         }
         if (compress_duplicate_data_) {
-            StreamReader::ReadObj(reader, duplicate_count_);
-            if (duplicate_count_ > label_table_.size()) {
-                throw VsagException(ErrorType::INVALID_BINARY,
-                                    fmt::format("duplicate group count {} exceeds label count {}",
-                                                duplicate_count_,
-                                                label_table_.size()));
-            }
-
-            std::vector<std::pair<InnerIdType, Vector<InnerIdType>>> duplicate_groups;
-            duplicate_groups.reserve(duplicate_count_);
-            UnorderedSet<InnerIdType> assigned_ids(allocator_);
-            for (uint64_t i = 0; i < duplicate_count_; ++i) {
-                InnerIdType id;
-                StreamReader::ReadObj<InnerIdType>(reader, id);
-                if (id >= label_table_.size()) {
-                    throw VsagException(ErrorType::INVALID_BINARY,
-                                        fmt::format("duplicate head id {} exceeds label count {}",
-                                                    id,
-                                                    label_table_.size()));
-                }
-                if (not assigned_ids.insert(id).second) {
-                    throw VsagException(
-                        ErrorType::INVALID_BINARY,
-                        fmt::format("id {} belongs to multiple duplicate groups", id));
-                }
-
-                Vector<InnerIdType> id_list(allocator_);
-                StreamReader::ReadVector(reader, id_list);
-                for (const auto duplicate_id : id_list) {
-                    if (duplicate_id >= label_table_.size()) {
-                        throw VsagException(
-                            ErrorType::INVALID_BINARY,
-                            fmt::format("duplicate member id {} exceeds label count {}",
-                                        duplicate_id,
-                                        label_table_.size()));
-                    }
-                    if (not assigned_ids.insert(duplicate_id).second) {
-                        throw VsagException(
-                            ErrorType::INVALID_BINARY,
-                            fmt::format("id {} belongs to multiple duplicate groups",
-                                        duplicate_id));
-                    }
-                }
-                duplicate_groups.emplace_back(id, std::move(id_list));
-            }
-
-            duplicate_records_.resize(label_table_.size(), nullptr);
-            for (auto& [id, id_list] : duplicate_groups) {
-                duplicate_records_[id] = allocator_->New<DuplicateRecord>(allocator_);
-                for (const auto& duplicate_id : id_list) {
-                    duplicate_records_[id]->duplicate_ids.insert(duplicate_id);
-                }
-            }
+            this->DeserializeDuplicateRecords(reader);
         }
         if (support_tombstone_) {
             StreamReader::ReadObj(reader, deleted_ids_);
         }
         this->total_count_.store(label_table_.size());
+    }
+
+    void
+    DeserializeDuplicateRecords(lvalue_or_rvalue<StreamReader> reader) {
+        StreamReader::ReadObj(reader, duplicate_count_);
+        if (duplicate_count_ > label_table_.size()) {
+            throw VsagException(ErrorType::INVALID_BINARY,
+                                fmt::format("duplicate group count {} exceeds label count {}",
+                                            duplicate_count_,
+                                            label_table_.size()));
+        }
+
+        std::vector<std::pair<InnerIdType, Vector<InnerIdType>>> duplicate_groups;
+        duplicate_groups.reserve(duplicate_count_);
+        UnorderedSet<InnerIdType> assigned_ids(allocator_);
+        for (uint64_t i = 0; i < duplicate_count_; ++i) {
+            InnerIdType id;
+            StreamReader::ReadObj<InnerIdType>(reader, id);
+            if (id >= label_table_.size()) {
+                throw VsagException(
+                    ErrorType::INVALID_BINARY,
+                    fmt::format(
+                        "duplicate head id {} exceeds label count {}", id, label_table_.size()));
+            }
+            if (not assigned_ids.insert(id).second) {
+                throw VsagException(ErrorType::INVALID_BINARY,
+                                    fmt::format("id {} belongs to multiple duplicate groups", id));
+            }
+
+            Vector<InnerIdType> id_list(allocator_);
+            StreamReader::ReadVector(reader, id_list);
+            for (const auto duplicate_id : id_list) {
+                if (duplicate_id >= label_table_.size()) {
+                    throw VsagException(ErrorType::INVALID_BINARY,
+                                        fmt::format("duplicate member id {} exceeds label count {}",
+                                                    duplicate_id,
+                                                    label_table_.size()));
+                }
+                if (not assigned_ids.insert(duplicate_id).second) {
+                    throw VsagException(
+                        ErrorType::INVALID_BINARY,
+                        fmt::format("id {} belongs to multiple duplicate groups", duplicate_id));
+                }
+            }
+            duplicate_groups.emplace_back(id, std::move(id_list));
+        }
+
+        duplicate_records_.resize(label_table_.size(), nullptr);
+        for (auto& [id, id_list] : duplicate_groups) {
+            duplicate_records_[id] = allocator_->New<DuplicateRecord>(allocator_);
+            for (const auto& duplicate_id : id_list) {
+                duplicate_records_[id]->duplicate_ids.insert(duplicate_id);
+            }
+        }
     }
 
     void
