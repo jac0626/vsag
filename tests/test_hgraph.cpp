@@ -19,7 +19,6 @@
 #include <catch2/generators/catch_generators.hpp>
 #include <chrono>
 #include <limits>
-#include <sstream>
 #include <thread>
 
 #include "algorithm/hgraph.h"
@@ -358,40 +357,6 @@ HGraphTestIndex::TestMemoryUsageDetail(const IndexPtr& index) {
     REQUIRE(memory_detail.Contains("route_graph"));
 }
 }  // namespace fixtures
-
-namespace {
-
-class NonSeekableStringBuffer final : public std::stringbuf {
-public:
-    explicit NonSeekableStringBuffer(const std::string& data)
-        : std::stringbuf(data, std::ios::in | std::ios::binary) {
-    }
-
-    [[nodiscard]] uint64_t
-    GetSeekCount() const {
-        return seek_count_;
-    }
-
-protected:
-    pos_type
-    seekoff(off_type,
-            std::ios_base::seekdir,
-            std::ios_base::openmode = std::ios_base::in | std::ios_base::out) override {
-        seek_count_++;
-        return pos_type(off_type(-1));
-    }
-
-    pos_type
-    seekpos(pos_type, std::ios_base::openmode = std::ios_base::in | std::ios_base::out) override {
-        seek_count_++;
-        return pos_type(off_type(-1));
-    }
-
-private:
-    uint64_t seek_count_{0};
-};
-
-}  // namespace
 
 TEST_CASE_PERSISTENT_FIXTURE(fixtures::HGraphTestIndex,
                              "HGraph Factory Test With Exceptions",
@@ -1624,21 +1589,7 @@ TEST_CASE("HGraph Deserialize Old Format With Duplicate Support",
     auto origin_size = vsag::Options::Instance().block_size_limit();
     vsag::Options::Instance().set_block_size_limit(1024 * 1024 * 2);
 
-    constexpr const char* source_build_param = R"({
-        "dtype": "float32",
-        "metric_type": "l2",
-        "dim": 32,
-        "use_old_serial_format": true,
-        "index_param": {
-            "max_degree": 16,
-            "ef_construction": 100,
-            "base_quantization_type": "sq8",
-            "build_thread_count": 0,
-            "support_duplicate": false
-        }
-    })";
-
-    constexpr const char* target_build_param = R"({
+    constexpr const char* build_param = R"({
         "dtype": "float32",
         "metric_type": "l2",
         "dim": 32,
@@ -1652,7 +1603,7 @@ TEST_CASE("HGraph Deserialize Old Format With Duplicate Support",
         }
     })";
 
-    auto index_result = vsag::Factory::CreateIndex("hgraph", source_build_param);
+    auto index_result = vsag::Factory::CreateIndex("hgraph", build_param);
     REQUIRE(index_result.has_value());
     auto index = index_result.value();
 
@@ -1660,72 +1611,13 @@ TEST_CASE("HGraph Deserialize Old Format With Duplicate Support",
         fixtures::HGraphTestIndex::pool.GetDatasetAndCreate(32, 1000, "l2", false, 0.8, 0, 16);
     TestIndex::TestBuildIndex(index, dataset, true);
 
-    std::ostringstream serialized(std::ios::out | std::ios::binary);
-    REQUIRE(index->Serialize(serialized).has_value());
+    auto serialized = index->Serialize();
+    REQUIRE(serialized.has_value());
 
-    auto index2_result = vsag::Factory::CreateIndex("hgraph", target_build_param);
+    auto index2_result = vsag::Factory::CreateIndex("hgraph", build_param);
     REQUIRE(index2_result.has_value());
     auto index2 = index2_result.value();
-    NonSeekableStringBuffer legacy_buffer(serialized.str());
-    std::istream legacy_stream(&legacy_buffer);
-    REQUIRE(index2->Deserialize(legacy_stream).has_value());
-    REQUIRE(legacy_buffer.GetSeekCount() == 0);
-
-    constexpr uint64_t duplicate_extension_magic = 0x3150554447415356ULL;
-    constexpr uint64_t duplicate_extension_version = 1;
-    constexpr uint64_t duplicate_extension_end_magic = 0x5653414744555031ULL;
-    constexpr uint64_t duplicate_count = 0;
-    const auto append_value = [](std::string& binary, uint64_t value) {
-        binary.append(reinterpret_cast<const char*>(&value), sizeof(value));
-    };
-    const auto legacy_binary = serialized.str();
-    std::vector<std::pair<std::string, vsag::ErrorType>> invalid_extensions;
-
-    auto partial_magic = legacy_binary;
-    append_value(partial_magic, duplicate_extension_magic);
-    partial_magic.resize(legacy_binary.size() + 1);
-    invalid_extensions.emplace_back(std::move(partial_magic), vsag::ErrorType::READ_ERROR);
-
-    auto partial_version = legacy_binary;
-    append_value(partial_version, duplicate_extension_magic);
-    append_value(partial_version, duplicate_extension_version);
-    partial_version.resize(legacy_binary.size() + sizeof(uint64_t) + 1);
-    invalid_extensions.emplace_back(std::move(partial_version), vsag::ErrorType::READ_ERROR);
-
-    auto partial_end_magic = legacy_binary;
-    append_value(partial_end_magic, duplicate_extension_magic);
-    append_value(partial_end_magic, duplicate_extension_version);
-    append_value(partial_end_magic, duplicate_count);
-    append_value(partial_end_magic, duplicate_extension_end_magic);
-    partial_end_magic.resize(legacy_binary.size() + 3 * sizeof(uint64_t) + 1);
-    invalid_extensions.emplace_back(std::move(partial_end_magic), vsag::ErrorType::READ_ERROR);
-
-    auto invalid_magic = legacy_binary;
-    append_value(invalid_magic, duplicate_extension_magic + 1);
-    invalid_extensions.emplace_back(std::move(invalid_magic), vsag::ErrorType::INVALID_BINARY);
-
-    auto invalid_version = legacy_binary;
-    append_value(invalid_version, duplicate_extension_magic);
-    append_value(invalid_version, duplicate_extension_version + 1);
-    invalid_extensions.emplace_back(std::move(invalid_version), vsag::ErrorType::INVALID_BINARY);
-
-    auto invalid_end_magic = legacy_binary;
-    append_value(invalid_end_magic, duplicate_extension_magic);
-    append_value(invalid_end_magic, duplicate_extension_version);
-    append_value(invalid_end_magic, duplicate_count);
-    append_value(invalid_end_magic, duplicate_extension_end_magic + 1);
-    invalid_extensions.emplace_back(std::move(invalid_end_magic), vsag::ErrorType::INVALID_BINARY);
-
-    for (const auto& [invalid_extension, expected_error] : invalid_extensions) {
-        auto invalid_index_result = vsag::Factory::CreateIndex("hgraph", target_build_param);
-        REQUIRE(invalid_index_result.has_value());
-        NonSeekableStringBuffer invalid_buffer(invalid_extension);
-        std::istream invalid_stream(&invalid_buffer);
-        const auto deserialize_result = invalid_index_result.value()->Deserialize(invalid_stream);
-        REQUIRE_FALSE(deserialize_result.has_value());
-        REQUIRE(deserialize_result.error().type == expected_error);
-        REQUIRE(invalid_buffer.GetSeekCount() == 0);
-    }
+    REQUIRE(index2->Deserialize(serialized.value()).has_value());
 
     auto impl = std::dynamic_pointer_cast<vsag::IndexImpl<vsag::HGraph>>(index2);
     REQUIRE(impl != nullptr);
@@ -1759,20 +1651,6 @@ TEST_CASE("HGraph Old Format Preserves Duplicate Records", "[ft][hgraph][seriali
             "base_quantization_type": "fp32",
             "build_thread_count": 1,
             "support_duplicate": true
-        }
-    })";
-
-    constexpr const char* legacy_reader_param = R"({
-        "dtype": "float32",
-        "metric_type": "l2",
-        "dim": 8,
-        "use_old_serial_format": false,
-        "index_param": {
-            "max_degree": 16,
-            "ef_construction": 100,
-            "base_quantization_type": "fp32",
-            "build_thread_count": 1,
-            "support_duplicate": false
         }
     })";
 
@@ -1811,15 +1689,12 @@ TEST_CASE("HGraph Old Format Preserves Duplicate Records", "[ft][hgraph][seriali
     const std::vector<int64_t> expected_ids{0, 100, 101, 102};
     REQUIRE(search_duplicate_group(index) == expected_ids);
 
-    std::ostringstream serialized(std::ios::out | std::ios::binary);
-    REQUIRE(index->Serialize(serialized).has_value());
+    auto serialized = index->Serialize();
+    REQUIRE(serialized.has_value());
     auto reloaded_result = vsag::Factory::CreateIndex("hgraph", build_param);
     REQUIRE(reloaded_result.has_value());
     auto reloaded = reloaded_result.value();
-    NonSeekableStringBuffer serialized_buffer(serialized.str());
-    std::istream serialized_stream(&serialized_buffer);
-    REQUIRE(reloaded->Deserialize(serialized_stream).has_value());
-    REQUIRE(serialized_buffer.GetSeekCount() == 0);
+    REQUIRE(reloaded->Deserialize(serialized.value()).has_value());
 
     auto impl = std::dynamic_pointer_cast<vsag::IndexImpl<vsag::HGraph>>(reloaded);
     REQUIRE(impl != nullptr);
@@ -1832,13 +1707,6 @@ TEST_CASE("HGraph Old Format Preserves Duplicate Records", "[ft][hgraph][seriali
     REQUIRE(duplicate_ids.contains(2));
     REQUIRE(duplicate_ids.contains(3));
     REQUIRE(search_duplicate_group(reloaded) == expected_ids);
-
-    auto legacy_reader_result = vsag::Factory::CreateIndex("hgraph", legacy_reader_param);
-    REQUIRE(legacy_reader_result.has_value());
-    auto legacy_reader = legacy_reader_result.value();
-    std::istringstream legacy_stream(serialized.str(), std::ios::in | std::ios::binary);
-    REQUIRE(legacy_reader->Deserialize(legacy_stream).has_value());
-    REQUIRE_NOTHROW(static_cast<void>(legacy_reader->GetStats()));
 
     vsag::Options::Instance().set_block_size_limit(origin_size);
 }

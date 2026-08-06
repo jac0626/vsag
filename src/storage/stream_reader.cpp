@@ -20,41 +20,11 @@
 #include <cstdint>
 #include <fstream>
 #include <iostream>
-#include <limits>
 
 #include "footer.h"
 #include "impl/logger/logger.h"
 #include "vsag/options.h"
 #include "vsag_exception.h"
-
-namespace {
-
-TryReadResult
-TryReadExactFromStream(std::istream& stream, char* data, uint64_t size) {
-    if (size == 0) {
-        return TryReadResult::SUCCESS;
-    }
-    if (size > static_cast<uint64_t>(std::numeric_limits<std::streamsize>::max())) {
-        throw vsag::VsagException(vsag::ErrorType::READ_ERROR,
-                                  "stream read size exceeds std::streamsize range");
-    }
-
-    const auto stream_size = static_cast<std::streamsize>(size);
-    stream.read(data, stream_size);
-    const auto bytes_read = stream.gcount();
-    if (bytes_read == stream_size) {
-        return TryReadResult::SUCCESS;
-    }
-    if (bytes_read == 0 and stream.eof() and not stream.bad()) {
-        return TryReadResult::END_OF_STREAM;
-    }
-    throw vsag::VsagException(
-        vsag::ErrorType::READ_ERROR,
-        fmt::format(
-            "Attempted to read exactly {} bytes, but only read {} bytes.", size, bytes_read));
-}
-
-}  // namespace
 
 SliceStreamReader
 StreamReader::Slice(uint64_t begin, uint64_t length) {
@@ -68,41 +38,13 @@ StreamReader::Slice(uint64_t length) {
 
 void
 ReadFuncStreamReader::Read(char* data, uint64_t size) {
-    if (size == 0) {
-        return;
-    }
-    if (cursor_ > length_ or size > length_ - cursor_) {
-        throw vsag::VsagException(
-            vsag::ErrorType::READ_ERROR,
-            fmt::format("ReadFuncStreamReader read exceeds boundary: cursor {}, size {}, length {}",
-                        cursor_,
-                        size,
-                        length_));
-    }
     readFunc_(cursor_, size, data);
     cursor_ += size;
     io_count_++;
 }
 
-TryReadResult
-ReadFuncStreamReader::TryReadExact(char* data, uint64_t size) {
-    if (size == 0) {
-        return TryReadResult::SUCCESS;
-    }
-    if (cursor_ == length_) {
-        return TryReadResult::END_OF_STREAM;
-    }
-    this->Read(data, size);
-    return TryReadResult::SUCCESS;
-}
-
 void
 ReadFuncStreamReader::Seek(uint64_t cursor) {
-    if (cursor > length_) {
-        throw vsag::VsagException(
-            vsag::ErrorType::READ_ERROR,
-            fmt::format("ReadFuncStreamReader seek exceeds boundary: {} > {}", cursor, length_));
-    }
     cursor_ = cursor;
 }
 
@@ -123,19 +65,17 @@ ReadFuncStreamReader::~ReadFuncStreamReader() {
 
 void
 IOStreamReader::Read(char* data, uint64_t size) {
-    if (this->TryReadExact(data, size) == TryReadResult::END_OF_STREAM) {
-        throw vsag::VsagException(vsag::ErrorType::READ_ERROR,
-                                  fmt::format("Attempted to read {} bytes at end of stream", size));
+    auto offset = std::to_string(istream_.tellg());
+    // vsag::logger::trace("io read offset {} size {}", offset, size);
+    this->istream_.read(data, static_cast<int64_t>(size));
+    if (istream_.fail()) {
+        auto remaining = std::streamsize(this->istream_.gcount());
+        throw vsag::VsagException(
+            vsag::ErrorType::READ_ERROR,
+            fmt::format(
+                "Attempted to read: {} bytes. Remaining content size: {} bytes.", size, remaining));
     }
-}
-
-TryReadResult
-IOStreamReader::TryReadExact(char* data, uint64_t size) {
-    const auto result = TryReadExactFromStream(istream_, data, size);
-    if (result == TryReadResult::SUCCESS and size > 0) {
-        io_count_++;
-    }
-    return result;
+    io_count_++;
 }
 
 void
@@ -161,45 +101,6 @@ IOStreamReader::~IOStreamReader() {
     vsag::logger::info("IOStreamReader io count ({}) in deserialize process", io_count_);
 }
 
-void
-ForwardStreamReader::Read(char* data, uint64_t size) {
-    if (this->TryReadExact(data, size) == TryReadResult::END_OF_STREAM) {
-        throw vsag::VsagException(vsag::ErrorType::READ_ERROR,
-                                  fmt::format("Attempted to read {} bytes at end of stream", size));
-    }
-}
-
-TryReadResult
-ForwardStreamReader::TryReadExact(char* data, uint64_t size) {
-    const auto result = TryReadExactFromStream(istream_, data, size);
-    if (result == TryReadResult::SUCCESS and size > 0) {
-        cursor_ += size;
-        io_count_++;
-    }
-    return result;
-}
-
-void
-ForwardStreamReader::Seek(uint64_t cursor) {
-    (void)cursor;
-    throw vsag::VsagException(vsag::ErrorType::UNSUPPORTED_INDEX_OPERATION,
-                              "ForwardStreamReader does not support seek");
-}
-
-uint64_t
-ForwardStreamReader::GetCursor() const {
-    return cursor_;
-}
-
-uint64_t
-ForwardStreamReader::Length() {
-    throw vsag::VsagException(vsag::ErrorType::UNSUPPORTED_INDEX_OPERATION,
-                              "ForwardStreamReader does not support length");
-}
-
-ForwardStreamReader::ForwardStreamReader(std::istream& istream) : istream_(istream) {
-}
-
 uint64_t
 BufferStreamReader::Length() {
     return reader_impl_->Length();
@@ -207,16 +108,8 @@ BufferStreamReader::Length() {
 
 void
 BufferStreamReader::Read(char* data, uint64_t size) {
-    const uint64_t unread_buffer_size = valid_size_ - buffer_cursor_;
-    const uint64_t logical_cursor = cursor_ - unread_buffer_size;
-    if (logical_cursor > max_size_ or size > max_size_ - logical_cursor) {
-        throw vsag::VsagException(
-            vsag::ErrorType::READ_ERROR,
-            "BufferStreamReader: read operation exceeds the configured stream boundary");
-    }
-
     // Total bytes copied to dest
-    uint64_t total_copied = 0;
+    size_t total_copied = 0;
 
     if (buffer_ == nullptr) {
         buffer_ = (char*)allocator_->Allocate(buffer_size_);
@@ -228,11 +121,11 @@ BufferStreamReader::Read(char* data, uint64_t size) {
     // Loop to read until read_size is satisfied
     while (total_copied < size) {
         // Calculate the available data in buffer_
-        uint64_t available_in_src = valid_size_ - buffer_cursor_;
+        size_t available_in_src = valid_size_ - buffer_cursor_;
 
         // If there is available data in buffer_, copy it to dest
         if (available_in_src > 0) {
-            uint64_t bytes_to_copy = std::min(size - total_copied, available_in_src);
+            size_t bytes_to_copy = std::min(size - total_copied, available_in_src);
             memcpy(data + total_copied, buffer_ + buffer_cursor_, bytes_to_copy);
             total_copied += bytes_to_copy;
             buffer_cursor_ += bytes_to_copy;
@@ -255,20 +148,6 @@ BufferStreamReader::Read(char* data, uint64_t size) {
     }
 }
 
-TryReadResult
-BufferStreamReader::TryReadExact(char* data, uint64_t size) {
-    if (size == 0) {
-        return TryReadResult::SUCCESS;
-    }
-    const uint64_t unread_buffer_size = valid_size_ - buffer_cursor_;
-    const uint64_t logical_cursor = cursor_ - unread_buffer_size;
-    if (logical_cursor == max_size_) {
-        return TryReadResult::END_OF_STREAM;
-    }
-    this->Read(data, size);
-    return TryReadResult::SUCCESS;
-}
-
 void
 BufferStreamReader::Seek(uint64_t cursor) {
     // vsag::logger::trace("reader seek absolute::{}", cursor);
@@ -283,13 +162,13 @@ BufferStreamReader::GetCursor() const {
 }
 
 BufferStreamReader::BufferStreamReader(StreamReader* reader,
-                                       uint64_t max_size,
+                                       size_t max_size,
                                        vsag::Allocator* allocator)
     : reader_impl_(reader), max_size_(max_size), allocator_(allocator) {
     if (max_size == std::numeric_limits<uint64_t>::max()) {
         max_size_ = reader->Length() - reader->GetCursor();
     }
-    buffer_size_ = std::min<uint64_t>(max_size_, vsag::Options::Instance().block_size_limit());
+    buffer_size_ = std::min(max_size_, vsag::Options::Instance().block_size_limit());
     buffer_cursor_ = buffer_size_;
     valid_size_ = buffer_size_;
 }
@@ -305,24 +184,12 @@ SliceStreamReader::Length() {
 
 void
 SliceStreamReader::Read(char* data, uint64_t size) {
-    if (cursor_ > length_ or size > length_ - cursor_) {
+    if (cursor_ + size > length_) {
         throw vsag::VsagException(vsag::ErrorType::READ_ERROR,
                                   "SliceStreamReader: Read operation exceeds slice boundary");
     }
     reader_impl_->Read(data, size);
     cursor_ += size;
-}
-
-TryReadResult
-SliceStreamReader::TryReadExact(char* data, uint64_t size) {
-    if (size == 0) {
-        return TryReadResult::SUCCESS;
-    }
-    if (cursor_ == length_) {
-        return TryReadResult::END_OF_STREAM;
-    }
-    this->Read(data, size);
-    return TryReadResult::SUCCESS;
 }
 
 void

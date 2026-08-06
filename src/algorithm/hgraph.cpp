@@ -44,16 +44,6 @@
 
 namespace vsag {
 
-namespace {
-
-// The v0.14 body is frozen. On its native little-endian wire format, duplicate records use an
-// append-only framed extension: [VSAGDUP1][version][duplicate records][1PUDGASV].
-constexpr uint64_t V0_14_DUPLICATE_EXTENSION_MAGIC = 0x3150554447415356ULL;
-constexpr uint64_t V0_14_DUPLICATE_EXTENSION_END_MAGIC = 0x5653414744555031ULL;
-constexpr uint64_t V0_14_DUPLICATE_EXTENSION_VERSION = 1;
-
-}  // namespace
-
 static DatasetPtr
 make_empty_dataset_with_stats() {
     SearchStatistics stats;
@@ -1432,10 +1422,7 @@ HGraph::Serialize(StreamWriter& writer) const {
             this->attr_filter_index_->Serialize(writer);
         }
         if (this->label_table_->CompressDuplicateData()) {
-            StreamWriter::WriteObj(writer, V0_14_DUPLICATE_EXTENSION_MAGIC);
-            StreamWriter::WriteObj(writer, V0_14_DUPLICATE_EXTENSION_VERSION);
             this->label_table_->SerializeDuplicateRecords(writer);
-            StreamWriter::WriteObj(writer, V0_14_DUPLICATE_EXTENSION_END_MAGIC);
         }
         return;
     }
@@ -1470,95 +1457,42 @@ HGraph::Serialize(StreamWriter& writer) const {
 }
 
 void
-HGraph::deserialize_duplicate_extension_v0_14(StreamReader& reader) {
-    uint64_t magic = 0;
-    if (reader.TryReadExact(reinterpret_cast<char*>(&magic), sizeof(magic)) ==
-        TryReadResult::END_OF_STREAM) {
-        return;
-    }
-    if (magic != V0_14_DUPLICATE_EXTENSION_MAGIC) {
-        throw VsagException(ErrorType::INVALID_BINARY,
-                            fmt::format("invalid v0.14 duplicate extension magic: 0x{:x}", magic));
-    }
-
-    uint64_t version = 0;
-    StreamReader::ReadObj(reader, version);
-    if (version != V0_14_DUPLICATE_EXTENSION_VERSION) {
-        throw VsagException(
-            ErrorType::INVALID_BINARY,
-            fmt::format("unsupported v0.14 duplicate extension version: {}", version));
-    }
-
-    const auto logical_count = this->basic_flatten_codes_->TotalCount();
-    this->label_table_->DeserializeDuplicateRecords(reader, logical_count);
-
-    uint64_t end_magic = 0;
-    StreamReader::ReadObj(reader, end_magic);
-    if (end_magic != V0_14_DUPLICATE_EXTENSION_END_MAGIC) {
-        throw VsagException(
-            ErrorType::INVALID_BINARY,
-            fmt::format("invalid v0.14 duplicate extension end magic: 0x{:x}", end_magic));
-    }
-}
-
-void
-HGraph::deserialize_v0_14(StreamReader& reader) {
-    logger::debug("parse with v0.14 version format");
-
-    this->deserialize_basic_info_v0_14(reader);
-
-    this->basic_flatten_codes_->Deserialize(reader);
-    this->bottom_graph_->Deserialize(reader);
-    if (this->use_reorder_) {
-        this->high_precise_codes_->Deserialize(reader);
-    }
-
-    for (auto& route_graph : this->route_graphs_) {
-        route_graph->Deserialize(reader);
-    }
-    auto new_size = max_capacity_.load();
-    this->neighbors_mutex_->Resize(new_size);
-
-    pool_ = std::make_shared<VisitedListPool>(1, allocator_, new_size, allocator_);
-
-    if (this->extra_info_size_ > 0 && this->extra_infos_ != nullptr) {
-        this->extra_infos_->Deserialize(reader);
-    }
-    this->total_count_ = this->basic_flatten_codes_->TotalCount();
-
-    if (this->use_attribute_filter_ and this->attr_filter_index_ != nullptr) {
-        this->attr_filter_index_->Deserialize(reader);
-    }
-    if (this->label_table_->CompressDuplicateData()) {
-        this->deserialize_duplicate_extension_v0_14(reader);
-    }
-}
-
-void
-HGraph::Deserialize(std::istream& in_stream) {
-    if (not this->use_old_serial_format_) {
-        InnerIndexInterface::Deserialize(in_stream);
-        return;
-    }
-
-    try {
-        ForwardStreamReader reader(in_stream);
-        this->Deserialize(reader);
-    } catch (const std::bad_alloc& e) {
-        throw VsagException(ErrorType::NO_ENOUGH_MEMORY, "failed to Deserialize: ", e.what());
-    }
-}
-
-void
 HGraph::Deserialize(StreamReader& reader) {
-    FooterPtr footer = nullptr;
-    if (not this->use_old_serial_format_) {
-        // try to deserialize footer (only in new version)
-        footer = Footer::Parse(reader);
-    }
+    // try to deserialize footer (only in new version)
+    auto footer = Footer::Parse(reader);
 
     if (footer == nullptr) {  // old format, DON'T EDIT, remove in the future
-        this->deserialize_v0_14(reader);
+        logger::debug("parse with v0.14 version format");
+
+        this->deserialize_basic_info_v0_14(reader);
+
+        this->basic_flatten_codes_->Deserialize(reader);
+        this->bottom_graph_->Deserialize(reader);
+        if (this->use_reorder_) {
+            this->high_precise_codes_->Deserialize(reader);
+        }
+
+        for (auto& route_graph : this->route_graphs_) {
+            route_graph->Deserialize(reader);
+        }
+        auto new_size = max_capacity_.load();
+        this->neighbors_mutex_->Resize(new_size);
+
+        pool_ = std::make_shared<VisitedListPool>(1, allocator_, new_size, allocator_);
+
+        if (this->extra_info_size_ > 0 && this->extra_infos_ != nullptr) {
+            this->extra_infos_->Deserialize(reader);
+        }
+        this->total_count_ = this->basic_flatten_codes_->TotalCount();
+
+        if (this->use_attribute_filter_ and this->attr_filter_index_ != nullptr) {
+            this->attr_filter_index_->Deserialize(reader);
+        }
+        if (this->label_table_->CompressDuplicateData()) {
+            const auto logical_element_count =
+                static_cast<uint64_t>(this->label_table_->GetTotalCount());
+            this->label_table_->DeserializeDuplicateRecords(reader, logical_element_count);
+        }
     } else {  // create like `else if ( ver in [v0.15, v0.17] )` here if need in the future
         logger::debug("parse with new version format");
 
