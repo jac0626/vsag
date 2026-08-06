@@ -44,18 +44,6 @@
 
 namespace vsag {
 
-namespace {
-
-// Layout: [magic][version][duplicate records][end magic]. It is appended after the complete v0.14
-// payload so legacy readers can ignore it without shifting existing fields. The end magic differs
-// from the native-format footer magic so Footer::Parse keeps using the legacy branch.
-constexpr uint64_t V0_14_DUPLICATE_EXTENSION_MAGIC = 0x3150554447415356ULL;
-constexpr uint64_t V0_14_DUPLICATE_EXTENSION_END_MAGIC = 0x5653414744555031ULL;
-constexpr uint64_t V0_14_DUPLICATE_EXTENSION_VERSION = 1;
-constexpr uint64_t V0_14_DUPLICATE_EXTENSION_FIXED_SIZE = sizeof(uint64_t) * 3;
-
-}  // namespace
-
 static DatasetPtr
 make_empty_dataset_with_stats() {
     SearchStatistics stats;
@@ -1306,70 +1294,6 @@ HGraph::deserialize_basic_info_v0_14(StreamReader& reader) {
     this->label_table_->total_count_.store(static_cast<int64_t>(size));
 }
 
-void
-HGraph::serialize_duplicate_info_v0_14(StreamWriter& writer) const {
-    if (not this->label_table_->CompressDuplicateData() or
-        this->label_table_->duplicate_count_ == 0) {
-        return;
-    }
-
-    StreamWriter::WriteObj(writer, V0_14_DUPLICATE_EXTENSION_MAGIC);
-    StreamWriter::WriteObj(writer, V0_14_DUPLICATE_EXTENSION_VERSION);
-    this->label_table_->SerializeDuplicateRecords(writer);
-    StreamWriter::WriteObj(writer, V0_14_DUPLICATE_EXTENSION_END_MAGIC);
-}
-
-void
-HGraph::deserialize_duplicate_info_v0_14(StreamReader& reader) const {
-    const uint64_t extension_start = reader.GetCursor();
-    const uint64_t stream_size = reader.Length();
-    if (extension_start >= stream_size) {
-        return;
-    }
-
-    const uint64_t remaining_size = stream_size - extension_start;
-    if (remaining_size < sizeof(uint64_t)) {
-        return;
-    }
-
-    uint64_t begin_magic = 0;
-    StreamReader::ReadObj(reader, begin_magic);
-    uint64_t end_magic = 0;
-    reader.PushSeek(stream_size - sizeof(uint64_t));
-    StreamReader::ReadObj(reader, end_magic);
-    reader.PopSeek();
-
-    if (begin_magic != V0_14_DUPLICATE_EXTENSION_MAGIC) {
-        reader.Seek(extension_start);
-        if (end_magic == V0_14_DUPLICATE_EXTENSION_END_MAGIC) {
-            throw VsagException(ErrorType::INVALID_BINARY,
-                                "invalid v0.14 duplicate extension header");
-        }
-        return;
-    }
-    if (end_magic != V0_14_DUPLICATE_EXTENSION_END_MAGIC or
-        remaining_size < V0_14_DUPLICATE_EXTENSION_FIXED_SIZE) {
-        throw VsagException(ErrorType::INVALID_BINARY, "invalid v0.14 duplicate extension framing");
-    }
-
-    uint64_t version = 0;
-    StreamReader::ReadObj(reader, version);
-    if (version != V0_14_DUPLICATE_EXTENSION_VERSION) {
-        throw VsagException(
-            ErrorType::INVALID_BINARY,
-            fmt::format("unsupported v0.14 duplicate extension version {}", version));
-    }
-
-    const uint64_t payload_size = remaining_size - V0_14_DUPLICATE_EXTENSION_FIXED_SIZE;
-    auto payload_reader = reader.Slice(payload_size);
-    this->label_table_->DeserializeDuplicateRecords(payload_reader);
-    if (payload_reader.GetCursor() != payload_reader.Length()) {
-        throw VsagException(ErrorType::INVALID_BINARY,
-                            "v0.14 duplicate extension payload size mismatch");
-    }
-    StreamReader::ReadObj(reader, end_magic);
-}
-
 #define TO_JSON_BASE64(json_obj, var) json_obj[#var].SetString(base64_encode_obj(this->var##_));
 
 JsonType
@@ -1497,7 +1421,9 @@ HGraph::Serialize(StreamWriter& writer) const {
         if (this->use_attribute_filter_ and this->attr_filter_index_ != nullptr) {
             this->attr_filter_index_->Serialize(writer);
         }
-        this->serialize_duplicate_info_v0_14(writer);
+        if (this->label_table_->CompressDuplicateData()) {
+            this->label_table_->SerializeDuplicateRecords(writer);
+        }
         return;
     }
 
@@ -1562,7 +1488,9 @@ HGraph::Deserialize(StreamReader& reader) {
         if (this->use_attribute_filter_ and this->attr_filter_index_ != nullptr) {
             this->attr_filter_index_->Deserialize(reader);
         }
-        this->deserialize_duplicate_info_v0_14(reader);
+        if (this->label_table_->CompressDuplicateData()) {
+            this->label_table_->DeserializeDuplicateRecords(reader);
+        }
     } else {  // create like `else if ( ver in [v0.15, v0.17] )` here if need in the future
         logger::debug("parse with new version format");
 
