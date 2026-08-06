@@ -17,7 +17,9 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <chrono>
+#include <cstring>
 #include <limits>
+#include <stdexcept>
 #include <thread>
 
 #include "algorithm/hgraph.h"
@@ -30,6 +32,39 @@
 #include "vsag/options.h"
 
 namespace fixtures {
+
+class ForwardOnlyReader : public vsag::Reader {
+public:
+    explicit ForwardOnlyReader(vsag::Binary binary) : binary_(std::move(binary)) {
+    }
+
+    void
+    Read(uint64_t offset, uint64_t len, void* dest) override {
+        if (offset > binary_.size or len > binary_.size - offset) {
+            throw std::runtime_error("read exceeds binary boundary");
+        }
+        if (offset != next_read_offset_) {
+            throw std::runtime_error("non-sequential read");
+        }
+        next_read_offset_ += len;
+        std::memcpy(dest, binary_.data.get() + offset, len);
+    }
+
+    void
+    AsyncRead(uint64_t offset, uint64_t len, void* dest, vsag::CallBack callback) override {
+        Read(offset, len, dest);
+        callback(vsag::IOErrorCode::IO_SUCCESS, "success");
+    }
+
+    [[nodiscard]] uint64_t
+    Size() const override {
+        return binary_.size;
+    }
+
+private:
+    vsag::Binary binary_;
+    uint64_t next_read_offset_{0};
+};
 
 class HGraphTestResource {
 public:
@@ -1585,6 +1620,93 @@ TEST_CASE("HGraph Deserialize Old Format With Duplicate Support",
         REQUIRE(duplicate_record == nullptr);
     }
     REQUIRE_NOTHROW(static_cast<void>(index2->GetStats()));
+
+    vsag::Options::Instance().set_block_size_limit(origin_size);
+}
+
+TEST_CASE("HGraph Old Format Preserves Duplicate Records", "[ft][hgraph][serialization][pr]") {
+    auto origin_size = vsag::Options::Instance().block_size_limit();
+    vsag::Options::Instance().set_block_size_limit(1024 * 1024 * 2);
+
+    constexpr int64_t dim = 8;
+    constexpr const char* build_param = R"({
+        "dtype": "float32",
+        "metric_type": "l2",
+        "dim": 8,
+        "use_old_serial_format": true,
+        "index_param": {
+            "max_degree": 16,
+            "ef_construction": 100,
+            "base_quantization_type": "fp32",
+            "build_thread_count": 1,
+            "support_duplicate": true
+        }
+    })";
+
+    auto index_result = vsag::Factory::CreateIndex("hgraph", build_param);
+    REQUIRE(index_result.has_value());
+    auto index = index_result.value();
+
+    std::vector<int64_t> ids{0, 100, 101, 102, 4, 5, 6, 7};
+    std::vector<float> vectors(ids.size() * dim, 0.0F);
+    for (uint64_t i = 4; i < ids.size(); ++i) {
+        std::fill(vectors.begin() + i * dim, vectors.begin() + (i + 1) * dim, i * 10.0F);
+    }
+    auto base = vsag::Dataset::Make();
+    base->NumElements(ids.size())
+        ->Dim(dim)
+        ->Ids(ids.data())
+        ->Float32Vectors(vectors.data())
+        ->Owner(false);
+    REQUIRE(index->Build(base).has_value());
+
+    std::vector<float> query_vector(dim, 0.0F);
+    auto query = vsag::Dataset::Make();
+    query->NumElements(1)->Dim(dim)->Float32Vectors(query_vector.data())->Owner(false);
+    constexpr const char* search_param = R"({"hgraph":{"ef_search":32}})";
+    const auto search_duplicate_group = [&](const vsag::IndexPtr& target) {
+        auto result = target->KnnSearch(query, 4, search_param);
+        REQUIRE(result.has_value());
+        REQUIRE(result.value()->GetDim() == 4);
+        std::vector<int64_t> result_ids(result.value()->GetIds(), result.value()->GetIds() + 4);
+        std::sort(result_ids.begin(), result_ids.end());
+        for (int64_t i = 0; i < 4; ++i) {
+            REQUIRE(result.value()->GetDistances()[i] == 0.0F);
+        }
+        return result_ids;
+    };
+    const std::vector<int64_t> expected_ids{0, 100, 101, 102};
+    REQUIRE(search_duplicate_group(index) == expected_ids);
+
+    auto serialized = index->Serialize();
+    REQUIRE(serialized.has_value());
+    auto reloaded_result = vsag::Factory::CreateIndex("hgraph", build_param);
+    REQUIRE(reloaded_result.has_value());
+    auto reloaded = reloaded_result.value();
+    REQUIRE(reloaded->Deserialize(serialized.value()).has_value());
+
+    auto impl = std::dynamic_pointer_cast<vsag::IndexImpl<vsag::HGraph>>(reloaded);
+    REQUIRE(impl != nullptr);
+    auto hgraph = std::dynamic_pointer_cast<vsag::HGraph>(impl->GetInnerIndex());
+    REQUIRE(hgraph != nullptr);
+    REQUIRE(hgraph->label_table_->duplicate_count_ == 1);
+    const auto duplicate_ids = hgraph->label_table_->GetDuplicateId(0);
+    REQUIRE(duplicate_ids.size() == 3);
+    REQUIRE(duplicate_ids.contains(1));
+    REQUIRE(duplicate_ids.contains(2));
+    REQUIRE(duplicate_ids.contains(3));
+    REQUIRE(search_duplicate_group(reloaded) == expected_ids);
+
+    vsag::ReaderSet reader_set;
+    for (const auto& key : serialized.value().GetKeys()) {
+        reader_set.Set(key,
+                       std::make_shared<fixtures::ForwardOnlyReader>(serialized.value().Get(key)));
+    }
+    auto forward_reloaded_result = vsag::Factory::CreateIndex("hgraph", build_param);
+    REQUIRE(forward_reloaded_result.has_value());
+    auto forward_reloaded = forward_reloaded_result.value();
+    REQUIRE(forward_reloaded->Deserialize(reader_set).has_value());
+    REQUIRE(search_duplicate_group(forward_reloaded) == expected_ids);
 
     vsag::Options::Instance().set_block_size_limit(origin_size);
 }
