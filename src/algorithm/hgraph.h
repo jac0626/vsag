@@ -15,7 +15,6 @@
 
 #pragma once
 
-#include <istream>
 #include <random>
 #include <shared_mutex>
 #include <string>
@@ -82,9 +81,6 @@ public:
 
     void
     Deserialize(StreamReader& reader) override;
-
-    void
-    Deserialize(std::istream& in_stream) override;
 
     InnerIndexPtr
     ExportModel(const IndexCommonParam& param) const override;
@@ -295,12 +291,6 @@ private:
 
     void
     deserialize_basic_info_v0_14(StreamReader& reader);
-
-    void
-    deserialize_v0_14(StreamReader& reader);
-
-    void
-    deserialize_duplicate_extension_v0_14(StreamReader& reader);
 
 private:
     void

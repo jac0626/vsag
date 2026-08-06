@@ -33,20 +33,9 @@ public:
         cursor_ += size;
     }
 
-    TryReadResult
-    TryReadExact(char* data, uint64_t size) override {
-        if (size == 0) {
-            return TryReadResult::SUCCESS;
-        }
-        if (cursor_ == data_.size()) {
-            return TryReadResult::END_OF_STREAM;
-        }
-        this->Read(data, size);
-        return TryReadResult::SUCCESS;
-    }
-
     void
-    Seek(uint64_t) override {
+    Seek(uint64_t cursor) override {
+        (void)cursor;
         throw std::runtime_error("seek is not supported");
     }
 
@@ -66,8 +55,8 @@ private:
 };
 
 std::stringstream
-CreateSerializedLabelTable(const std::vector<LabelType>& labels,
-                           const std::vector<DuplicateGroup>& duplicate_groups) {
+create_serialized_label_table(const std::vector<LabelType>& labels,
+                              const std::vector<DuplicateGroup>& duplicate_groups) {
     std::stringstream stream(std::ios::in | std::ios::out | std::ios::binary);
     IOStreamWriter writer(stream);
     StreamWriter::WriteVector(writer, labels);
@@ -82,7 +71,7 @@ CreateSerializedLabelTable(const std::vector<LabelType>& labels,
 }
 
 std::stringstream
-CreateSerializedDuplicateRecords(const std::vector<DuplicateGroup>& duplicate_groups) {
+create_serialized_duplicate_records(const std::vector<DuplicateGroup>& duplicate_groups) {
     std::stringstream stream(std::ios::in | std::ios::out | std::ios::binary);
     IOStreamWriter writer(stream);
     const uint64_t duplicate_count = duplicate_groups.size();
@@ -96,9 +85,17 @@ CreateSerializedDuplicateRecords(const std::vector<DuplicateGroup>& duplicate_gr
 }
 
 void
-DeserializeLabelTable(LabelTable& label_table, std::stringstream& stream) {
+deserialize_label_table(LabelTable& label_table, std::stringstream& stream) {
     IOStreamReader reader(stream);
     label_table.Deserialize(reader);
+}
+
+void
+deserialize_duplicate_records(LabelTable& label_table,
+                              std::stringstream& stream,
+                              uint64_t logical_element_count) {
+    IOStreamReader reader(stream);
+    label_table.DeserializeDuplicateRecords(reader, logical_element_count);
 }
 
 }  // namespace
@@ -128,9 +125,9 @@ TEST_CASE("LabelTable Supports Configurable Remap Implementation", "[ut][LabelTa
 TEST_CASE("LabelTable deserializes duplicate groups", "[ut][LabelTable][duplicate]") {
     auto allocator = std::make_shared<DefaultAllocator>();
     LabelTable label_table(allocator.get(), true, true);
-    auto stream = CreateSerializedLabelTable({10, 11, 12, 13, 14}, {{0, {1, 2}}, {3, {4}}});
+    auto stream = create_serialized_label_table({10, 11, 12, 13, 14}, {{0, {1, 2}}, {3, {4}}});
 
-    DeserializeLabelTable(label_table, stream);
+    deserialize_label_table(label_table, stream);
 
     const auto first_group = label_table.GetDuplicateId(0);
     REQUIRE(first_group.size() == 2);
@@ -177,18 +174,18 @@ TEST_CASE("LabelTable rejects out-of-range duplicate members",
           "[ut][LabelTable][duplicate][invalid-member]") {
     auto allocator = std::make_shared<DefaultAllocator>();
     LabelTable label_table(allocator.get(), true, true);
-    auto stream = CreateSerializedLabelTable({10, 11, 12}, {{0, {3}}});
+    auto stream = create_serialized_label_table({10, 11, 12}, {{0, {3}}});
 
-    REQUIRE_THROWS_AS(DeserializeLabelTable(label_table, stream), VsagException);
+    REQUIRE_THROWS_AS(deserialize_label_table(label_table, stream), VsagException);
 }
 
 TEST_CASE("LabelTable rejects out-of-range duplicate heads",
           "[ut][LabelTable][duplicate][invalid-head]") {
     auto allocator = std::make_shared<DefaultAllocator>();
     LabelTable label_table(allocator.get(), true, true);
-    auto stream = CreateSerializedLabelTable({10, 11, 12}, {{3, {1}}});
+    auto stream = create_serialized_label_table({10, 11, 12}, {{3, {1}}});
 
-    REQUIRE_THROWS_AS(DeserializeLabelTable(label_table, stream), VsagException);
+    REQUIRE_THROWS_AS(deserialize_label_table(label_table, stream), VsagException);
 }
 
 TEST_CASE("LabelTable rejects overlapping duplicate groups",
@@ -197,8 +194,8 @@ TEST_CASE("LabelTable rejects overlapping duplicate groups",
 
     const auto require_invalid = [&](const std::vector<DuplicateGroup>& groups) {
         LabelTable label_table(allocator.get(), true, true);
-        auto stream = CreateSerializedLabelTable({10, 11, 12, 13, 14, 15}, groups);
-        REQUIRE_THROWS_AS(DeserializeLabelTable(label_table, stream), VsagException);
+        auto stream = create_serialized_label_table({10, 11, 12, 13, 14, 15}, groups);
+        REQUIRE_THROWS_AS(deserialize_label_table(label_table, stream), VsagException);
     };
 
     SECTION("head is repeated") {
@@ -226,41 +223,66 @@ TEST_CASE("LabelTable rejects overlapping duplicate groups",
     }
 }
 
-TEST_CASE("LabelTable validates duplicate ids against logical count",
+TEST_CASE("LabelTable validates duplicate records against logical count",
           "[ut][LabelTable][duplicate][logical-count]") {
     auto allocator = std::make_shared<DefaultAllocator>();
-    constexpr uint64_t capacity = 8;
-    constexpr uint64_t logical_count = 3;
+    LabelTable label_table(allocator.get(), true, true);
+    for (InnerIdType id = 0; id < 3; ++id) {
+        label_table.Insert(id, 10 + id);
+    }
+    label_table.Resize(1024);
 
-    const auto require_invalid = [&](const std::vector<DuplicateGroup>& groups) {
-        LabelTable label_table(allocator.get(), true, true);
-        label_table.label_table_.resize(capacity);
-        auto stream = CreateSerializedDuplicateRecords(groups);
-        IOStreamReader reader(stream);
-        REQUIRE_THROWS_AS(label_table.DeserializeDuplicateRecords(reader, logical_count),
-                          VsagException);
-    };
-
-    SECTION("last logical id is valid") {
-        LabelTable label_table(allocator.get(), true, true);
-        label_table.label_table_.resize(capacity);
-        auto stream = CreateSerializedDuplicateRecords({{0, {2}}});
-        IOStreamReader reader(stream);
-
-        REQUIRE_NOTHROW(label_table.DeserializeDuplicateRecords(reader, logical_count));
-        REQUIRE(label_table.duplicate_records_.size() == capacity);
-        REQUIRE(label_table.GetDuplicateId(0).contains(2));
+    SECTION("head within capacity but outside logical elements") {
+        auto stream = create_serialized_duplicate_records({{3, {1}}});
+        REQUIRE_THROWS_AS(deserialize_duplicate_records(label_table, stream, 3), VsagException);
     }
 
-    SECTION("group count cannot use spare capacity") {
-        require_invalid({{0, {}}, {1, {}}, {2, {}}, {3, {}}});
+    SECTION("member within capacity but outside logical elements") {
+        auto stream = create_serialized_duplicate_records({{0, {3}}});
+        REQUIRE_THROWS_AS(deserialize_duplicate_records(label_table, stream, 3), VsagException);
+    }
+}
+
+TEST_CASE("LabelTable validates duplicate record counts before allocation",
+          "[ut][LabelTable][duplicate][invalid-count]") {
+    auto allocator = std::make_shared<DefaultAllocator>();
+    LabelTable label_table(allocator.get(), true, true);
+    for (InnerIdType id = 0; id < 5; ++id) {
+        label_table.Insert(id, 10 + id);
+    }
+    label_table.Resize(1024);
+
+    SECTION("group count") {
+        auto stream = create_serialized_duplicate_records({{0, {1}}, {2, {3}}, {4, {}}});
+        REQUIRE_THROWS_AS(deserialize_duplicate_records(label_table, stream, 5), VsagException);
     }
 
-    SECTION("head cannot use spare capacity") {
-        require_invalid({{3, {}}});
+    SECTION("empty group") {
+        auto stream = create_serialized_duplicate_records({{0, {}}});
+        REQUIRE_THROWS_AS(deserialize_duplicate_records(label_table, stream, 5), VsagException);
     }
 
-    SECTION("member cannot use spare capacity") {
-        require_invalid({{0, {3}}});
+    SECTION("member count exceeds remaining logical elements") {
+        auto stream = create_serialized_duplicate_records({{0, {1, 2}}, {3, {4, 4}}});
+        REQUIRE_THROWS_AS(deserialize_duplicate_records(label_table, stream, 5), VsagException);
     }
+}
+
+TEST_CASE("LabelTable keeps duplicate records unchanged after invalid input",
+          "[ut][LabelTable][duplicate][atomic-publish]") {
+    auto allocator = std::make_shared<DefaultAllocator>();
+    LabelTable label_table(allocator.get(), true, true);
+    for (InnerIdType id = 0; id < 4; ++id) {
+        label_table.Insert(id, 10 + id);
+    }
+    label_table.Resize(1024);
+    label_table.SetDuplicateId(0, 1);
+
+    auto stream = create_serialized_duplicate_records({{2, {4}}});
+    REQUIRE_THROWS_AS(deserialize_duplicate_records(label_table, stream, 4), VsagException);
+
+    REQUIRE(label_table.duplicate_count_ == 1);
+    const auto duplicate_ids = label_table.GetDuplicateId(0);
+    REQUIRE(duplicate_ids.size() == 1);
+    REQUIRE(duplicate_ids.contains(1));
 }

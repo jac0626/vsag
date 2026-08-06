@@ -327,64 +327,66 @@ public:
     }
 
     void
-    DeserializeDuplicateRecords(lvalue_or_rvalue<StreamReader> reader, uint64_t logical_count) {
-        if (logical_count > label_table_.size()) {
+    DeserializeDuplicateRecords(lvalue_or_rvalue<StreamReader> reader,
+                                uint64_t logical_element_count) {
+        if (logical_element_count > label_table_.size()) {
             throw VsagException(ErrorType::INVALID_BINARY,
-                                fmt::format("logical count {} exceeds label table capacity {}",
-                                            logical_count,
+                                fmt::format("logical element count {} exceeds label capacity {}",
+                                            logical_element_count,
                                             label_table_.size()));
         }
 
-        uint64_t serialized_duplicate_count = 0;
-        StreamReader::ReadObj(reader, serialized_duplicate_count);
-        if (serialized_duplicate_count > logical_count) {
-            throw VsagException(ErrorType::INVALID_BINARY,
-                                fmt::format("duplicate group count {} exceeds logical count {}",
-                                            serialized_duplicate_count,
-                                            logical_count));
+        uint64_t duplicate_count = 0;
+        StreamReader::ReadObj(reader, duplicate_count);
+        if (duplicate_count > logical_element_count / 2) {
+            throw VsagException(
+                ErrorType::INVALID_BINARY,
+                fmt::format("duplicate group count {} exceeds logical element limit {}",
+                            duplicate_count,
+                            logical_element_count / 2));
         }
 
-        Vector<std::pair<InnerIdType, Vector<InnerIdType>>> duplicate_groups(allocator_);
-        duplicate_groups.reserve(serialized_duplicate_count);
+        std::vector<std::pair<InnerIdType, Vector<InnerIdType>>> duplicate_groups;
+        duplicate_groups.reserve(duplicate_count);
         UnorderedSet<InnerIdType> assigned_ids(allocator_);
-        for (uint64_t i = 0; i < serialized_duplicate_count; ++i) {
+        for (uint64_t i = 0; i < duplicate_count; ++i) {
             InnerIdType id;
             StreamReader::ReadObj<InnerIdType>(reader, id);
-            if (id >= logical_count) {
-                throw VsagException(
-                    ErrorType::INVALID_BINARY,
-                    fmt::format(
-                        "duplicate head id {} exceeds logical count {}", id, logical_count));
+            if (id >= logical_element_count) {
+                throw VsagException(ErrorType::INVALID_BINARY,
+                                    fmt::format("duplicate head id {} exceeds logical element "
+                                                "count {}",
+                                                id,
+                                                logical_element_count));
             }
             if (not assigned_ids.insert(id).second) {
                 throw VsagException(ErrorType::INVALID_BINARY,
                                     fmt::format("id {} belongs to multiple duplicate groups", id));
             }
 
-            uint64_t duplicate_id_count = 0;
-            StreamReader::ReadObj(reader, duplicate_id_count);
-            const uint64_t remaining_id_count = logical_count - assigned_ids.size();
-            if (duplicate_id_count > remaining_id_count) {
+            uint64_t member_count = 0;
+            StreamReader::ReadObj(reader, member_count);
+            const auto assigned_count = static_cast<uint64_t>(assigned_ids.size());
+            if (member_count == 0 or member_count > logical_element_count - assigned_count) {
                 throw VsagException(
                     ErrorType::INVALID_BINARY,
-                    fmt::format("duplicate member count {} exceeds remaining logical id count {}",
-                                duplicate_id_count,
-                                remaining_id_count));
+                    fmt::format("duplicate member count {} exceeds remaining logical element "
+                                "count {}",
+                                member_count,
+                                logical_element_count - assigned_count));
             }
 
             Vector<InnerIdType> id_list(allocator_);
-            id_list.resize(duplicate_id_count);
-            if (duplicate_id_count > 0) {
-                reader->Read(reinterpret_cast<char*>(id_list.data()),
-                             duplicate_id_count * sizeof(InnerIdType));
-            }
+            id_list.resize(member_count);
+            reader->Read(reinterpret_cast<char*>(id_list.data()),
+                         member_count * sizeof(InnerIdType));
             for (const auto duplicate_id : id_list) {
-                if (duplicate_id >= logical_count) {
+                if (duplicate_id >= logical_element_count) {
                     throw VsagException(
                         ErrorType::INVALID_BINARY,
-                        fmt::format("duplicate member id {} exceeds logical count {}",
+                        fmt::format("duplicate member id {} exceeds logical element count {}",
                                     duplicate_id,
-                                    logical_count));
+                                    logical_element_count));
                 }
                 if (not assigned_ids.insert(duplicate_id).second) {
                     throw VsagException(
@@ -395,14 +397,26 @@ public:
             duplicate_groups.emplace_back(id, std::move(id_list));
         }
 
-        duplicate_records_.resize(label_table_.size(), nullptr);
-        for (auto& [id, id_list] : duplicate_groups) {
-            duplicate_records_[id] = allocator_->New<DuplicateRecord>(allocator_);
-            for (const auto& duplicate_id : id_list) {
-                duplicate_records_[id]->duplicate_ids.insert(duplicate_id);
+        Vector<DuplicateRecord*> restored_records(label_table_.size(), nullptr, allocator_);
+        try {
+            for (auto& [id, id_list] : duplicate_groups) {
+                restored_records[id] = allocator_->New<DuplicateRecord>(allocator_);
+                for (const auto& duplicate_id : id_list) {
+                    restored_records[id]->duplicate_ids.insert(duplicate_id);
+                }
             }
+        } catch (...) {
+            for (auto* record : restored_records) {
+                allocator_->Delete(record);
+            }
+            throw;
         }
-        duplicate_count_ = serialized_duplicate_count;
+
+        for (auto* record : duplicate_records_) {
+            allocator_->Delete(record);
+        }
+        duplicate_records_ = std::move(restored_records);
+        duplicate_count_ = duplicate_count;
     }
 
     void
