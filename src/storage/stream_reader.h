@@ -25,6 +25,11 @@
 
 class SliceStreamReader;
 
+enum class TryReadResult {
+    SUCCESS,
+    END_OF_STREAM,
+};
+
 class StreamReader {
 public:
     template <typename T>
@@ -63,6 +68,9 @@ public:
 public:
     virtual void
     Read(char* data, uint64_t size) = 0;
+
+    virtual TryReadResult
+    TryReadExact(char* data, uint64_t size) = 0;
 
     virtual void
     Seek(uint64_t cursor) = 0;
@@ -114,6 +122,9 @@ public:
     void
     Read(char* data, uint64_t size) override;
 
+    TryReadResult
+    TryReadExact(char* data, uint64_t size) override;
+
     void
     Seek(uint64_t cursor) override;
 
@@ -137,6 +148,9 @@ public:
     void
     Read(char* data, uint64_t size) override;
 
+    TryReadResult
+    TryReadExact(char* data, uint64_t size) override;
+
     void
     Seek(uint64_t cursor) override;
 
@@ -152,6 +166,31 @@ private:
     std::istream& istream_;
 };
 
+class ForwardStreamReader : public StreamReader {
+public:
+    void
+    Read(char* data, uint64_t size) override;
+
+    TryReadResult
+    TryReadExact(char* data, uint64_t size) override;
+
+    void
+    Seek(uint64_t cursor) override;
+
+    [[nodiscard]] uint64_t
+    GetCursor() const override;
+
+    [[nodiscard]] uint64_t
+    Length() override;
+
+public:
+    explicit ForwardStreamReader(std::istream& istream);
+
+private:
+    std::istream& istream_;
+    uint64_t cursor_{0};
+};
+
 class BufferStreamReader : public StreamReader {
 public:
     [[nodiscard]] uint64_t
@@ -160,6 +199,9 @@ public:
     void
     Read(char* data, uint64_t size) override;
 
+    TryReadResult
+    TryReadExact(char* data, uint64_t size) override;
+
     void
     Seek(uint64_t cursor) override;
 
@@ -167,19 +209,21 @@ public:
     GetCursor() const override;
 
 public:
-    explicit BufferStreamReader(StreamReader* reader, size_t max_size, vsag::Allocator* allocator);
+    explicit BufferStreamReader(StreamReader* reader,
+                                uint64_t max_size,
+                                vsag::Allocator* allocator);
 
     ~BufferStreamReader();
 
 private:
     StreamReader* const reader_impl_{nullptr};
     vsag::Allocator* allocator_;
-    char* buffer_{nullptr};    // Stores the cached content
-    size_t buffer_cursor_{0};  // Current read position in the cache
-    size_t valid_size_{0};     // Size of valid data in the cache
-    size_t buffer_size_{0};    // Maximum capacity of the cache
-    size_t max_size_{0};       // Maximum capacity of the actual data stream
-    size_t cursor_{0};         // Current read position in the actual data stream
+    char* buffer_{nullptr};      // Stores the cached content
+    uint64_t buffer_cursor_{0};  // Current read position in the cache
+    uint64_t valid_size_{0};     // Size of valid data in the cache
+    uint64_t buffer_size_{0};    // Maximum capacity of the cache
+    uint64_t max_size_{0};       // Maximum capacity of the actual data stream
+    uint64_t cursor_{0};         // Current read position in the actual data stream
 };
 
 class SliceStreamReader : public StreamReader {
@@ -189,6 +233,9 @@ public:
 
     void
     Read(char* data, uint64_t size) override;
+
+    TryReadResult
+    TryReadExact(char* data, uint64_t size) override;
 
     void
     Seek(uint64_t cursor) override;
