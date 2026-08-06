@@ -17,7 +17,9 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <chrono>
+#include <cstring>
 #include <limits>
+#include <stdexcept>
 #include <thread>
 
 #include "algorithm/hgraph.h"
@@ -30,6 +32,39 @@
 #include "vsag/options.h"
 
 namespace fixtures {
+
+class ForwardOnlyReader : public vsag::Reader {
+public:
+    explicit ForwardOnlyReader(vsag::Binary binary) : binary_(std::move(binary)) {
+    }
+
+    void
+    Read(uint64_t offset, uint64_t len, void* dest) override {
+        if (offset > binary_.size or len > binary_.size - offset) {
+            throw std::runtime_error("read exceeds binary boundary");
+        }
+        if (offset != next_read_offset_) {
+            throw std::runtime_error("non-sequential read");
+        }
+        next_read_offset_ += len;
+        std::memcpy(dest, binary_.data.get() + offset, len);
+    }
+
+    void
+    AsyncRead(uint64_t offset, uint64_t len, void* dest, vsag::CallBack callback) override {
+        Read(offset, len, dest);
+        callback(vsag::IOErrorCode::IO_SUCCESS, "success");
+    }
+
+    [[nodiscard]] uint64_t
+    Size() const override {
+        return binary_.size;
+    }
+
+private:
+    vsag::Binary binary_;
+    uint64_t next_read_offset_{0};
+};
 
 class HGraphTestResource {
 public:
@@ -1661,6 +1696,17 @@ TEST_CASE("HGraph Old Format Preserves Duplicate Records", "[ft][hgraph][seriali
     REQUIRE(duplicate_ids.contains(2));
     REQUIRE(duplicate_ids.contains(3));
     REQUIRE(search_duplicate_group(reloaded) == expected_ids);
+
+    vsag::ReaderSet reader_set;
+    for (const auto& key : serialized.value().GetKeys()) {
+        reader_set.Set(key,
+                       std::make_shared<fixtures::ForwardOnlyReader>(serialized.value().Get(key)));
+    }
+    auto forward_reloaded_result = vsag::Factory::CreateIndex("hgraph", build_param);
+    REQUIRE(forward_reloaded_result.has_value());
+    auto forward_reloaded = forward_reloaded_result.value();
+    REQUIRE(forward_reloaded->Deserialize(reader_set).has_value());
+    REQUIRE(search_duplicate_group(forward_reloaded) == expected_ids);
 
     vsag::Options::Instance().set_block_size_limit(origin_size);
 }
