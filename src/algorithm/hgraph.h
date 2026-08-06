@@ -292,12 +292,6 @@ private:
     void
     deserialize_basic_info_v0_14(StreamReader& reader);
 
-    void
-    serialize_duplicate_info_v0_14(StreamWriter& writer) const;
-
-    void
-    deserialize_duplicate_info_v0_14(StreamReader& reader) const;
-
 private:
     void
     reorder(const void* query,

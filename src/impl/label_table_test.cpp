@@ -1,7 +1,10 @@
 #include "label_table.h"
 
 #include <catch2/catch_test_macros.hpp>
+#include <cstring>
 #include <sstream>
+#include <stdexcept>
+#include <string>
 #include <utility>
 #include <vector>
 
@@ -15,6 +18,40 @@ using namespace vsag;
 namespace {
 
 using DuplicateGroup = std::pair<InnerIdType, std::vector<InnerIdType>>;
+
+class ForwardOnlyStreamReader final : public StreamReader {
+public:
+    explicit ForwardOnlyStreamReader(std::string data) : data_(std::move(data)) {
+    }
+
+    void
+    Read(char* data, uint64_t size) override {
+        if (cursor_ > data_.size() or size > data_.size() - cursor_) {
+            throw std::runtime_error("read exceeds stream boundary");
+        }
+        std::memcpy(data, data_.data() + cursor_, size);
+        cursor_ += size;
+    }
+
+    void
+    Seek(uint64_t) override {
+        throw std::runtime_error("seek is not supported");
+    }
+
+    [[nodiscard]] uint64_t
+    GetCursor() const override {
+        return cursor_;
+    }
+
+    [[nodiscard]] uint64_t
+    Length() override {
+        throw std::runtime_error("length is not supported");
+    }
+
+private:
+    std::string data_;
+    uint64_t cursor_{0};
+};
 
 std::stringstream
 CreateSerializedLabelTable(const std::vector<LabelType>& labels,
@@ -79,6 +116,35 @@ TEST_CASE("LabelTable deserializes duplicate groups", "[ut][LabelTable][duplicat
     REQUIRE(label_table.GetDuplicateId(1).empty());
     REQUIRE(label_table.GetDuplicateId(2).empty());
     REQUIRE(label_table.GetDuplicateId(4).empty());
+}
+
+TEST_CASE("LabelTable reads duplicate groups sequentially", "[ut][LabelTable][duplicate]") {
+    auto allocator = std::make_shared<DefaultAllocator>();
+    LabelTable source(allocator.get(), true, true);
+    for (InnerIdType id = 0; id < 5; ++id) {
+        source.Insert(id, 10 + id);
+    }
+    source.Resize(5);
+    source.SetDuplicateId(0, 1);
+    source.SetDuplicateId(0, 2);
+    source.SetDuplicateId(3, 4);
+
+    std::stringstream stream(std::ios::in | std::ios::out | std::ios::binary);
+    IOStreamWriter writer(stream);
+    source.Serialize(writer);
+
+    ForwardOnlyStreamReader reader(stream.str());
+    LabelTable restored(allocator.get(), true, true);
+    REQUIRE_NOTHROW(restored.Deserialize(reader));
+    REQUIRE(reader.GetCursor() == stream.str().size());
+
+    const auto first_group = restored.GetDuplicateId(0);
+    REQUIRE(first_group.size() == 2);
+    REQUIRE(first_group.contains(1));
+    REQUIRE(first_group.contains(2));
+    const auto second_group = restored.GetDuplicateId(3);
+    REQUIRE(second_group.size() == 1);
+    REQUIRE(second_group.contains(4));
 }
 
 TEST_CASE("LabelTable rejects out-of-range duplicate members",
