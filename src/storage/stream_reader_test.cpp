@@ -19,6 +19,8 @@
 #include <catch2/catch_test_macros.hpp>
 #include <cstdint>
 
+#include "vsag_exception.h"
+
 // fill buffer with below and return a wrappered StreamReader object:
 // ['1' '1' ... repeats 1024 times]
 // ['2' '2' ... repeats 1024 times]
@@ -111,4 +113,36 @@ TEST_CASE("SliceStreamReader", "[ut][stream_reader]") {
     reader_slice.Read(read_buffer3, 24);
     // std::cout << std::string(read_buffer3, 24) << std::endl;
     REQUIRE(check_func(read_buffer3, '3', 24));
+}
+
+TEST_CASE("StreamReader optional exact read", "[ut][stream_reader]") {
+    char source[4]{'1', '2', '3', '4'};
+    uint64_t callback_count = 0;
+    auto reader = ReadFuncStreamReader(
+        [&](uint64_t offset, uint64_t size, void* dest) {
+            callback_count++;
+            memcpy(dest, source + offset, size);
+        },
+        0,
+        sizeof(source));
+
+    char destination[4]{};
+    REQUIRE(reader.TryReadExact(destination, sizeof(destination)) == TryReadResult::SUCCESS);
+    REQUIRE(memcmp(source, destination, sizeof(source)) == 0);
+    REQUIRE(callback_count == 1);
+
+    REQUIRE(reader.TryReadExact(destination, 1) == TryReadResult::END_OF_STREAM);
+    REQUIRE(reader.TryReadExact(destination, 0) == TryReadResult::SUCCESS);
+    REQUIRE(callback_count == 1);
+
+    uint64_t partial_callback_count = 0;
+    auto partial_reader = ReadFuncStreamReader(
+        [&](uint64_t offset, uint64_t size, void* dest) {
+            partial_callback_count++;
+            memcpy(dest, source + offset, size);
+        },
+        3,
+        sizeof(source));
+    REQUIRE_THROWS_AS(partial_reader.TryReadExact(destination, 2), vsag::VsagException);
+    REQUIRE(partial_callback_count == 0);
 }

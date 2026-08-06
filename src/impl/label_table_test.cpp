@@ -33,6 +33,18 @@ public:
         cursor_ += size;
     }
 
+    TryReadResult
+    TryReadExact(char* data, uint64_t size) override {
+        if (size == 0) {
+            return TryReadResult::SUCCESS;
+        }
+        if (cursor_ == data_.size()) {
+            return TryReadResult::END_OF_STREAM;
+        }
+        this->Read(data, size);
+        return TryReadResult::SUCCESS;
+    }
+
     void
     Seek(uint64_t) override {
         throw std::runtime_error("seek is not supported");
@@ -59,6 +71,20 @@ CreateSerializedLabelTable(const std::vector<LabelType>& labels,
     std::stringstream stream(std::ios::in | std::ios::out | std::ios::binary);
     IOStreamWriter writer(stream);
     StreamWriter::WriteVector(writer, labels);
+    const uint64_t duplicate_count = duplicate_groups.size();
+    StreamWriter::WriteObj(writer, duplicate_count);
+    for (const auto& [head_id, duplicate_ids] : duplicate_groups) {
+        StreamWriter::WriteObj(writer, head_id);
+        StreamWriter::WriteVector(writer, duplicate_ids);
+    }
+    stream.seekg(0);
+    return stream;
+}
+
+std::stringstream
+CreateSerializedDuplicateRecords(const std::vector<DuplicateGroup>& duplicate_groups) {
+    std::stringstream stream(std::ios::in | std::ios::out | std::ios::binary);
+    IOStreamWriter writer(stream);
     const uint64_t duplicate_count = duplicate_groups.size();
     StreamWriter::WriteObj(writer, duplicate_count);
     for (const auto& [head_id, duplicate_ids] : duplicate_groups) {
@@ -197,5 +223,44 @@ TEST_CASE("LabelTable rejects overlapping duplicate groups",
 
     SECTION("head contains itself") {
         require_invalid({{0, {0}}});
+    }
+}
+
+TEST_CASE("LabelTable validates duplicate ids against logical count",
+          "[ut][LabelTable][duplicate][logical-count]") {
+    auto allocator = std::make_shared<DefaultAllocator>();
+    constexpr uint64_t capacity = 8;
+    constexpr uint64_t logical_count = 3;
+
+    const auto require_invalid = [&](const std::vector<DuplicateGroup>& groups) {
+        LabelTable label_table(allocator.get(), true, true);
+        label_table.label_table_.resize(capacity);
+        auto stream = CreateSerializedDuplicateRecords(groups);
+        IOStreamReader reader(stream);
+        REQUIRE_THROWS_AS(label_table.DeserializeDuplicateRecords(reader, logical_count),
+                          VsagException);
+    };
+
+    SECTION("last logical id is valid") {
+        LabelTable label_table(allocator.get(), true, true);
+        label_table.label_table_.resize(capacity);
+        auto stream = CreateSerializedDuplicateRecords({{0, {2}}});
+        IOStreamReader reader(stream);
+
+        REQUIRE_NOTHROW(label_table.DeserializeDuplicateRecords(reader, logical_count));
+        REQUIRE(label_table.duplicate_records_.size() == capacity);
+        REQUIRE(label_table.GetDuplicateId(0).contains(2));
+    }
+
+    SECTION("group count cannot use spare capacity") {
+        require_invalid({{0, {}}, {1, {}}, {2, {}}, {3, {}}});
+    }
+
+    SECTION("head cannot use spare capacity") {
+        require_invalid({{3, {}}});
+    }
+
+    SECTION("member cannot use spare capacity") {
+        require_invalid({{0, {3}}});
     }
 }

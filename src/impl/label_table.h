@@ -318,7 +318,7 @@ public:
             }
         }
         if (compress_duplicate_data_) {
-            this->DeserializeDuplicateRecords(reader);
+            this->DeserializeDuplicateRecords(reader, label_table_.size());
         }
         if (support_tombstone_) {
             StreamReader::ReadObj(reader, deleted_ids_);
@@ -327,40 +327,64 @@ public:
     }
 
     void
-    DeserializeDuplicateRecords(lvalue_or_rvalue<StreamReader> reader) {
-        StreamReader::ReadObj(reader, duplicate_count_);
-        if (duplicate_count_ > label_table_.size()) {
+    DeserializeDuplicateRecords(lvalue_or_rvalue<StreamReader> reader, uint64_t logical_count) {
+        if (logical_count > label_table_.size()) {
             throw VsagException(ErrorType::INVALID_BINARY,
-                                fmt::format("duplicate group count {} exceeds label count {}",
-                                            duplicate_count_,
+                                fmt::format("logical count {} exceeds label table capacity {}",
+                                            logical_count,
                                             label_table_.size()));
         }
 
-        std::vector<std::pair<InnerIdType, Vector<InnerIdType>>> duplicate_groups;
-        duplicate_groups.reserve(duplicate_count_);
+        uint64_t serialized_duplicate_count = 0;
+        StreamReader::ReadObj(reader, serialized_duplicate_count);
+        if (serialized_duplicate_count > logical_count) {
+            throw VsagException(ErrorType::INVALID_BINARY,
+                                fmt::format("duplicate group count {} exceeds logical count {}",
+                                            serialized_duplicate_count,
+                                            logical_count));
+        }
+
+        Vector<std::pair<InnerIdType, Vector<InnerIdType>>> duplicate_groups(allocator_);
+        duplicate_groups.reserve(serialized_duplicate_count);
         UnorderedSet<InnerIdType> assigned_ids(allocator_);
-        for (uint64_t i = 0; i < duplicate_count_; ++i) {
+        for (uint64_t i = 0; i < serialized_duplicate_count; ++i) {
             InnerIdType id;
             StreamReader::ReadObj<InnerIdType>(reader, id);
-            if (id >= label_table_.size()) {
+            if (id >= logical_count) {
                 throw VsagException(
                     ErrorType::INVALID_BINARY,
                     fmt::format(
-                        "duplicate head id {} exceeds label count {}", id, label_table_.size()));
+                        "duplicate head id {} exceeds logical count {}", id, logical_count));
             }
             if (not assigned_ids.insert(id).second) {
                 throw VsagException(ErrorType::INVALID_BINARY,
                                     fmt::format("id {} belongs to multiple duplicate groups", id));
             }
 
+            uint64_t duplicate_id_count = 0;
+            StreamReader::ReadObj(reader, duplicate_id_count);
+            const uint64_t remaining_id_count = logical_count - assigned_ids.size();
+            if (duplicate_id_count > remaining_id_count) {
+                throw VsagException(
+                    ErrorType::INVALID_BINARY,
+                    fmt::format("duplicate member count {} exceeds remaining logical id count {}",
+                                duplicate_id_count,
+                                remaining_id_count));
+            }
+
             Vector<InnerIdType> id_list(allocator_);
-            StreamReader::ReadVector(reader, id_list);
+            id_list.resize(duplicate_id_count);
+            if (duplicate_id_count > 0) {
+                reader->Read(reinterpret_cast<char*>(id_list.data()),
+                             duplicate_id_count * sizeof(InnerIdType));
+            }
             for (const auto duplicate_id : id_list) {
-                if (duplicate_id >= label_table_.size()) {
-                    throw VsagException(ErrorType::INVALID_BINARY,
-                                        fmt::format("duplicate member id {} exceeds label count {}",
-                                                    duplicate_id,
-                                                    label_table_.size()));
+                if (duplicate_id >= logical_count) {
+                    throw VsagException(
+                        ErrorType::INVALID_BINARY,
+                        fmt::format("duplicate member id {} exceeds logical count {}",
+                                    duplicate_id,
+                                    logical_count));
                 }
                 if (not assigned_ids.insert(duplicate_id).second) {
                     throw VsagException(
@@ -378,6 +402,7 @@ public:
                 duplicate_records_[id]->duplicate_ids.insert(duplicate_id);
             }
         }
+        duplicate_count_ = serialized_duplicate_count;
     }
 
     void
