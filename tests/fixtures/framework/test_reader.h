@@ -29,7 +29,7 @@ namespace fixtures {
  * @brief Simple in-memory Reader implementation for testing serialization.
  * Wraps a Binary object and provides read access to its data.
  */
-class TestReader : public vsag::Reader {
+class TestReader : public vsag::MemoryUsageReader {
 public:
     /**
      * @brief Constructs a TestReader from a Binary object.

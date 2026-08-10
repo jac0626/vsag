@@ -31,6 +31,7 @@
 #include "storage/streaming_serialization_test_utils.h"
 #include "test_index.h"
 #include "typing.h"
+#include "vsag/factory.h"
 #include "vsag/filter.h"
 #include "vsag/options.h"
 #include "vsag/search_request.h"
@@ -2451,11 +2452,11 @@ TEST_CASE("HGraph Reader Memory Usage", "[ft][memory][hgraph]") {
     auto source = fixtures::TestIndex::TestFactory("hgraph", build_param, true);
     fixtures::TestIndex::TestBuildIndex(source, dataset, true);
     auto binary_set = source->Serialize().value();
+    auto binary = binary_set.Get("hgraph");
 
     auto restored = fixtures::TestIndex::TestFactory("hgraph", reader_param, true);
     vsag::ReaderSet readers;
-    readers.Set("hgraph",
-                std::make_shared<fixtures::TestReader>(binary_set.Get("hgraph"), reader_memory));
+    readers.Set("hgraph", std::make_shared<fixtures::TestReader>(binary, reader_memory));
     REQUIRE(restored->Deserialize(readers).has_value());
 
     auto detail = restored->GetMemoryUsageDetail();
@@ -2474,6 +2475,18 @@ TEST_CASE("HGraph Reader Memory Usage", "[ft][memory][hgraph]") {
     }
     REQUIRE(immutable_memory >= detail_sum);
     REQUIRE(immutable_memory - detail_sum < 4096);
+
+    auto plain_restored = fixtures::TestIndex::TestFactory("hgraph", reader_param, true);
+    auto plain_reader = vsag::Factory::CreateReadFuncReader(
+        [binary](uint64_t offset, uint64_t len, void* dest) {
+            std::memcpy(dest, binary.data.get() + offset, len);
+        },
+        binary.size);
+    vsag::ReaderSet plain_readers;
+    plain_readers.Set("hgraph", plain_reader);
+    REQUIRE(plain_restored->Deserialize(plain_readers).has_value());
+    REQUIRE(plain_restored->GetMemoryUsage() > 0);
+    REQUIRE(plain_restored->GetMemoryUsageDetail().at("reader") == 0);
 }
 
 static void

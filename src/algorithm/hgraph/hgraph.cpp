@@ -816,16 +816,25 @@ HGraph::GetAttributeSetByInnerId(InnerIdType inner_id, AttributeSet* attr) const
 }
 
 uint64_t
+HGraph::get_reader_memory_usage(const ReaderPtr& reader) {
+    const auto* memory_usage_reader = dynamic_cast<const MemoryUsageReader*>(reader.get());
+    if (memory_usage_reader == nullptr) {
+        return 0;
+    }
+    return memory_usage_reader->GetMemoryUsage();
+}
+
+uint64_t
 HGraph::GetMemoryUsage() const {
     auto memory = InnerIndexInterface::GetMemoryUsage();
     if (this->pool_ != nullptr) {
         memory += this->pool_->GetMemoryUsage();
     }
     if (this->reader_ != nullptr) {
-        memory += this->reader_->GetMemoryUsage();
+        memory += get_reader_memory_usage(this->reader_);
     }
     if (this->precise_reader_ != nullptr && this->precise_reader_.get() != this->reader_.get()) {
-        memory += this->precise_reader_->GetMemoryUsage();
+        memory += get_reader_memory_usage(this->precise_reader_);
     }
     return memory;
 }

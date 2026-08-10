@@ -659,6 +659,10 @@ private:
     void
     cal_memory_usage();
 
+    /// Return resident memory reported by an optional MemoryUsageReader implementation.
+    [[nodiscard]] static uint64_t
+    get_reader_memory_usage(const ReaderPtr& reader);
+
     /// True when reorder uses a separate high-precision flatten (not base codes).
     [[nodiscard]] bool
     has_precise_reorder() const {

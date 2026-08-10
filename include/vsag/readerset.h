@@ -131,20 +131,27 @@ public:
      */
     [[nodiscard]] virtual uint64_t
     Size() const = 0;
+};
+
+/**
+ * @class MemoryUsageReader
+ * @brief Optional Reader extension for reporting reader-owned resident memory.
+ *
+ * Reader implementations with resident caches can derive from this class so indexes that retain
+ * the reader can include that memory in their usage statistics. Implementations must be
+ * thread-safe because GetMemoryUsage() may be called concurrently with reads.
+ */
+class MemoryUsageReader : public Reader {
+public:
+    ~MemoryUsageReader() override;
 
     /**
      * @brief Returns memory owned by the reader, excluding the underlying data source.
      *
-     * Reader implementations with resident caches should override this method so indexes that
-     * retain the reader can include that memory in their usage statistics. Overrides must be
-     * thread-safe because the method may be called concurrently with reads.
-     *
-     * @return Resident memory usage in bytes. The default implementation returns zero.
+     * @return Resident memory usage in bytes.
      */
     [[nodiscard]] virtual uint64_t
-    GetMemoryUsage() const {
-        return 0;
-    }
+    GetMemoryUsage() const = 0;
 };
 
 /**

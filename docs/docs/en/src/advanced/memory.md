@@ -98,9 +98,9 @@ Properties:
   vectors). For SINDI in particular, call `GetMemoryUsage()` **after** the build completes to get
   a representative value.
 - For an HGraph loaded through `ReaderIO`, resident memory owned by a retained `Reader` is included
-  when the reader overrides `Reader::GetMemoryUsage()`. The default implementation returns zero;
-  custom readers with an in-memory page cache should override it. The underlying file or remote
-  data source is not part of the reported memory.
+  when the reader derives from `MemoryUsageReader` and implements `GetMemoryUsage()`. Readers that
+  do not derive from `MemoryUsageReader` report zero. The underlying file or remote data source is
+  not part of the reported memory.
 
 See `examples/cpp/319_feature_get_memory_usage.cpp` for a runnable example, including a helper
 that compares the interface value with the process resident size.
@@ -145,6 +145,6 @@ full control over parallelism and resource ownership. See
 ## Notes
 
 - A custom allocator must be thread-safe.
-- A custom `Reader::GetMemoryUsage()` override must be thread-safe.
+- A custom `MemoryUsageReader::GetMemoryUsage()` implementation must be thread-safe.
 - The allocator's lifetime must outlive any index and result object referencing it.
 - If nothing is configured, VSAG falls back to a default `malloc`-based allocator.
