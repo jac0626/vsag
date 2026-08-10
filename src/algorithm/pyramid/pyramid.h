@@ -327,7 +327,7 @@ private:
 
     void
     check_and_init_raw_vector(const FlattenInterfaceParamPtr& raw_vector_param,
-                               const IndexCommonParam& common_param);
+                              const IndexCommonParam& common_param);
 
     FlattenInterfacePtr
     find_raw_vector_source(bool require_in_memory) const;

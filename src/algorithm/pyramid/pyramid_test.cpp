@@ -21,10 +21,14 @@
 #include <filesystem>
 #include <future>
 #include <numeric>
+#include <sstream>
 #include <vector>
 
 #include "impl/allocator/safe_allocator.h"
 #include "index_common_param.h"
+#include "storage/serialization.h"
+#include "storage/stream_reader.h"
+#include "storage/stream_writer.h"
 #include "unittest.h"
 
 namespace {
@@ -758,11 +762,55 @@ TEST_CASE("Pyramid raw vector serialization handles IO storage changes",
         }
     };
 
+    auto make_upstream_legacy_serialization = [&]() {
+        auto producer = std::make_shared<vsag::Pyramid>(make_param(true), common_param);
+        REQUIRE(producer->Build(dataset).empty());
+
+        std::stringstream current_stream;
+        vsag::IOStreamWriter current_writer(current_stream);
+        producer->Serialize(current_writer);
+        const auto current_bytes = current_stream.str();
+
+        std::stringstream footer_stream(current_bytes);
+        vsag::IOStreamReader footer_reader(footer_stream);
+        auto footer = vsag::Footer::Parse(footer_reader);
+        REQUIRE(footer != nullptr);
+        auto basic_info = footer->GetMetadata()->Get("basic_info");
+        REQUIRE(basic_info.Contains("raw_vector_size"));
+        basic_info.Erase("raw_vector_size");
+
+        auto legacy_metadata = std::make_shared<vsag::Metadata>();
+        legacy_metadata->Set("basic_info", basic_info);
+        std::stringstream legacy_stream;
+        vsag::IOStreamWriter legacy_writer(legacy_stream);
+        legacy_writer.Write(current_bytes.data(), current_bytes.size() - footer->Length());
+        vsag::Footer legacy_footer(legacy_metadata);
+        legacy_footer.Write(legacy_writer);
+        return legacy_stream.str();
+    };
+
     SECTION("legacy alias to dedicated") {
         round_trip(false, false);
     }
     SECTION("legacy dedicated to alias") {
         round_trip(true, false);
+    }
+    SECTION("legacy upstream raw block without size") {
+        const auto legacy_bytes = make_upstream_legacy_serialization();
+        for (const bool target_uses_dedicated_storage : {false, true}) {
+            auto loaded = std::make_shared<vsag::Pyramid>(make_param(target_uses_dedicated_storage),
+                                                          common_param);
+            std::stringstream legacy_stream(legacy_bytes);
+            vsag::IOStreamReader legacy_reader(legacy_stream);
+            loaded->Deserialize(legacy_reader);
+
+            REQUIRE(loaded->GetNumElements() == count);
+            auto restored = loaded->GetDataByIds(ids.data(), count);
+            REQUIRE(restored->GetFloat32Vectors() != nullptr);
+            for (int64_t i = 0; i < dim * count; ++i) {
+                REQUIRE(restored->GetFloat32Vectors()[i] == vectors[i]);
+            }
+        }
     }
     SECTION("streaming alias to dedicated") {
         round_trip(false, true);

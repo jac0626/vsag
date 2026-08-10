@@ -890,10 +890,12 @@ Pyramid::Deserialize(StreamReader& reader) {
         throw VsagException(ErrorType::READ_ERROR, "failed to read index footer");
     }
     auto max_capacity = basic_info["max_capacity"].GetInt();
+    const bool has_raw_vector_size = basic_info.Contains(PYRAMID_RAW_VECTOR_SIZE);
     uint64_t raw_vector_size = 0;
-    if (basic_info.Contains(PYRAMID_RAW_VECTOR_SIZE)) {
+    if (has_raw_vector_size) {
         raw_vector_size = basic_info[PYRAMID_RAW_VECTOR_SIZE].GetUint64();
     }
+    bool has_legacy_raw_vector = false;
     if (basic_info.Contains(INDEX_PARAM)) {
         auto index_param = std::make_shared<PyramidParameters>();
         index_param->FromString(basic_info[INDEX_PARAM].GetString());
@@ -904,6 +906,7 @@ Pyramid::Deserialize(StreamReader& reader) {
             logger::error(message);
             throw VsagException(ErrorType::INVALID_ARGUMENT, message);
         }
+        has_legacy_raw_vector = not has_raw_vector_size && index_param->store_raw_vector;
     }
 
     BufferStreamReader buffer_reader(
@@ -916,7 +919,9 @@ Pyramid::Deserialize(StreamReader& reader) {
     if (has_precise_reorder()) {
         precise_codes_->Deserialize(buffer_reader);
     }
-    if (raw_vector_size > 0) {
+    if (has_legacy_raw_vector) {
+        raw_vector_->Deserialize(buffer_reader);
+    } else if (raw_vector_size > 0) {
         auto raw_vector_begin = buffer_reader.GetCursor();
         if (create_new_raw_vector_) {
             raw_vector_->Deserialize(buffer_reader);
@@ -952,7 +957,7 @@ Pyramid::Deserialize(StreamReader& reader) {
     }
 
     resize(max_capacity);
-    if (create_new_raw_vector_ && raw_vector_size == 0) {
+    if (create_new_raw_vector_ && not has_legacy_raw_vector && raw_vector_size == 0) {
         restore_raw_vector_from_source();
     }
     this->current_memory_usage_ = this->CalSerializeSize();
@@ -973,7 +978,7 @@ Pyramid::ExportModel(const IndexCommonParam& param) const {
         }
         this->precise_codes_->ExportModel(index->precise_codes_);
     }
-    if (raw_vector_ != nullptr) {
+    if (create_new_raw_vector_) {
         if (index->raw_vector_ == nullptr) {
             throw VsagException(ErrorType::INTERNAL_ERROR,
                                 "Export model's pyramid raw vector is empty");
