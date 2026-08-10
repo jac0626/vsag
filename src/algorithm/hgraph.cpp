@@ -1457,9 +1457,52 @@ HGraph::Serialize(StreamWriter& writer) const {
 }
 
 void
+HGraph::Deserialize(std::istream& in_stream) {
+    if (not this->use_old_serial_format_) {
+        InnerIndexInterface::Deserialize(in_stream);
+        return;
+    }
+
+    try {
+        uint64_t cursor = 0;
+        auto read_func = [&](uint64_t offset, uint64_t size, void* data) {
+            if (offset != cursor) {
+                throw VsagException(ErrorType::UNSUPPORTED_INDEX_OPERATION,
+                                    "v0.14 sequential stream does not support seek");
+            }
+            in_stream.read(static_cast<char*>(data), static_cast<int64_t>(size));
+            if (in_stream.gcount() != static_cast<int64_t>(size)) {
+                throw VsagException(
+                    ErrorType::READ_ERROR,
+                    fmt::format("Attempted to read: {} bytes. Remaining content size: {} bytes.",
+                                size,
+                                in_stream.gcount()));
+            }
+            cursor += size;
+        };
+        ReadFuncStreamReader reader(read_func, 0, 0);
+        this->deserialize(reader, true);
+        if (reader.GetCursor() != cursor) {
+            throw VsagException(ErrorType::UNSUPPORTED_INDEX_OPERATION,
+                                "v0.14 sequential stream does not support seek");
+        }
+    } catch (const std::bad_alloc& e) {
+        throw VsagException(ErrorType::NO_ENOUGH_MEMORY, "failed to Deserialize: ", e.what());
+    }
+}
+
+void
 HGraph::Deserialize(StreamReader& reader) {
-    // try to deserialize footer (only in new version)
-    auto footer = Footer::Parse(reader);
+    this->deserialize(reader, false);
+}
+
+void
+HGraph::deserialize(StreamReader& reader, bool force_v0_14) {
+    FooterPtr footer = nullptr;
+    if (not force_v0_14) {
+        // try to deserialize footer (only in new version)
+        footer = Footer::Parse(reader);
+    }
 
     if (footer == nullptr) {  // old format, DON'T EDIT, remove in the future
         logger::debug("parse with v0.14 version format");
