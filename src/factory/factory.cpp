@@ -107,16 +107,13 @@ void
 set_streaming_io_override(JsonType& index_param,
                           const char* block_key,
                           const char* io_type,
-                          const char* file_path,
-                          bool allow_reader_io = true) {
+                          const char* file_path) {
     if (!index_param.Contains(block_key)) {
         return;
     }
     if (io_type != nullptr) {
         CHECK_ARGUMENT(is_valid_streaming_io_type(io_type),
                        std::string("unsupported streaming load io_type: ") + io_type);
-        CHECK_ARGUMENT(allow_reader_io || std::string_view(io_type) != IO_TYPE_VALUE_READER_IO,
-                       "reader_io is not supported for this streaming index");
         index_param[block_key][IO_PARAMS_KEY][TYPE_KEY].SetString(io_type);
     }
     if (file_path != nullptr) {
@@ -125,17 +122,14 @@ set_streaming_io_override(JsonType& index_param,
 }
 
 void
-apply_flatten_streaming_load_parameters(JsonType& index_param,
-                                        const std::string& parameters,
-                                        bool allow_reader_io) {
+apply_hgraph_streaming_load_parameters(JsonType& index_param, const std::string& parameters) {
     auto load_json = JsonType::Parse(parameters.empty() ? "{}" : parameters);
     if (load_json.Contains(HGRAPH_BASE_IO_TYPE)) {
         require_string_load_parameter(load_json, HGRAPH_BASE_IO_TYPE);
         set_streaming_io_override(index_param,
                                   BASE_CODES_KEY,
                                   load_json[HGRAPH_BASE_IO_TYPE].GetString().c_str(),
-                                  nullptr,
-                                  allow_reader_io);
+                                  nullptr);
     }
     if (load_json.Contains(HGRAPH_BASE_FILE_PATH)) {
         require_string_load_parameter(load_json, HGRAPH_BASE_FILE_PATH);
@@ -149,8 +143,7 @@ apply_flatten_streaming_load_parameters(JsonType& index_param,
         set_streaming_io_override(index_param,
                                   PRECISE_CODES_KEY,
                                   load_json[HGRAPH_PRECISE_IO_TYPE].GetString().c_str(),
-                                  nullptr,
-                                  allow_reader_io);
+                                  nullptr);
     }
     if (load_json.Contains(HGRAPH_PRECISE_FILE_PATH)) {
         require_string_load_parameter(load_json, HGRAPH_PRECISE_FILE_PATH);
@@ -180,8 +173,7 @@ apply_flatten_streaming_load_parameters(JsonType& index_param,
         set_streaming_io_override(index_param,
                                   RAW_VECTOR_KEY,
                                   load_json[RAW_VECTOR_IO_TYPE].GetString().c_str(),
-                                  nullptr,
-                                  allow_reader_io);
+                                  nullptr);
     }
     if (load_json.Contains(RAW_VECTOR_FILE_PATH)) {
         require_string_load_parameter(load_json, RAW_VECTOR_FILE_PATH);
@@ -249,14 +241,13 @@ create_streaming_index_from_metadata(const MetadataPtr& metadata,
         return create_streaming_index<BruteForce, BruteForceParameter>(index_param, common_param);
     }
     if (index_name == INDEX_HGRAPH) {
-        apply_flatten_streaming_load_parameters(index_param, parameters, true);
+        apply_hgraph_streaming_load_parameters(index_param, parameters);
         return create_streaming_index<HGraph, HGraphParameter>(index_param, common_param);
     }
     if (index_name == INDEX_IVF) {
         return create_streaming_index<IVF, IVFParameter>(index_param, common_param);
     }
     if (index_name == INDEX_PYRAMID) {
-        apply_flatten_streaming_load_parameters(index_param, parameters, false);
         return create_streaming_index<Pyramid, PyramidParameters>(index_param, common_param);
     }
     if (index_name == INDEX_SINDI) {
