@@ -115,17 +115,6 @@ IVFParameter::FromJson(const JsonType& json) {
     }
 }
 
-bool
-IVFParameter::UsesDiskBackedPreciseBucket() const {
-    if (this->precise_codes_layout != PRECISE_CODES_LAYOUT_VALUE_BUCKET ||
-        this->precise_codes_param == nullptr ||
-        this->precise_codes_param->io_parameter == nullptr) {
-        return false;
-    }
-    const auto io_type = this->precise_codes_param->io_parameter->GetTypeName();
-    return io_type != IO_TYPE_VALUE_MEMORY_IO && io_type != IO_TYPE_VALUE_BLOCK_MEMORY_IO;
-}
-
 JsonType
 IVFParameter::ToJson() const {
     JsonType json = InnerIndexParameter::ToJson();

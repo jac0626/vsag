@@ -95,10 +95,6 @@ auto result = index->KnnSearch(
 精排量化。bucket 布局当前要求 `buckets_per_data: 1`；一个向量分配到多个 bucket
 的配置会被拒绝。
 
-对于文件型 bucket 精排 codes，暂不支持 `Clone`、`ExportModel`、`Merge` 和静态
-`Index::Load`，因为这些操作目前无法为目标索引指定独立文件。若需从 streaming 数据恢复磁盘索引，
-请使用不同的 `precise_file_path` 创建目标 IVF，然后调用 `DeserializeStreaming`。
-
 `buckets_count` 的经验值一般为 `sqrt(N)` ~ `4 * sqrt(N)`，其中 `N` 是语料规模。
 
 ## 检索参数

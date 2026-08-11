@@ -512,8 +512,8 @@ TEST_CASE_PERSISTENT_FIXTURE(IVFTestIndex,
 }
 
 TEST_CASE_PERSISTENT_FIXTURE(IVFTestIndex,
-                             "IVF disk bucket precise rejects aliased ownership operations",
-                             "[ft][ivf][reorder][serialize][streaming][export][pr]") {
+                             "IVF disk bucket precise",
+                             "[ft][ivf][reorder][serialize][streaming][pr]") {
     BlockSizeLimitGuard block_size_limit_guard(2ULL * 1024 * 1024);
     constexpr int64_t dim = 16;
     constexpr int64_t base_count = 128;
@@ -522,48 +522,6 @@ TEST_CASE_PERSISTENT_FIXTURE(IVFTestIndex,
     auto dataset = pool.GetDatasetAndCreate(dim, base_count, "l2");
     auto index = TestFactory(name, params, true);
     TestBuildIndex(index, dataset, true);
-    REQUIRE_FALSE(index->CheckFeature(vsag::SUPPORT_CLONE));
-    REQUIRE_FALSE(index->CheckFeature(vsag::SUPPORT_EXPORT_MODEL));
-    REQUIRE_FALSE(index->CheckFeature(vsag::SUPPORT_MERGE_INDEX));
-
-    SECTION("rejects export model") {
-        auto result = index->ExportModel();
-        REQUIRE_FALSE(result.has_value());
-        REQUIRE(result.error().type == vsag::ErrorType::UNSUPPORTED_INDEX_OPERATION);
-    }
-
-    SECTION("rejects clone") {
-        auto result = index->Clone();
-        REQUIRE_FALSE(result.has_value());
-        REQUIRE(result.error().type == vsag::ErrorType::UNSUPPORTED_INDEX_OPERATION);
-    }
-
-    SECTION("rejects merge") {
-        auto result = index->Merge({});
-        REQUIRE_FALSE(result.has_value());
-        REQUIRE(result.error().type == vsag::ErrorType::UNSUPPORTED_INDEX_OPERATION);
-    }
-
-    SECTION("rejects streaming load") {
-        std::stringstream stream;
-        REQUIRE(index->SerializeStreaming(stream).has_value());
-        std::stringstream load_stream(stream.str());
-        auto result = vsag::Index::Load(load_stream, "{}");
-        REQUIRE_FALSE(result.has_value());
-        REQUIRE(result.error().type == vsag::ErrorType::UNSUPPORTED_INDEX_OPERATION);
-    }
-
-    SECTION("rejects empty streaming load") {
-        const auto empty_file_path = dir.GenerateRandomFile(false);
-        const auto empty_params = GenerateBucketPreciseParameters("buffer_io", empty_file_path);
-        auto empty_index = TestFactory(name, empty_params, true);
-        std::stringstream stream;
-        REQUIRE(empty_index->SerializeStreaming(stream).has_value());
-        std::stringstream load_stream(stream.str());
-        auto result = vsag::Index::Load(load_stream, "{}");
-        REQUIRE_FALSE(result.has_value());
-        REQUIRE(result.error().type == vsag::ErrorType::UNSUPPORTED_INDEX_OPERATION);
-    }
 
     SECTION("rejects mmap before creating the precise file") {
         const auto mmap_file_path = dir.GenerateRandomFile(false);

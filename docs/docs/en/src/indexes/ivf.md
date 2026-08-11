@@ -101,11 +101,6 @@ Build-time parameters live under `index_param`. See
 quantization are not supported. The bucket layout currently requires
 `buckets_per_data: 1`; configurations that assign one vector to multiple buckets are rejected.
 
-For file-backed bucket-aligned precise codes, `Clone`, `ExportModel`, `Merge`, and static
-`Index::Load` are rejected because those operations cannot yet assign an independent target
-file. To restore a streaming index on disk, create the destination IVF with a different
-`precise_file_path` and call `DeserializeStreaming`.
-
 A rule of thumb for `buckets_count` is `sqrt(N)` to `4 * sqrt(N)` where `N` is the
 corpus size.
 
