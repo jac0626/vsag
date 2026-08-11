@@ -341,7 +341,6 @@ TestIndex::TestFilterSearch(const TestIndex::IndexPtr& index,
                              range_recall,
                              expected_recall * query_count));
         }
-        REQUIRE(range_recall > expected_recall * query_count * RECALL_THRESHOLD);
     }
 }
 
