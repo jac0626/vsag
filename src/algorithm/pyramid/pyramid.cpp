@@ -1710,8 +1710,10 @@ std::string
 Pyramid::AnalyzeIndexBySearch(const SearchRequest& request) {
     CHECK_ARGUMENT(request.mode_ == SearchMode::KNN_SEARCH,
                    "Pyramid AnalyzeIndexBySearch only supports KNN search");
-    CHECK_ARGUMENT(not request.enable_filter_ && not request.enable_bitset_filter_ &&
-                       not request.enable_attribute_filter_ && not request.enable_iterator_search_,
+    const bool is_supported_search =
+        not request.enable_filter_ && not request.enable_bitset_filter_ &&
+        not request.enable_attribute_filter_ && not request.enable_iterator_search_;
+    CHECK_ARGUMENT(is_supported_search,
                    "Pyramid AnalyzeIndexBySearch does not support filtered or iterator search");
     CHECK_ARGUMENT(request.topk_ > 0,
                    fmt::format("topk({}) must be greater than 0", request.topk_));
