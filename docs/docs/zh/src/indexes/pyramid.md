@@ -288,8 +288,11 @@ new_index->Deserialize(binary_set);
 如果不需要按路径限定查询范围，[HGraph](hgraph.md) 更简洁，性能通常也更高。
 
 可以通过[索引分析](../resources/analyze_index.md)检查 Pyramid 的树结构、子索引质量、
-`GetStats()` 输出的 base 采样召回率和重复比例。Pyramid 目前不通过
-`AnalyzeIndexBySearch` 提供查询驱动指标。
+`GetStats()` 输出的 base 采样召回率和重复比例。`AnalyzeIndexBySearch` 还会输出按路径限定的
+query 召回率、距离、耗时，以及开启 reorder 时的量化指标。query 数据集必须包含与
+`KnnSearch` 相同的默认或命名 hierarchy 路径；批量数据集在需要或提供路径时，应为每条 query
+提供一条路径。`analyze_index` 工具当前无法从 dense query 文件加载 hierarchy 路径，因此
+按路径执行动态分析时请使用 C++ 接口。
 
 ## 标记删除
 

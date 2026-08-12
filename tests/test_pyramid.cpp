@@ -1109,6 +1109,57 @@ TEST_CASE_PERSISTENT_FIXTURE(fixtures::PyramidTestIndex,
     }
 }
 
+TEST_CASE_PERSISTENT_FIXTURE(fixtures::PyramidTestIndex,
+                             "Pyramid AnalyzeIndexBySearch honors paths and removals",
+                             "[ft][pyramid][analyzer]") {
+    PyramidParam pyramid_param;
+    pyramid_param.no_build_levels = {0, 1, 2};
+
+    auto index =
+        TestFactory("pyramid", GeneratePyramidBuildParametersString("l2", 4, pyramid_param), true);
+    auto base = MakeDenseDataset({{{10.0F, 0.0F, 0.0F, 0.0F}},
+                                  {{1.0F, 0.0F, 0.0F, 0.0F}},
+                                  {{0.0F, 0.0F, 0.0F, 0.0F}},
+                                  {{100.0F, 0.0F, 0.0F, 0.0F}}},
+                                 {101, 102, 201, 202},
+                                 {"root/a/leaf", "root/a/leaf", "root/b/leaf", "root/b/leaf"});
+    REQUIRE(index->Build(base).has_value());
+
+    // The first query has an exact match in the other path. A global ground truth would therefore
+    // report only 50% recall for this batch, while path-scoped ground truth reports 100%.
+    auto query = MakeDenseDataset({{{0.0F, 0.0F, 0.0F, 0.0F}}, {{100.0F, 0.0F, 0.0F, 0.0F}}},
+                                  {0, 1},
+                                  {"root/a/leaf", "root/b/leaf"});
+    vsag::SearchRequest request;
+    request.query_ = query;
+    request.topk_ = 1;
+    request.params_str_ = GeneratePyramidSearchParametersString(20);
+
+    const auto analyze = [&]() {
+        const auto stats_string = index->AnalyzeIndexBySearch(request);
+        REQUIRE_FALSE(stats_string.empty());
+        auto stats = nlohmann::json::parse(stats_string);
+        REQUIRE(stats.contains("avg_distance_query"));
+        REQUIRE(stats.contains("recall_query"));
+        REQUIRE(stats.contains("time_cost_query"));
+        return stats;
+    };
+
+    const auto stats_before_remove = analyze();
+    REQUIRE(std::abs(stats_before_remove["recall_query"].get<float>() - 1.0F) <= 1e-6F);
+    REQUIRE(std::abs(stats_before_remove["avg_distance_query"].get<float>() - 0.5F) <= 1e-6F);
+
+    auto remove_result = index->Remove(std::vector<int64_t>{102}, vsag::RemoveMode::MARK_REMOVE);
+    REQUIRE(remove_result.has_value());
+    REQUIRE(remove_result.value() == 1);
+
+    // The removed vector was the nearest live candidate in root/a/leaf before removal. Ground
+    // truth must now use id 101, just as the actual path-scoped search does.
+    const auto stats_after_remove = analyze();
+    REQUIRE(std::abs(stats_after_remove["recall_query"].get<float>() - 1.0F) <= 1e-6F);
+    REQUIRE(std::abs(stats_after_remove["avg_distance_query"].get<float>() - 50.0F) <= 1e-6F);
+}
+
 // ============================================================================
 // Multi-Hierarchy Tests
 // ============================================================================
@@ -1636,6 +1687,80 @@ TEST_CASE("Multi-Hierarchy: Per-hierarchy build params take effect",
     auto cat_tech = f.search_ids(index.value(), "cat", "tech");
     REQUIRE(cat_tech.count(100) == 1);
     REQUIRE(cat_tech.count(101) == 1);
+}
+
+TEST_CASE("Multi-Hierarchy: AnalyzeIndexBySearch honors named query paths",
+          "[ft][pyramid][multi_hierarchy][analyzer]") {
+    MultiHierarchyFixture f;
+    auto index = vsag::Factory::CreateIndex("pyramid", f.build_param("odescent"));
+    REQUIRE(index.has_value());
+
+    auto* base_vectors = new float[16]{0.0F,
+                                       0.0F,
+                                       0.0F,
+                                       0.0F,
+                                       10.0F,
+                                       0.0F,
+                                       0.0F,
+                                       0.0F,
+                                       20.0F,
+                                       0.0F,
+                                       0.0F,
+                                       0.0F,
+                                       100.0F,
+                                       0.0F,
+                                       0.0F,
+                                       0.0F};
+    auto* base_ids = new int64_t[4]{100, 101, 102, 103};
+    auto* site_paths = new std::string[4]{"z", "x", "y", "z"};
+    auto* cat_paths = new std::string[4]{"z/zero", "y/leaf", "x/leaf", "z/hundred"};
+    auto base = vsag::Dataset::Make();
+    base->NumElements(4)
+        ->Dim(4)
+        ->Float32Vectors(base_vectors)
+        ->Ids(base_ids)
+        ->Paths("site", site_paths)
+        ->Paths("cat", cat_paths)
+        ->Owner(true);
+    REQUIRE(index.value()->Build(base).has_value());
+
+    auto* query_vectors = new float[8]{0.0F, 0.0F, 0.0F, 0.0F, 100.0F, 0.0F, 0.0F, 0.0F};
+    auto* query_paths = new std::string[2]{"x", "y"};
+    auto query = vsag::Dataset::Make();
+    query->NumElements(2)
+        ->Dim(4)
+        ->Float32Vectors(query_vectors)
+        ->Paths("cat", query_paths)
+        ->Owner(true);
+
+    vsag::SearchRequest request;
+    request.query_ = query;
+    request.topk_ = 1;
+    request.params_str_ = R"({"pyramid":{"ef_search":20,"hierarchies":["cat"]}})";
+
+    // Global GT is ids 100/103. If x/y were applied to site, its GT would be 101/102, while the
+    // selected cat hierarchy has GT 102/101. Only cat distances 400/8100 yield this average.
+    const auto stats = nlohmann::json::parse(index.value()->AnalyzeIndexBySearch(request));
+    REQUIRE(std::abs(stats["recall_query"].get<float>() - 1.0F) <= 1e-6F);
+    REQUIRE(std::abs(stats["avg_distance_query"].get<float>() - 4250.0F) <= 1e-6F);
+}
+
+TEST_CASE("Multi-Hierarchy: AnalyzeIndexBySearch topk one has finite quantization metrics",
+          "[ft][pyramid][multi_hierarchy][analyzer]") {
+    MultiHierarchyFixture f;
+    auto index = vsag::Factory::CreateIndex("pyramid", f.build_param("nsw", true));
+    REQUIRE(index.has_value());
+    REQUIRE(index.value()->Build(f.make_base()).has_value());
+
+    vsag::SearchRequest request;
+    request.query_ = f.make_query("cat", "tech/ai");
+    request.topk_ = 1;
+    request.params_str_ = R"({"pyramid":{"ef_search":20,"hierarchies":["cat"]}})";
+
+    const auto stats = nlohmann::json::parse(index.value()->AnalyzeIndexBySearch(request));
+    REQUIRE(std::isfinite(stats["quantization_error_query"].get<float>()));
+    REQUIRE(std::isfinite(stats["quantization_inversion_ratio_query"].get<float>()));
+    REQUIRE(stats["quantization_inversion_ratio_query"].get<float>() == 0.0F);
 }
 
 TEST_CASE("Multi-Hierarchy: Analyzer output format - multi hierarchy",

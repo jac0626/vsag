@@ -19,6 +19,7 @@
 
 #include <chrono>
 #include <exception>
+#include <limits>
 
 #include "algorithm/inner_index_interface.h"
 #include "analyzer/analyzer.h"
@@ -1703,6 +1704,25 @@ Pyramid::GetStats() const {
     auto analyzer = CreateAnalyzer(this, analyzer_param);
     JsonType stats = analyzer->GetStats();
     return stats.Dump(4);
+}
+
+std::string
+Pyramid::AnalyzeIndexBySearch(const SearchRequest& request) {
+    CHECK_ARGUMENT(request.mode_ == SearchMode::KNN_SEARCH,
+                   "Pyramid AnalyzeIndexBySearch only supports KNN search");
+    CHECK_ARGUMENT(not request.enable_filter_ && not request.enable_bitset_filter_ &&
+                       not request.enable_attribute_filter_ && not request.enable_iterator_search_,
+                   "Pyramid AnalyzeIndexBySearch does not support filtered or iterator search");
+    CHECK_ARGUMENT(request.topk_ > 0,
+                   fmt::format("topk({}) must be greater than 0", request.topk_));
+    CHECK_ARGUMENT(request.topk_ <= static_cast<int64_t>(std::numeric_limits<uint32_t>::max()),
+                   fmt::format("topk({}) exceeds the supported maximum", request.topk_));
+    CHECK_ARGUMENT(base_codes_->TotalCount() > 0,
+                   "Pyramid AnalyzeIndexBySearch requires a built index");
+    AnalyzerParam analyzer_param(allocator_);
+    analyzer_param.topk = request.topk_;
+    auto analyzer = CreateAnalyzer(this, analyzer_param);
+    return analyzer->AnalyzeIndexBySearch(request).Dump(4);
 }
 
 }  // namespace vsag

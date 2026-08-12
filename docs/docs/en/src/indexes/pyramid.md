@@ -303,8 +303,12 @@ If you don't need path-based scoping, [HGraph](hgraph.md) is simpler and general
 faster.
 
 Use [Index Analysis](../resources/analyze_index.md) to inspect Pyramid tree structure,
-per-subindex quality, sampled base recall, and duplicate ratios reported by `GetStats()`. Pyramid
-does not currently expose query-driven metrics through `AnalyzeIndexBySearch`.
+per-subindex quality, sampled base recall, and duplicate ratios reported by `GetStats()`.
+`AnalyzeIndexBySearch` also reports path-scoped query recall, distance, latency, and, when reorder
+is enabled, quantization metrics. Its query dataset must carry the same default or named-hierarchy
+paths required by `KnnSearch`; when paths are required or supplied for a batched dataset, provide
+one path per query. The `analyze_index` tool cannot currently load hierarchy paths from its dense
+query file, so use the C++ API for path-scoped dynamic analysis.
 
 ## Mark remove
 

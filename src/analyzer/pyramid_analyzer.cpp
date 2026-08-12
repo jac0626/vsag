@@ -16,6 +16,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <random>
 
 #include "impl/heap/standard_heap.h"
@@ -99,36 +100,80 @@ PyramidAnalyzer::AnalyzeIndexBySearch(const SearchRequest& request) {
     }
 
     auto query = request.query_;
-    auto query_num = query->GetNumElements();
+    const auto query_num = query->GetNumElements();
     const float* query_vectors = query->GetFloat32Vectors();
-    if (query_vectors == nullptr || query_num == 0) {
+    if (query_num == 0) {
         return stats;
     }
+    CHECK_ARGUMENT(query_num > 0, fmt::format("query num({}) must be positive", query_num));
+    CHECK_ARGUMENT(static_cast<uint64_t>(query_num) <= std::numeric_limits<uint32_t>::max(),
+                   fmt::format("query num({}) exceeds the supported maximum", query_num));
+    CHECK_ARGUMENT(
+        query->GetDim() == dim_,
+        fmt::format("query.dim({}) must be equal to index.dim({})", query->GetDim(), dim_));
+    CHECK_ARGUMENT(query_vectors != nullptr, "query vectors is required");
+    const auto query_count = static_cast<uint32_t>(query_num);
+
+    auto parsed_param = PyramidSearchParameters::FromJson(request.params_str_);
+    CHECK_ARGUMENT(parsed_param.hierarchy_op == PyramidSearchParameters::HierarchyOp::SINGLE,
+                   "multi-hierarchy search (union/intersection) is not yet implemented");
+    const std::string hierarchy_name =
+        parsed_param.hierarchies.empty() ? "" : parsed_param.hierarchies[0];
+    auto h_iter = pyramid_->hierarchies_.find(hierarchy_name);
+    CHECK_ARGUMENT(h_iter != pyramid_->hierarchies_.end(),
+                   fmt::format("unknown hierarchy name: '{}'", hierarchy_name));
+
+    const auto* query_paths = query->GetPaths(hierarchy_name);
+    if (query_paths == nullptr) {
+        query_paths = query->GetPaths();
+    }
+    // NOLINTNEXTLINE(readability-simplify-boolean-expr)
+    CHECK_ARGUMENT(
+        query_paths != nullptr || h_iter->second->root->status_ != IndexNode::Status::NO_INDEX,
+        "query_path is required when level0 is not built");
 
     Vector<InnerIdType> query_ids(allocator_);
-    query_ids.resize(query_num);
+    query_ids.resize(query_count);
     std::iota(query_ids.begin(), query_ids.end(), 0);
 
     Vector<float> query_datas(allocator_);
-    query_datas.resize(static_cast<size_t>(query_num) * dim_);
-    std::memcpy(query_datas.data(), query_vectors, query_num * dim_ * sizeof(float));
+    query_datas.resize(static_cast<uint64_t>(query_count) * dim_);
+    std::memcpy(query_datas.data(),
+                query_vectors,
+                static_cast<uint64_t>(query_count) * dim_ * sizeof(float));
+
+    UnorderedSet<InnerIdType> deleted_ids(allocator_);
+    for (const auto id : pyramid_->label_table_->GetAllDeletedIds()) {
+        deleted_ids.insert(id);
+    }
 
     UnorderedMap<InnerIdType, DistHeapPtr> query_ground_truth(allocator_);
-    calculate_groundtruth(query_datas, query_ids, query_ground_truth, query_num);
+    calculate_groundtruth(query_datas,
+                          query_ids,
+                          query_ground_truth,
+                          query_count,
+                          hierarchy_name,
+                          query_paths,
+                          deleted_ids);
 
     UnorderedMap<InnerIdType, Vector<LabelType>> query_search_result(allocator_);
-    float query_time_ms = calculate_search_result(
-        query_datas, query_ids, query_search_result, request.params_str_, query_num);
+    float query_time_ms = calculate_search_result(query_datas,
+                                                  query_ids,
+                                                  query_search_result,
+                                                  request.params_str_,
+                                                  query_count,
+                                                  hierarchy_name,
+                                                  query_paths);
 
     stats["avg_distance_query"].SetFloat(
         get_avg_distance_from_groundtruth(query_ids, query_ground_truth));
-    stats["recall_query"].SetFloat(
-        get_search_recall(query_num, query_ids, query_ground_truth, query_search_result));
+    stats["recall_query"].SetFloat(get_search_recall(
+        query_count, query_datas, query_ids, query_ground_truth, query_search_result));
     stats["time_cost_query"].SetFloat(query_time_ms);
 
     if (pyramid_->use_reorder_) {
         auto [q_error, q_inversion] =
-            calculate_quantization_result(query_datas, query_ids, query_search_result, query_num);
+            calculate_quantization_result(query_datas, query_ids, query_search_result, query_count);
         stats["quantization_error_query"].SetFloat(q_error);
         stats["quantization_inversion_ratio_query"].SetFloat(q_inversion);
     }
@@ -514,32 +559,38 @@ void
 PyramidAnalyzer::calculate_groundtruth(const Vector<float>& sample_datas,
                                        const Vector<InnerIdType>& sample_ids,
                                        UnorderedMap<InnerIdType, DistHeapPtr>& ground_truth,
-                                       uint32_t sample_size) {
+                                       uint32_t sample_size,
+                                       const std::string& hierarchy_name,
+                                       const std::string* query_paths,
+                                       const UnorderedSet<InnerIdType>& deleted_ids) {
     if (not ground_truth.empty()) {
         return;
     }
 
-    Vector<float> distances_array(this->total_count_, allocator_);
-    Vector<InnerIdType> ids_array(this->total_count_, allocator_);
-    std::iota(ids_array.begin(), ids_array.end(), 0);
-
-    auto codes = pyramid_->has_precise_reorder() ? pyramid_->precise_codes_ : pyramid_->base_codes_;
+    auto codes = pyramid_->raw_vector_ != nullptr
+                     ? pyramid_->raw_vector_
+                     : (pyramid_->use_reorder_ ? pyramid_->precise_codes_ : pyramid_->base_codes_);
 
     for (uint32_t i = 0; i < sample_size; ++i) {
         if (i % 10 == 0) {
             logger::info("[calculate_groundtruth] Processing sample {} of {}", i, sample_size);
         }
 
+        const auto* query_path = query_paths == nullptr ? nullptr : query_paths + i;
+        auto ids_array = collect_search_scope_ids(hierarchy_name, query_path, deleted_ids);
+        Vector<float> distances_array(ids_array.size(), allocator_);
         auto comp = codes->FactoryComputer(sample_datas.data() + static_cast<size_t>(i) * dim_);
-        codes->Query(distances_array.data(), comp, ids_array.data(), this->total_count_);
+        if (not ids_array.empty()) {
+            codes->Query(distances_array.data(), comp, ids_array.data(), ids_array.size());
+        }
 
         DistHeapPtr gt = std::make_shared<StandardHeap<true, false>>(allocator_, -1);
-        for (uint32_t j = 0; j < this->total_count_; ++j) {
+        for (uint64_t j = 0; j < ids_array.size(); ++j) {
             float dist = distances_array[j];
             if (gt->Size() < topk_) {
-                gt->Push({dist, j});
+                gt->Push({dist, ids_array[j]});
             } else if (dist < gt->Top().first) {
-                gt->Push({dist, j});
+                gt->Push({dist, ids_array[j]});
                 gt->Pop();
             }
         }
@@ -547,6 +598,76 @@ PyramidAnalyzer::calculate_groundtruth(const Vector<float>& sample_datas,
     }
 
     logger::info("[calculate_groundtruth] Completed for {} samples", sample_size);
+}
+
+Vector<InnerIdType>
+PyramidAnalyzer::collect_search_scope_ids(const std::string& hierarchy_name,
+                                          const std::string* query_path,
+                                          const UnorderedSet<InnerIdType>& deleted_ids) {
+    Vector<InnerIdType> ids(allocator_);
+    UnorderedSet<InnerIdType> seen_ids(allocator_);
+    const auto& hierarchy = *pyramid_->hierarchies_.at(hierarchy_name);
+
+    if (query_path == nullptr) {
+        collect_searchable_node_ids(hierarchy.root.get(), deleted_ids, seen_ids, ids);
+        return ids;
+    }
+
+    for (const auto& one_path : Pyramid::parse_path(*query_path)) {
+        const IndexNode* node = hierarchy.root.get();
+        for (const auto& item : one_path) {
+            std::shared_lock lock(node->mutex_);
+            auto child = node->children_.find(item);
+            if (child == node->children_.end()) {
+                node = nullptr;
+                break;
+            }
+            node = child->second.get();
+        }
+        if (node != nullptr) {
+            collect_searchable_node_ids(node, deleted_ids, seen_ids, ids);
+        }
+    }
+    return ids;
+}
+
+void
+PyramidAnalyzer::collect_searchable_node_ids(const IndexNode* node,
+                                             const UnorderedSet<InnerIdType>& deleted_ids,
+                                             UnorderedSet<InnerIdType>& seen_ids,
+                                             Vector<InnerIdType>& ids) {
+    if (node == nullptr) {
+        return;
+    }
+
+    std::shared_lock lock(node->mutex_);
+    if (node->status_ != IndexNode::Status::NO_INDEX) {
+        Vector<InnerIdType> node_ids(allocator_);
+        if (node->status_ == IndexNode::Status::FLAT) {
+            node_ids = node->ids_;
+        } else if (node->graph_ != nullptr) {
+            node_ids = node->graph_->GetIds();
+        }
+        for (const auto id : node_ids) {
+            if (deleted_ids.find(id) == deleted_ids.end() && seen_ids.insert(id).second) {
+                ids.push_back(id);
+            }
+            if (node->graph_ == nullptr) {
+                continue;
+            }
+            for (const auto duplicate_id : node->graph_->GetDuplicateIds(id)) {
+                if (deleted_ids.find(duplicate_id) == deleted_ids.end() &&
+                    seen_ids.insert(duplicate_id).second) {
+                    ids.push_back(duplicate_id);
+                }
+            }
+        }
+        return;
+    }
+
+    for (const auto& [key, child] : node->children_) {
+        collect_searchable_node_ids(child.get(), deleted_ids, seen_ids, ids);
+    }
 }
 
 float
@@ -590,6 +711,8 @@ PyramidAnalyzer::calculate_quantization_result(
 
     float total_quantization_error = 0.0F;
     float total_quantization_inversion_count_rate = 0.0F;
+    uint32_t valid_sample_count = 0;
+    uint32_t valid_inversion_sample_count = 0;
 
     for (uint32_t i = 0; i < sample_size; ++i) {
         auto id = sample_ids[i];
@@ -598,30 +721,45 @@ PyramidAnalyzer::calculate_quantization_result(
         }
 
         const auto& result = search_result.at(id);
-        if (result.empty()) {
+        Vector<LabelType> unique_result(allocator_);
+        UnorderedSet<LabelType> seen_labels(allocator_);
+        unique_result.reserve(std::min<uint64_t>(result.size(), topk_));
+        for (const auto label : result) {
+            if (seen_labels.insert(label).second) {
+                unique_result.push_back(label);
+                if (unique_result.size() == topk_) {
+                    break;
+                }
+            }
+        }
+        if (unique_result.empty()) {
             continue;
         }
 
-        auto result_size = std::min(static_cast<uint32_t>(result.size()), topk_);
-        Vector<LabelType> topk_labels(allocator_);
-        topk_labels.assign(result.begin(), result.begin() + result_size);
-
+        auto result_size = static_cast<uint32_t>(unique_result.size());
         auto base_result =
             pyramid_->CalcDistancesById(sample_datas.data() + static_cast<size_t>(i) * dim_,
-                                        topk_labels.data(),
-                                        static_cast<int64_t>(topk_labels.size()),
+                                        unique_result.data(),
+                                        result_size,
                                         false);
-        const auto* base_distance = base_result->GetDistances();
-
         auto precise_result =
             pyramid_->CalcDistancesById(sample_datas.data() + static_cast<size_t>(i) * dim_,
-                                        topk_labels.data(),
-                                        static_cast<int64_t>(topk_labels.size()),
+                                        unique_result.data(),
+                                        result_size,
                                         true);
+        if (base_result == nullptr || precise_result == nullptr) {
+            continue;
+        }
+        const auto* base_distance = base_result->GetDistances();
         const auto* precise_distance = precise_result->GetDistances();
+        if (base_distance == nullptr || precise_distance == nullptr) {
+            continue;
+        }
 
+        float sample_error = 0.0F;
         uint32_t inversion_count = 0;
         for (uint32_t j = 0; j < result_size; ++j) {
+            sample_error += std::abs(base_distance[j] - precise_distance[j]);
             for (uint32_t k = j + 1; k < result_size; ++k) {
                 if ((base_distance[j] - base_distance[k]) *
                         (precise_distance[j] - precise_distance[k]) <
@@ -631,13 +769,25 @@ PyramidAnalyzer::calculate_quantization_result(
             }
         }
 
-        total_quantization_inversion_count_rate +=
-            static_cast<float>(inversion_count) /
-            (static_cast<float>(result_size) * static_cast<float>(result_size - 1) / 2.0F);
+        total_quantization_error += sample_error / static_cast<float>(result_size);
+        if (result_size > 1) {
+            total_quantization_inversion_count_rate +=
+                static_cast<float>(inversion_count) /
+                (static_cast<float>(result_size) * static_cast<float>(result_size - 1) / 2.0F);
+            valid_inversion_sample_count++;
+        }
+        valid_sample_count++;
     }
 
-    return {total_quantization_error / static_cast<float>(sample_size),
-            total_quantization_inversion_count_rate / static_cast<float>(sample_size)};
+    if (valid_sample_count == 0) {
+        return {0.0F, 0.0F};
+    }
+    const float avg_inversion_count_rate =
+        valid_inversion_sample_count == 0 ? 0.0F
+                                          : total_quantization_inversion_count_rate /
+                                                static_cast<float>(valid_inversion_sample_count);
+    return {total_quantization_error / static_cast<float>(valid_sample_count),
+            avg_inversion_count_rate};
 }
 
 float
@@ -646,12 +796,15 @@ PyramidAnalyzer::calculate_search_result(
     const Vector<InnerIdType>& sample_ids,
     UnorderedMap<InnerIdType, Vector<LabelType>>& search_result,
     const std::string& search_param,
-    uint32_t sample_size) {
+    uint32_t sample_size,
+    const std::string& hierarchy_name,
+    const std::string* query_paths) {
     float total_time = 0.0F;
     auto start_time = std::chrono::steady_clock::now();
 
+    const uint32_t progress_interval = std::max<uint32_t>(1, sample_size / 10);
     for (uint32_t i = 0; i < sample_size; ++i) {
-        if (i % 1 == 0) {
+        if (i % progress_interval == 0) {
             auto elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
                                   std::chrono::steady_clock::now() - start_time)
                                   .count();
@@ -672,6 +825,9 @@ PyramidAnalyzer::calculate_search_result(
         auto query = Dataset::Make();
         query->Dim(dim_)->NumElements(1)->Owner(false)->Float32Vectors(
             sample_datas.data() + static_cast<size_t>(i) * dim_);
+        if (query_paths != nullptr) {
+            query->Paths(hierarchy_name, query_paths + i);
+        }
 
         double single_query_time = 0.0;
         DatasetPtr result = nullptr;
@@ -682,10 +838,13 @@ PyramidAnalyzer::calculate_search_result(
 
         if (result != nullptr) {
             auto result_size = result->GetDim();
-            const auto* ids = result->GetIds();
             Vector<LabelType> result_labels(allocator_);
-            result_labels.resize(result_size);
-            std::memcpy(result_labels.data(), ids, result_size * sizeof(LabelType));
+            if (result_size > 0) {
+                const auto* ids = result->GetIds();
+                CHECK_ARGUMENT(ids != nullptr, "Pyramid search result ids are missing");
+                result_labels.resize(result_size);
+                std::memcpy(result_labels.data(), ids, result_size * sizeof(LabelType));
+            }
             search_result.insert({sample_ids[i], result_labels});
         }
 
@@ -710,6 +869,7 @@ PyramidAnalyzer::calculate_search_result(
 float
 PyramidAnalyzer::get_search_recall(
     uint32_t sample_size,
+    const Vector<float>& sample_datas,
     const Vector<InnerIdType>& sample_ids,
     const UnorderedMap<InnerIdType, DistHeapPtr>& ground_truth,
     const UnorderedMap<InnerIdType, Vector<LabelType>>& search_result) {
@@ -737,9 +897,24 @@ PyramidAnalyzer::get_search_recall(
         }
 
         uint32_t hit_count = 0;
+        UnorderedSet<LabelType> seen_result_labels(allocator_);
+        const float distance_threshold = gt->Top().first;
+        const float tie_tolerance = 1e-6F * std::max(1.0F, std::abs(distance_threshold));
         for (const auto& label : sr) {
-            if (gt_set.find(label) != gt_set.end()) {
+            if (not seen_result_labels.insert(label).second) {
+                continue;
+            }
+            bool is_hit = gt_set.find(label) != gt_set.end();
+            if (not is_hit) {
+                const auto distance = pyramid_->CalcDistanceById(
+                    sample_datas.data() + static_cast<uint64_t>(i) * dim_, label, true);
+                is_hit = distance <= distance_threshold + tie_tolerance;
+            }
+            if (is_hit) {
                 hit_count++;
+                if (hit_count == gt->Size()) {
+                    break;
+                }
             }
         }
 

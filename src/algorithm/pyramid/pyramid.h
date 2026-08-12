@@ -242,6 +242,9 @@ public:
     std::string
     GetStats() const override;
 
+    std::string
+    AnalyzeIndexBySearch(const SearchRequest& request) override;
+
     void
     InitFeatures() override;
 
