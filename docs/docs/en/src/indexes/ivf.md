@@ -97,9 +97,27 @@ Build-time parameters live under `index_param`. See
 
 `precise_codes_layout: "bucket"` requires `use_reorder: true`. It supports
 `memory_io`, `block_memory_io`, `buffer_io`, `async_io`, and `uring_io`
-(when io_uring is available); `mmap_io`, `reader_io`, and `pqfs` precise
-quantization are not supported. The bucket layout currently requires
+(when io_uring is available).
+`mmap_io` and `pqfs` precise quantization are not supported. The bucket layout currently requires
 `buckets_per_data: 1`; configurations that assign one vector to multiple buckets are rejected.
+
+For both `flat` and `bucket` layouts, serialized precise codes can be loaded read-only from an
+external `Reader`. Pass `precise_io_type: "reader_io"` and `precise_reader` to `Index::Load`.
+The reader must expose exactly the `high_precision_codes` block payload for `flat`, or the
+`ivf_precise_bucket` block payload for `bucket`. `reader_io` uses the normal read cache when
+`precise_enable_read_cache` is enabled.
+
+```cpp
+vsag::LoadParameters load_parameters;
+load_parameters.Set("precise_io_type", "reader_io")
+    .Set("precise_enable_read_cache", true)
+    .Set("precise_cache_total_size", 256ULL * 1024 * 1024)
+    .SetReader("precise_reader", precise_codes_reader);
+auto loaded = vsag::Index::Load(stream, load_parameters).value();
+```
+
+`reader_io` is a load-and-query placement policy. Build the index with a writable precise IO,
+serialize it, and then use the external reader when loading it for search.
 
 A rule of thumb for `buckets_count` is `sqrt(N)` to `4 * sqrt(N)` where `N` is the
 corpus size.

@@ -229,13 +229,6 @@ private:
             ReasoningContext* reasoning_ctx = nullptr,
             const std::optional<float>& distance_threshold = std::nullopt) const;
 
-    DistHeapPtr
-    reorder_with_precise_bucket(const DistHeapPtr& input,
-                                const float* query,
-                                int64_t topk,
-                                QueryContext& ctx,
-                                const std::optional<float>& distance_threshold) const;
-
     void
     AttachReasoningReport(const DatasetPtr& dataset_results, ReasoningContext* reasoning_ctx) const;
 
@@ -276,7 +269,9 @@ private:
                         const LoadParameters& parameters) override;
 
     void
-    read_streaming_body(StreamReader& reader, const MetadataPtr& metadata);
+    read_streaming_body(StreamReader& reader,
+                        const MetadataPtr& metadata,
+                        const LoadParameters* load_parameters = nullptr);
 
     /// Recalculate and cache the memory-usage counter (throttled).
     void
@@ -298,7 +293,7 @@ private:
 
     FlattenInterfacePtr reorder_codes_{nullptr};  // legacy high-precision flat codes
     BucketInterfacePtr precise_bucket_{nullptr};  // high-precision codes mirroring basic buckets
-    ReorderInterfacePtr reorder_{nullptr};        // flat-code reordering engine
+    ReorderInterfacePtr reorder_{nullptr};        // high-precision reordering engine
 
     std::shared_ptr<SafeThreadPool> thread_pool_{nullptr};  // for parallel bucket scans
 

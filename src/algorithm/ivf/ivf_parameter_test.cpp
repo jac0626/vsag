@@ -269,6 +269,22 @@ TEST_CASE("IVF precise codes layout parameter", "[ut][IVFParameter]") {
     }
 }
 
+TEST_CASE("IVF rejects reader IO for base codes", "[ut][IVFParameter]") {
+    IVFDefaultParam index_param;
+    auto param_json = vsag::JsonType::Parse(generate_ivf_param(index_param));
+    param_json[vsag::BUCKET_PARAMS_KEY][vsag::IO_PARAMS_KEY][vsag::TYPE_KEY].SetString(
+        vsag::IO_TYPE_VALUE_READER_IO);
+
+    auto param = std::make_shared<vsag::IVFParameter>();
+    try {
+        param->FromJson(param_json);
+        FAIL("reader_io should be rejected for IVF base codes");
+    } catch (const vsag::VsagException& error) {
+        REQUIRE(error.error_.type == vsag::ErrorType::INVALID_ARGUMENT);
+        REQUIRE(error.error_.message == "IVF base codes do not support reader_io");
+    }
+}
+
 TEST_CASE("IVF maps RabitQ external parameters", "[ut][IVFParameter]") {
     auto external_param = vsag::JsonType::Parse(R"({
         "base_quantization_type": "rabitq",

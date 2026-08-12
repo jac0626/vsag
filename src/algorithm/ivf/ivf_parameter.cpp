@@ -69,6 +69,9 @@ IVFParameter::FromJson(const JsonType& json) {
                    fmt::format("ivf parameters must contains {}", BUCKET_PARAMS_KEY));
 
     this->bucket_param->FromJson(json[BUCKET_PARAMS_KEY]);
+    CHECK_ARGUMENT(this->bucket_param->io_parameter == nullptr ||
+                       this->bucket_param->io_parameter->GetTypeName() != IO_TYPE_VALUE_READER_IO,
+                   "IVF base codes do not support reader_io");
 
     this->ivf_partition_strategy_parameter = std::make_shared<IVFPartitionStrategyParameters>();
     if (json.Contains(IVF_PARTITION_STRATEGY_PARAMS_KEY)) {

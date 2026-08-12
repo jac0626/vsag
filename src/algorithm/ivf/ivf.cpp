@@ -37,11 +37,13 @@
 #include "impl/inner_search_param.h"
 #include "impl/pruning_strategy.h"
 #include "impl/reasoning/search_reasoning.h"
+#include "impl/reorder/bucket_reorder.h"
 #include "impl/reorder/flatten_reorder.h"
 #include "impl/searcher/basic_searcher.h"
 #include "index/index_impl.h"
 #include "index_feature_list.h"
 #include "inner_string_params.h"
+#include "io/reader_io/reader_io_parameter.h"
 #include "ivf_nearest_partition.h"
 #include "query_context.h"
 #include "simd/normalize.h"
@@ -445,6 +447,10 @@ IVF::IVF(const IVFParameterPtr& param, const IndexCommonParam& common_param)
                                                                   modified_common_param);
             CHECK_ARGUMENT(this->precise_bucket_ != nullptr,
                            "unsupported IO or quantizer for IVF precise bucket");
+            this->reorder_ = std::make_shared<BucketReorder>(
+                this->precise_bucket_,
+                [this](InnerIdType inner_id) { return this->get_location(inner_id); },
+                allocator_);
         } else {
             this->reorder_codes_ =
                 FlattenInterface::MakeInstance(param->precise_codes_param, modified_common_param);
@@ -604,6 +610,21 @@ IVF::Add(const DatasetPtr& base) {
     bool need_cal_memory_usage = false;
     {
         std::lock_guard lock(label_lookup_mutex_);
+        current_num = this->total_elements_;
+        if (precise_bucket_ != nullptr) {
+            if (num_element < 0 or current_num < 0) {
+                throw VsagException(ErrorType::INVALID_ARGUMENT,
+                                    "invalid IVF precise bucket element count");
+            }
+            const auto posting_count = static_cast<uint64_t>(num_element);
+            const auto current_count = static_cast<uint64_t>(current_num);
+            const auto max_inner_id =
+                static_cast<uint64_t>(std::numeric_limits<InnerIdType>::max());
+            if (posting_count > max_inner_id or current_count > max_inner_id - posting_count) {
+                throw VsagException(ErrorType::INVALID_ARGUMENT,
+                                    "IVF precise bucket batch exceeds inner id capacity");
+            }
+        }
         if (use_reorder_ and precise_bucket_ == nullptr) {
             this->reorder_codes_->BatchInsertVector(base->GetFloat32Vectors(),
                                                     base->GetNumElements());
@@ -611,13 +632,27 @@ IVF::Add(const DatasetPtr& base) {
         for (int64_t i = 0; i < num_element; ++i) {
             this->label_table_->Insert(i + total_elements_, ids[i]);
         }
-        current_num = this->total_elements_;
         this->total_elements_ += num_element;
         if (this->total_elements_ - last_cal_memory_element_ >= cal_memory_element_interval_) {
             need_cal_memory_usage = true;
             last_cal_memory_element_ = this->total_elements_;
         }
         location_map_.resize(this->total_elements_);
+    }
+
+    Vector<InnerIdType> precise_offsets(allocator_);
+    if (precise_bucket_ != nullptr) {
+        const auto posting_count = static_cast<uint64_t>(num_element);
+        Vector<InnerIdType> posting_ids(posting_count, allocator_);
+        precise_offsets.resize(posting_count);
+        for (uint64_t i = 0; i < posting_count; ++i) {
+            posting_ids[i] = static_cast<InnerIdType>(i + static_cast<uint64_t>(current_num));
+        }
+        precise_bucket_->BatchInsertVector(vectors,
+                                           buckets.data(),
+                                           posting_ids.data(),
+                                           static_cast<InnerIdType>(posting_count),
+                                           precise_offsets.data());
     }
 
     auto add_func = [&](int64_t i) -> void {
@@ -628,7 +663,7 @@ IVF::Add(const DatasetPtr& base) {
             InnerIdType offset_id;
             if (precise_bucket_ != nullptr) {
                 // Publish the basic posting only after its precise mirror is ready.
-                offset_id = precise_bucket_->InsertVector(data_ptr, buckets[idx], posting_id);
+                offset_id = precise_offsets[idx];
                 bucket_->InsertVectorWithOffset(data_ptr, buckets[idx], posting_id, offset_id);
             } else {
                 offset_id = bucket_->InsertVector(data_ptr, buckets[idx], posting_id);
@@ -1152,12 +1187,13 @@ void
 IVF::load_streaming_body(StreamReader& reader,
                          const MetadataPtr& metadata,
                          const LoadParameters& parameters) {
-    (void)parameters;
-    this->read_streaming_body(reader, metadata);
+    this->read_streaming_body(reader, metadata, &parameters);
 }
 
 void
-IVF::read_streaming_body(StreamReader& reader, const MetadataPtr& metadata) {
+IVF::read_streaming_body(StreamReader& reader,
+                         const MetadataPtr& metadata,
+                         const LoadParameters* load_parameters) {
     auto basic_info = metadata->Get(BASIC_INFO);
     this->total_elements_ = basic_info["total_elements"].GetInt();
     this->use_reorder_ = basic_info["use_reorder"].GetBool();
@@ -1184,6 +1220,29 @@ IVF::read_streaming_body(StreamReader& reader, const MetadataPtr& metadata) {
     bool loaded_precise_codes = false;
     bool loaded_attribute_filter = false;
 
+    ReaderIOParamPtr precise_reader_param = nullptr;
+    auto ivf_param = std::dynamic_pointer_cast<IVFParameter>(create_param_ptr_);
+    if (ivf_param != nullptr && ivf_param->precise_codes_param != nullptr &&
+        ivf_param->precise_codes_param->io_parameter != nullptr &&
+        ivf_param->precise_codes_param->io_parameter->GetTypeName() == IO_TYPE_VALUE_READER_IO) {
+        constexpr const char* precise_reader_key = "precise_reader";
+        if (load_parameters == nullptr or not load_parameters->HasReader(precise_reader_key)) {
+            throw VsagException(ErrorType::INVALID_ARGUMENT,
+                                "reader-backed IVF precise codes require precise_reader");
+        }
+        auto precise_reader = load_parameters->GetReader(precise_reader_key);
+        if (precise_reader == nullptr) {
+            throw VsagException(ErrorType::INVALID_ARGUMENT, "precise_reader is null");
+        }
+        precise_reader_param = std::dynamic_pointer_cast<ReaderIOParameter>(
+            ivf_param->precise_codes_param->io_parameter);
+        if (precise_reader_param == nullptr) {
+            throw VsagException(ErrorType::INTERNAL_ERROR,
+                                "IVF precise reader IO parameter is invalid");
+        }
+        precise_reader_param->reader = std::move(precise_reader);
+    }
+
     while (true) {
         auto block_header = StreamBlockHeader::Read(reader);
         if (block_header.IsSectionEnd()) {
@@ -1206,6 +1265,16 @@ IVF::read_streaming_body(StreamReader& reader, const MetadataPtr& metadata) {
             continue;
         }
 
+        auto read_precise_block = [&](const auto& deserialize, const auto& init_io) {
+            if (precise_reader_param == nullptr) {
+                ReadSeekableBlockPayload(block_reader, block_header, deserialize);
+                return;
+            }
+            block_reader.SkipRemaining();
+            ReadExternalBlockPayload(precise_reader_param->reader, block_header, deserialize);
+            init_io(precise_reader_param);
+        };
+
         switch (static_cast<StreamSerializationTag>(block_header.tag)) {
             case StreamSerializationTag::IVF_BUCKET:
                 ReadSeekableBlockPayload(block_reader, block_header, [this](StreamReader& block) {
@@ -1227,18 +1296,20 @@ IVF::read_streaming_body(StreamReader& reader, const MetadataPtr& metadata) {
                 break;
             case StreamSerializationTag::HIGH_PRECISION_CODES:
                 if (this->use_reorder_ and this->reorder_codes_ != nullptr) {
-                    ReadSeekableBlockPayload(
-                        block_reader, block_header, [this](StreamReader& block) {
-                            this->reorder_codes_->Deserialize(block);
+                    read_precise_block(
+                        [this](StreamReader& block) { this->reorder_codes_->Deserialize(block); },
+                        [this](const IOParamPtr& io_param) {
+                            this->reorder_codes_->InitIO(io_param);
                         });
                     loaded_precise_codes = true;
                 }
                 break;
             case StreamSerializationTag::IVF_PRECISE_BUCKET:
                 if (this->use_reorder_ and this->precise_bucket_ != nullptr) {
-                    ReadSeekableBlockPayload(
-                        block_reader, block_header, [this](StreamReader& block) {
-                            this->precise_bucket_->Deserialize(block);
+                    read_precise_block(
+                        [this](StreamReader& block) { this->precise_bucket_->Deserialize(block); },
+                        [this](const IOParamPtr& io_param) {
+                            this->precise_bucket_->InitIO(io_param);
                         });
                     loaded_precise_codes = true;
                 }
@@ -1597,70 +1668,10 @@ IVF::reorder(int64_t topk,
              ReasoningContext* reasoning_ctx,
              const std::optional<float>& distance_threshold) const {
     auto reorder_heap =
-        precise_bucket_ != nullptr
-            ? this->reorder_with_precise_bucket(input, query, topk, ctx, distance_threshold)
-            : reorder_->Reorder(input, query, topk, ctx, nullptr, nullptr, distance_threshold);
+        reorder_->Reorder(input, query, topk, ctx, nullptr, nullptr, distance_threshold);
     auto dataset_results = this->pack_knn_result(reorder_heap, ctx.alloc);
 
     return dataset_results;
-}
-
-DistHeapPtr
-IVF::reorder_with_precise_bucket(const DistHeapPtr& input,
-                                 const float* query,
-                                 int64_t topk,
-                                 QueryContext& ctx,
-                                 const std::optional<float>& distance_threshold) const {
-    Allocator* query_allocator = select_query_allocator(ctx.alloc, allocator_);
-    const uint64_t candidate_count = input == nullptr ? 0 : input->Size();
-    topk = std::min(topk, static_cast<int64_t>(candidate_count));
-    auto reorder_heap = std::make_shared<StandardHeap<true, false>>(query_allocator, topk);
-    if (candidate_count == 0 or topk == 0) {
-        return reorder_heap;
-    }
-
-    if (ctx.stats != nullptr) {
-        ctx.stats->reorder_distance_count.fetch_add(static_cast<uint32_t>(candidate_count),
-                                                    std::memory_order_relaxed);
-    }
-
-    auto computer = precise_bucket_->FactoryComputer(query);
-    const auto* candidates = input->GetData();
-    Vector<BucketIdType> bucket_ids(candidate_count, query_allocator);
-    Vector<InnerIdType> offset_ids(candidate_count, query_allocator);
-    Vector<float> precise_distances(candidate_count, query_allocator);
-    for (uint64_t i = 0; i < candidate_count; ++i) {
-        const auto [bucket_id, offset_id] = this->get_location(candidates[i].second);
-        bucket_ids[i] = bucket_id;
-        offset_ids[i] = offset_id;
-    }
-    precise_bucket_->Query(precise_distances.data(),
-                           computer,
-                           bucket_ids.data(),
-                           offset_ids.data(),
-                           static_cast<InnerIdType>(candidate_count),
-                           &ctx);
-    for (uint64_t i = 0; i < candidate_count; ++i) {
-        const auto [coarse_distance, inner_id] = candidates[i];
-        const auto precise_distance = precise_distances[i];
-        if (ctx.reasoning_ctx != nullptr) {
-            ctx.reasoning_ctx->RecordReorder(inner_id, coarse_distance, precise_distance);
-        }
-        if (distance_threshold.has_value() and (not std::isfinite(precise_distance) or
-                                                precise_distance > distance_threshold.value())) {
-            continue;
-        }
-        if (reorder_heap->Size() < topk or precise_distance < reorder_heap->Top().first) {
-            reorder_heap->Push(precise_distance, inner_id);
-            if (reorder_heap->Size() > topk) {
-                if (ctx.reasoning_ctx != nullptr) {
-                    ctx.reasoning_ctx->RecordReorderEviction(reorder_heap->Top().second, 0);
-                }
-                reorder_heap->Pop();
-            }
-        }
-    }
-    return reorder_heap;
 }
 
 InnerIndexPtr

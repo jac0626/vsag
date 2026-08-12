@@ -184,6 +184,46 @@ apply_hgraph_streaming_load_parameters(JsonType& index_param, const std::string&
     }
 }
 
+void
+apply_ivf_streaming_load_parameters(JsonType& index_param, const LoadParameters& parameters) {
+    constexpr const char* precise_reader_key = "precise_reader";
+    auto parameter_string = parameters.Dump();
+    auto load_json = JsonType::Parse(parameter_string.empty() ? "{}" : parameter_string);
+
+    const bool has_precise_reader = parameters.HasReader(precise_reader_key);
+    bool requests_reader_io = false;
+    if (load_json.Contains(IVF_PRECISE_IO_TYPE)) {
+        require_string_load_parameter(load_json, IVF_PRECISE_IO_TYPE);
+        CHECK_ARGUMENT(load_json[IVF_PRECISE_IO_TYPE].GetString() == IO_TYPE_VALUE_READER_IO,
+                       "IVF precise streaming load only supports reader_io");
+        requests_reader_io = true;
+    }
+    if (not has_precise_reader and not requests_reader_io) {
+        return;
+    }
+
+    CHECK_ARGUMENT(has_precise_reader, "IVF precise_io_type=reader_io requires precise_reader");
+    CHECK_ARGUMENT(parameters.GetReader(precise_reader_key) != nullptr, "precise_reader is null");
+    CHECK_ARGUMENT(requests_reader_io, "precise_reader requires precise_io_type=reader_io");
+    CHECK_ARGUMENT(index_param.Contains(USE_REORDER_KEY) && index_param[USE_REORDER_KEY].IsBool() &&
+                       index_param[USE_REORDER_KEY].GetBool(),
+                   "IVF precise_reader requires use_reorder=true");
+    set_streaming_io_override(index_param, PRECISE_CODES_KEY, IO_TYPE_VALUE_READER_IO, nullptr);
+
+    if (load_json.Contains(IVF_PRECISE_ENABLE_READ_CACHE)) {
+        CHECK_ARGUMENT(load_json[IVF_PRECISE_ENABLE_READ_CACHE].IsBool(),
+                       "precise_enable_read_cache must be a boolean");
+        index_param[PRECISE_CODES_KEY][IO_PARAMS_KEY][READ_CACHE_ENABLED_KEY].SetBool(
+            load_json[IVF_PRECISE_ENABLE_READ_CACHE].GetBool());
+    }
+    if (load_json.Contains(IVF_PRECISE_CACHE_TOTAL_SIZE)) {
+        CHECK_ARGUMENT(load_json[IVF_PRECISE_CACHE_TOTAL_SIZE].IsNumberUnsigned(),
+                       "precise_cache_total_size must be a non-negative integer");
+        index_param[PRECISE_CODES_KEY][IO_PARAMS_KEY][READ_CACHE_TOTAL_CACHE_SIZE_KEY].SetUint64(
+            load_json[IVF_PRECISE_CACHE_TOTAL_SIZE].GetUint64());
+    }
+}
+
 struct streaming_index_load_target {
     IndexPtr index;
     InnerIndexPtr inner_index;
@@ -200,7 +240,7 @@ create_streaming_index(const JsonType& index_param, const IndexCommonParam& comm
 
 tl::expected<streaming_index_load_target, Error>
 create_streaming_index_from_metadata(const MetadataPtr& metadata,
-                                     const std::string& parameters,
+                                     const LoadParameters& parameters,
                                      Allocator* allocator) {
     auto index_name_json = metadata->Get("index_name");
     if (!index_name_json.IsString()) {
@@ -241,10 +281,11 @@ create_streaming_index_from_metadata(const MetadataPtr& metadata,
         return create_streaming_index<BruteForce, BruteForceParameter>(index_param, common_param);
     }
     if (index_name == INDEX_HGRAPH) {
-        apply_hgraph_streaming_load_parameters(index_param, parameters);
+        apply_hgraph_streaming_load_parameters(index_param, parameters.Dump());
         return create_streaming_index<HGraph, HGraphParameter>(index_param, common_param);
     }
     if (index_name == INDEX_IVF) {
+        apply_ivf_streaming_load_parameters(index_param, parameters);
         return create_streaming_index<IVF, IVFParameter>(index_param, common_param);
     }
     if (index_name == INDEX_PYRAMID) {
@@ -406,7 +447,7 @@ Index::Load(std::istream& in_stream, const LoadParameters& parameters, Allocator
         ForwardStreamReader reader(in_stream);
         auto metadata = StreamHeader::Read(reader);
 
-        auto index = create_streaming_index_from_metadata(metadata, parameter_string, allocator);
+        auto index = create_streaming_index_from_metadata(metadata, parameters, allocator);
         if (not index.has_value()) {
             return tl::unexpected(index.error());
         }

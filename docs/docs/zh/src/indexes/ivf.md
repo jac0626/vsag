@@ -91,9 +91,26 @@ auto result = index->KnnSearch(
 
 `precise_codes_layout: "bucket"` 要求 `use_reorder: true`，支持 `memory_io`、
 `block_memory_io`、`buffer_io`、`async_io` 和 `uring_io`
-（需要构建环境支持 io_uring），不支持 `mmap_io`、`reader_io` 和 `pqfs`
-精排量化。bucket 布局当前要求 `buckets_per_data: 1`；一个向量分配到多个 bucket
-的配置会被拒绝。
+（需要构建环境支持 io_uring）。不支持 `mmap_io` 和 `pqfs` 精排量化。bucket 布局当前
+要求 `buckets_per_data: 1`；一个向量分配到多个 bucket 的配置会被拒绝。
+
+对于 `flat` 和 `bucket` 两种布局，序列化后的精排 codes 都可以通过外部 `Reader`
+只读加载。向 `Index::Load` 传入 `precise_io_type: "reader_io"` 和 `precise_reader`。
+`flat` 布局的 reader 必须恰好对应 `high_precision_codes` block payload，`bucket` 布局
+则必须对应 `ivf_precise_bucket` block payload。启用 `precise_enable_read_cache` 后，
+`reader_io` 会使用通用读缓存。
+
+```cpp
+vsag::LoadParameters load_parameters;
+load_parameters.Set("precise_io_type", "reader_io")
+    .Set("precise_enable_read_cache", true)
+    .Set("precise_cache_total_size", 256ULL * 1024 * 1024)
+    .SetReader("precise_reader", precise_codes_reader);
+auto loaded = vsag::Index::Load(stream, load_parameters).value();
+```
+
+`reader_io` 是加载与查询阶段的只读放置策略。构建时应使用可写的 precise IO，序列化后
+再在查询服务加载索引时绑定外部 reader。
 
 `buckets_count` 的经验值一般为 `sqrt(N)` ~ `4 * sqrt(N)`，其中 `N` 是语料规模。
 

@@ -14,11 +14,13 @@
 // limitations under the License.
 
 #include <algorithm>
+#include <atomic>
 #include <cstring>
 #include <filesystem>
 #include <limits>
 #include <nlohmann/json.hpp>
 #include <sstream>
+#include <stdexcept>
 
 #include "functest.h"
 #include "storage/serialization_tags.h"
@@ -193,6 +195,7 @@ IVFTestIndex::GenerateIVFBuildParametersString(const std::string& metric_type,
 namespace {
 
 using vsag::test::EraseStreamingBlock;
+using vsag::test::FindStreamingBlock;
 using vsag::test::InsertUnknownStreamingBlock;
 
 class BlockSizeLimitGuard {
@@ -209,6 +212,101 @@ public:
 private:
     uint64_t origin_size_;
 };
+
+class CountingMemoryReader : public vsag::Reader {
+public:
+    explicit CountingMemoryReader(std::string bytes, bool fail_reads = false)
+        : bytes_(std::move(bytes)), fail_reads_(fail_reads) {
+    }
+
+    void
+    Read(uint64_t offset, uint64_t len, void* dest) override {
+        read_calls_.fetch_add(1, std::memory_order_relaxed);
+        read_bytes_.fetch_add(len, std::memory_order_relaxed);
+        this->CheckRead(offset, len);
+        std::memcpy(dest, bytes_.data() + offset, len);
+    }
+
+    void
+    AsyncRead(uint64_t offset, uint64_t len, void* dest, const vsag::CallBack callback) override {
+        try {
+            this->Read(offset, len, dest);
+            callback(vsag::IOErrorCode::IO_SUCCESS, "success");
+        } catch (const std::exception& error) {
+            callback(vsag::IOErrorCode::IO_ERROR, error.what());
+        }
+    }
+
+    bool
+    MultiRead(uint8_t* dests,
+              const uint64_t* lens,
+              const uint64_t* offsets,
+              uint64_t count) override {
+        multi_read_calls_.fetch_add(1, std::memory_order_relaxed);
+        auto* dest = dests;
+        for (uint64_t i = 0; i < count; ++i) {
+            read_bytes_.fetch_add(lens[i], std::memory_order_relaxed);
+            this->CheckRead(offsets[i], lens[i]);
+            std::memcpy(dest, bytes_.data() + offsets[i], lens[i]);
+            dest += lens[i];
+        }
+        return true;
+    }
+
+    [[nodiscard]] uint64_t
+    Size() const override {
+        return bytes_.size();
+    }
+
+    void
+    ResetCounters() {
+        read_calls_.store(0, std::memory_order_relaxed);
+        multi_read_calls_.store(0, std::memory_order_relaxed);
+        read_bytes_.store(0, std::memory_order_relaxed);
+    }
+
+    [[nodiscard]] uint64_t
+    ReadCalls() const {
+        return read_calls_.load(std::memory_order_relaxed);
+    }
+
+    [[nodiscard]] uint64_t
+    MultiReadCalls() const {
+        return multi_read_calls_.load(std::memory_order_relaxed);
+    }
+
+    [[nodiscard]] uint64_t
+    ReadBytes() const {
+        return read_bytes_.load(std::memory_order_relaxed);
+    }
+
+private:
+    void
+    CheckRead(uint64_t offset, uint64_t len) const {
+        if (fail_reads_) {
+            throw std::runtime_error("injected remote reader failure");
+        }
+        if (offset > bytes_.size() || len > bytes_.size() - offset) {
+            throw std::out_of_range("remote reader range is out of bounds");
+        }
+    }
+
+    const std::string bytes_;
+    const bool fail_reads_;
+    std::atomic<uint64_t> read_calls_{0};
+    std::atomic<uint64_t> multi_read_calls_{0};
+    std::atomic<uint64_t> read_bytes_{0};
+};
+
+std::string
+ExtractPreciseCodesPayload(const std::string& bytes, const std::string& precise_codes_layout) {
+    const auto tag = precise_codes_layout == "bucket"
+                         ? vsag::StreamSerializationTag::IVF_PRECISE_BUCKET
+                         : vsag::StreamSerializationTag::HIGH_PRECISION_CODES;
+    const auto block = FindStreamingBlock(bytes, tag);
+    REQUIRE(block.payload_size > 0);
+    return bytes.substr(block.payload_offset, block.payload_size);
+}
 
 std::string
 GenerateBucketPreciseParameters(const std::string& precise_io_type = "block_memory_io",
@@ -227,6 +325,15 @@ GenerateBucketPreciseParameters(const std::string& precise_io_type = "block_memo
         params["index_param"]["precise_cache_total_size"] = 16 * 128 * 1024;
     }
     return params.dump();
+}
+
+std::string
+GeneratePreciseParameters(const std::string& precise_codes_layout) {
+    if (precise_codes_layout == "bucket") {
+        return GenerateBucketPreciseParameters();
+    }
+    return IVFTestIndex::GenerateIVFBuildParametersString(
+        "l2", 16, "sq8,fp32", 16, "random", false, 1, false, 1);
 }
 
 void
@@ -455,7 +562,23 @@ TEST_CASE_PERSISTENT_FIXTURE(IVFTestIndex,
     auto dataset = pool.GetDatasetAndCreate(dim, base_count, "l2");
     auto index = TestFactory(name, params, true);
 
-    TestContinueAdd(index, dataset, true);
+    constexpr int64_t first_batch_count = base_count / 2;
+    auto first_batch = vsag::Dataset::Make()
+                           ->NumElements(first_batch_count)
+                           ->Dim(dim)
+                           ->Ids(dataset->base_->GetIds())
+                           ->Float32Vectors(dataset->base_->GetFloat32Vectors())
+                           ->Owner(false);
+    auto second_batch =
+        vsag::Dataset::Make()
+            ->NumElements(base_count - first_batch_count)
+            ->Dim(dim)
+            ->Ids(dataset->base_->GetIds() + first_batch_count)
+            ->Float32Vectors(dataset->base_->GetFloat32Vectors() + first_batch_count * dim)
+            ->Owner(false);
+    REQUIRE(index->Build(first_batch).has_value());
+    REQUIRE(index->Add(second_batch).has_value());
+    REQUIRE(index->GetNumElements() == base_count);
     CheckBucketPreciseIndex(index, dataset, search_param);
     TestCalcDistanceById(index, dataset, 2e-6F, true);
     TestBatchCalcDistanceById(index, dataset, 2e-6F, true);
@@ -509,6 +632,244 @@ TEST_CASE_PERSISTENT_FIXTURE(IVFTestIndex,
     REQUIRE_FALSE(invalid_restored->DeserializeStreaming(missing_deserialize_stream).has_value());
     std::stringstream missing_load_stream(missing_precise);
     REQUIRE_FALSE(vsag::Index::Load(missing_load_stream, "{}").has_value());
+}
+
+TEST_CASE_PERSISTENT_FIXTURE(IVFTestIndex,
+                             "IVF precise codes load from an external reader",
+                             "[ft][ivf][reorder][serialize][streaming][reader_io][pr]") {
+    BlockSizeLimitGuard block_size_limit_guard(2ULL * 1024 * 1024);
+    constexpr int64_t dim = 16;
+    constexpr int64_t base_count = 128;
+    constexpr int64_t buckets_count = 16;
+    constexpr int64_t query_id = 3;
+    constexpr int64_t batch_count = 8;
+    const auto precise_codes_layout = GENERATE(std::string("flat"), std::string("bucket"));
+    const bool enable_read_cache = GENERATE(false, true);
+    CAPTURE(precise_codes_layout);
+    CAPTURE(enable_read_cache);
+
+    const auto params = GeneratePreciseParameters(precise_codes_layout);
+    const auto search_param = fmt::format(search_param_tmp, buckets_count);
+    auto dataset = pool.GetDatasetAndCreate(dim, base_count, "l2");
+    auto index = TestFactory(name, params, true);
+    TestBuildIndex(index, dataset, true);
+
+    std::stringstream stream;
+    REQUIRE(index->SerializeStreaming(stream).has_value());
+    const auto bytes = stream.str();
+    const auto precise_payload = ExtractPreciseCodesPayload(bytes, precise_codes_layout);
+    auto load_with_reader = [&](const std::shared_ptr<CountingMemoryReader>& reader) {
+        vsag::LoadParameters load_parameters;
+        load_parameters.Set("precise_io_type", "reader_io")
+            .Set("precise_enable_read_cache", enable_read_cache)
+            .Set("precise_cache_total_size", 16ULL * 128 * 1024)
+            .SetReader("precise_reader", reader);
+        std::stringstream load_stream(bytes);
+        return vsag::Index::Load(load_stream, load_parameters);
+    };
+    auto precise_reader = std::make_shared<CountingMemoryReader>(precise_payload);
+    auto loaded = load_with_reader(precise_reader);
+    REQUIRE(loaded.has_value());
+
+    auto query = vsag::Dataset::Make();
+    query->NumElements(1)
+        ->Dim(dim)
+        ->Float32Vectors(dataset->base_->GetFloat32Vectors() + query_id * dim)
+        ->Owner(false);
+    auto expected_search = index->KnnSearch(query, 1, search_param);
+    REQUIRE(expected_search.has_value());
+
+    // Loading validates the external block checksum through the Reader. Clear those accesses so
+    // the following count proves that querying, rather than loading, reads remote precise codes.
+    precise_reader->ResetCounters();
+    auto actual_search = loaded.value()->KnnSearch(query, 1, search_param);
+    REQUIRE(actual_search.has_value());
+    REQUIRE(actual_search.value()->GetDim() == expected_search.value()->GetDim());
+    REQUIRE(actual_search.value()->GetIds()[0] == expected_search.value()->GetIds()[0]);
+    REQUIRE(std::abs(actual_search.value()->GetDistances()[0] -
+                     expected_search.value()->GetDistances()[0]) < 2e-6F);
+    REQUIRE(precise_reader->ReadBytes() > 0);
+    if (enable_read_cache) {
+        REQUIRE(precise_reader->ReadCalls() > 0);
+        precise_reader->ResetCounters();
+        auto cached_search = loaded.value()->KnnSearch(query, 1, search_param);
+        REQUIRE(cached_search.has_value());
+        REQUIRE(precise_reader->ReadCalls() == 0);
+        REQUIRE(precise_reader->MultiReadCalls() == 0);
+        REQUIRE(precise_reader->ReadBytes() == 0);
+    } else {
+        REQUIRE(precise_reader->MultiReadCalls() > 0);
+    }
+
+    const auto* query_vector = query->GetFloat32Vectors();
+    const auto* ids = dataset->base_->GetIds();
+    auto expected_distances = index->CalcDistancesById(query_vector, ids, batch_count);
+    auto actual_distances = loaded.value()->CalcDistancesById(query_vector, ids, batch_count);
+    REQUIRE(expected_distances.has_value());
+    REQUIRE(actual_distances.has_value());
+    REQUIRE(actual_distances.value()->GetDim() == expected_distances.value()->GetDim());
+    for (int64_t i = 0; i < batch_count; ++i) {
+        REQUIRE(std::abs(actual_distances.value()->GetDistances()[i] -
+                         expected_distances.value()->GetDistances()[i]) < 2e-6F);
+    }
+
+    if (precise_codes_layout == "bucket" && enable_read_cache) {
+        auto fresh_reader = std::make_shared<CountingMemoryReader>(precise_payload);
+        auto fresh_loaded = load_with_reader(fresh_reader);
+        REQUIRE(fresh_loaded.has_value());
+
+        fresh_reader->ResetCounters();
+        auto first_distances =
+            fresh_loaded.value()->CalcDistancesById(query_vector, ids, batch_count);
+        REQUIRE(first_distances.has_value());
+        REQUIRE(fresh_reader->ReadCalls() > 0);
+        REQUIRE(fresh_reader->ReadBytes() > 0);
+        for (int64_t i = 0; i < batch_count; ++i) {
+            REQUIRE(std::abs(first_distances.value()->GetDistances()[i] -
+                             expected_distances.value()->GetDistances()[i]) < 2e-6F);
+        }
+
+        fresh_reader->ResetCounters();
+        auto cached_distances =
+            fresh_loaded.value()->CalcDistancesById(query_vector, ids, batch_count);
+        REQUIRE(cached_distances.has_value());
+        REQUIRE(fresh_reader->ReadCalls() == 0);
+        REQUIRE(fresh_reader->MultiReadCalls() == 0);
+        REQUIRE(fresh_reader->ReadBytes() == 0);
+        for (int64_t i = 0; i < batch_count; ++i) {
+            REQUIRE(std::abs(cached_distances.value()->GetDistances()[i] -
+                             expected_distances.value()->GetDistances()[i]) < 2e-6F);
+        }
+    }
+}
+
+TEST_CASE_PERSISTENT_FIXTURE(IVFTestIndex,
+                             "IVF precise codes validate their external reader",
+                             "[ft][ivf][reorder][serialize][streaming][reader_io][pr]") {
+    BlockSizeLimitGuard block_size_limit_guard(2ULL * 1024 * 1024);
+    const auto precise_codes_layout = GENERATE(std::string("flat"), std::string("bucket"));
+    CAPTURE(precise_codes_layout);
+    const auto params = GeneratePreciseParameters(precise_codes_layout);
+    auto dataset = pool.GetDatasetAndCreate(16, 128, "l2");
+    auto index = TestFactory(name, params, true);
+    TestBuildIndex(index, dataset, true);
+
+    std::stringstream stream;
+    REQUIRE(index->SerializeStreaming(stream).has_value());
+    const auto bytes = stream.str();
+    const auto precise_payload = ExtractPreciseCodesPayload(bytes, precise_codes_layout);
+
+    auto load_with_reader = [&bytes](const vsag::ReaderPtr& reader,
+                                     const std::string& precise_io_type = "reader_io") {
+        vsag::LoadParameters load_parameters;
+        if (not precise_io_type.empty()) {
+            load_parameters.Set("precise_io_type", precise_io_type);
+        }
+        load_parameters.SetReader("precise_reader", reader);
+        std::stringstream load_stream(bytes);
+        return vsag::Index::Load(load_stream, load_parameters);
+    };
+
+    SECTION("rejects a precise reader without an explicit reader io type") {
+        auto reader = std::make_shared<CountingMemoryReader>(precise_payload);
+        auto result = load_with_reader(reader, "");
+        REQUIRE_FALSE(result.has_value());
+        REQUIRE(result.error().type == vsag::ErrorType::INVALID_ARGUMENT);
+    }
+
+    SECTION("rejects a precise reader combined with another io type") {
+        auto reader = std::make_shared<CountingMemoryReader>(precise_payload);
+        auto result = load_with_reader(reader, "memory_io");
+        REQUIRE_FALSE(result.has_value());
+        REQUIRE(result.error().type == vsag::ErrorType::INVALID_ARGUMENT);
+    }
+
+    SECTION("rejects reader io without a precise reader") {
+        vsag::LoadParameters load_parameters;
+        load_parameters.Set("precise_io_type", "reader_io");
+        std::stringstream load_stream(bytes);
+        auto result = vsag::Index::Load(load_stream, load_parameters);
+        REQUIRE_FALSE(result.has_value());
+        REQUIRE(result.error().type == vsag::ErrorType::INVALID_ARGUMENT);
+    }
+
+    SECTION("validates precise reader load parameter types") {
+        const std::vector<std::string> invalid_parameters{
+            R"({"precise_io_type": 1})",
+            R"({"precise_io_type": "unknown_io"})",
+            R"({"precise_io_type": "reader_io", "precise_enable_read_cache": "true"})",
+            R"({"precise_io_type": "reader_io", "precise_cache_total_size": -1})",
+        };
+        for (const auto& parameters : invalid_parameters) {
+            vsag::LoadParameters load_parameters(parameters);
+            load_parameters.SetReader("precise_reader",
+                                      std::make_shared<CountingMemoryReader>(precise_payload));
+            std::stringstream load_stream(bytes);
+            auto result = vsag::Index::Load(load_stream, load_parameters);
+            REQUIRE_FALSE(result.has_value());
+            REQUIRE(result.error().type == vsag::ErrorType::INVALID_ARGUMENT);
+        }
+    }
+
+    SECTION("rejects an invalid precise IO override without a reader") {
+        for (const auto& parameters :
+             {R"({"precise_io_type": 1})", R"({"precise_io_type": "unknown_io"})"}) {
+            std::stringstream load_stream(bytes);
+            auto result = vsag::Index::Load(load_stream, parameters);
+            REQUIRE_FALSE(result.has_value());
+            REQUIRE(result.error().type == vsag::ErrorType::INVALID_ARGUMENT);
+        }
+    }
+
+    SECTION("rejects a null precise reader") {
+        auto result = load_with_reader(nullptr);
+        REQUIRE_FALSE(result.has_value());
+        REQUIRE(result.error().type == vsag::ErrorType::INVALID_ARGUMENT);
+    }
+
+    SECTION("rejects a precise reader with the wrong payload size") {
+        REQUIRE(precise_payload.size() > 1);
+        auto reader = std::make_shared<CountingMemoryReader>(
+            precise_payload.substr(0, precise_payload.size() - 1));
+        auto result = load_with_reader(reader);
+        REQUIRE_FALSE(result.has_value());
+        REQUIRE(result.error().type == vsag::ErrorType::INVALID_ARGUMENT);
+    }
+
+    SECTION("rejects a precise reader with a corrupted payload") {
+        REQUIRE_FALSE(precise_payload.empty());
+        auto corrupted_payload = precise_payload;
+        corrupted_payload[corrupted_payload.size() / 2] ^= 1;
+        auto reader = std::make_shared<CountingMemoryReader>(std::move(corrupted_payload));
+        auto result = load_with_reader(reader);
+        REQUIRE_FALSE(result.has_value());
+        REQUIRE(result.error().type == vsag::ErrorType::INVALID_BINARY);
+    }
+
+    SECTION("propagates a precise reader failure") {
+        auto reader = std::make_shared<CountingMemoryReader>(precise_payload, true);
+        auto result = load_with_reader(reader);
+        REQUIRE_FALSE(result.has_value());
+    }
+}
+
+TEST_CASE_PERSISTENT_FIXTURE(IVFTestIndex,
+                             "IVF rejects a precise reader without precise codes",
+                             "[ft][ivf][reader_io][pr]") {
+    const auto params = GenerateIVFBuildParametersString("l2", 16, "sq8", 16, "random");
+    auto dataset = pool.GetDatasetAndCreate(16, 128, "l2");
+    auto index = TestFactory(name, params, true);
+    TestBuildIndex(index, dataset, true);
+
+    std::stringstream stream;
+    REQUIRE(index->SerializeStreaming(stream).has_value());
+    vsag::LoadParameters load_parameters;
+    load_parameters.Set("precise_io_type", "reader_io")
+        .SetReader("precise_reader", std::make_shared<CountingMemoryReader>(""));
+    std::stringstream load_stream(stream.str());
+    auto result = vsag::Index::Load(load_stream, load_parameters);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().type == vsag::ErrorType::INVALID_ARGUMENT);
 }
 
 TEST_CASE_PERSISTENT_FIXTURE(IVFTestIndex,

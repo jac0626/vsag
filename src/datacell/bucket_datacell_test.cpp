@@ -27,6 +27,8 @@
 #include "impl/allocator/default_allocator.h"
 #include "impl/allocator/safe_allocator.h"
 #include "index_common_param.h"
+#include "io/reader_io/reader_io_parameter.h"
+#include "quantization/fp32_quantizer.h"
 #include "simd/simd.h"
 #include "storage/serialization_template_test.h"
 #include "unittest.h"
@@ -57,6 +59,165 @@ public:
             centroid[i] = static_cast<float>((bucket_id + 1) * (i + 1)) * 0.01F;
         }
     }
+};
+
+class TrackingReader : public Reader {
+public:
+    explicit TrackingReader(std::shared_ptr<std::string> data) : data_(std::move(data)) {
+    }
+
+    void
+    Read(uint64_t offset, uint64_t len, void* dest) override {
+        ++read_calls_;
+        copy(offset, len, dest);
+    }
+
+    void
+    AsyncRead(uint64_t offset, uint64_t len, void* dest, CallBack callback) override {
+        copy(offset, len, dest);
+        callback(IOErrorCode::IO_SUCCESS, "success");
+    }
+
+    bool
+    MultiRead(uint8_t* dests,
+              const uint64_t* lens,
+              const uint64_t* offsets,
+              uint64_t count) override {
+        ++multi_read_calls_;
+        multi_read_ranges_ += count;
+        for (uint64_t i = 0; i < count; ++i) {
+            copy(offsets[i], lens[i], dests);
+            dests += lens[i];
+        }
+        return true;
+    }
+
+    [[nodiscard]] uint64_t
+    Size() const override {
+        return data_->size();
+    }
+
+    void
+    ResetStats() {
+        read_calls_ = 0;
+        multi_read_calls_ = 0;
+        multi_read_ranges_ = 0;
+    }
+
+    uint64_t read_calls_{0};
+    uint64_t multi_read_calls_{0};
+    uint64_t multi_read_ranges_{0};
+
+private:
+    void
+    copy(uint64_t offset, uint64_t len, void* dest) const {
+        if (offset > data_->size() or len > data_->size() - offset) {
+            throw VsagException(ErrorType::READ_ERROR, "tracking reader read out of bounds");
+        }
+        std::memcpy(dest, data_->data() + offset, len);
+    }
+
+    std::shared_ptr<std::string> data_;
+};
+
+struct TrackingWrite {
+    uint64_t size{0};
+    uint64_t offset{0};
+};
+
+struct TrackingWriteIOState {
+    std::vector<std::vector<TrackingWrite>> writes_by_bucket;
+};
+
+class TrackingWriteIOParameter : public IOParameter {
+public:
+    explicit TrackingWriteIOParameter(std::shared_ptr<TrackingWriteIOState> state)
+        : IOParameter("tracking_write_io"), state_(std::move(state)) {
+    }
+
+    void
+    FromJson(const JsonType&) override {
+    }
+
+    JsonType
+    ToJson() const override {
+        return JsonType();
+    }
+
+    std::shared_ptr<TrackingWriteIOState> state_;
+};
+
+class TrackingWriteIO : public BasicIO<TrackingWriteIO> {
+public:
+    static constexpr bool InMemory = true;
+    static constexpr bool SkipDeserialize = false;
+
+    TrackingWriteIO(const IOParamPtr& param, const IndexCommonParam& common_param)
+        : BasicIO<TrackingWriteIO>(common_param.allocator_.get()) {
+        auto tracking_param = std::dynamic_pointer_cast<TrackingWriteIOParameter>(param);
+        if (tracking_param == nullptr or tracking_param->state_ == nullptr) {
+            throw VsagException(ErrorType::INVALID_ARGUMENT,
+                                "TrackingWriteIO requires tracking state");
+        }
+        state_ = tracking_param->state_;
+        bucket_id_ = state_->writes_by_bucket.size();
+        state_->writes_by_bucket.emplace_back();
+    }
+
+    void
+    WriteImpl(const uint8_t* data, uint64_t size, uint64_t offset) {
+        state_->writes_by_bucket[bucket_id_].emplace_back(TrackingWrite{size, offset});
+        const auto next_size = offset + size;
+        if (data_.size() < next_size) {
+            data_.resize(next_size);
+        }
+        if (size > 0) {
+            std::memcpy(data_.data() + offset, data, size);
+        }
+        this->size_ = std::max(this->size_, next_size);
+    }
+
+    void
+    ResizeImpl(uint64_t size) {
+        data_.resize(size);
+        this->size_ = size;
+    }
+
+    bool
+    ReadImpl(uint64_t size, uint64_t offset, uint8_t* data) const {
+        if (offset > data_.size() or size > data_.size() - offset) {
+            return false;
+        }
+        if (size > 0) {
+            std::memcpy(data, data_.data() + offset, size);
+        }
+        return true;
+    }
+
+    [[nodiscard]] const uint8_t*
+    DirectReadImpl(uint64_t size, uint64_t offset, bool& need_release) const {
+        need_release = false;
+        if (offset > data_.size() or size > data_.size() - offset) {
+            return nullptr;
+        }
+        return data_.data() + offset;
+    }
+
+    bool
+    MultiReadImpl(uint8_t* data, uint64_t* sizes, uint64_t* offsets, uint64_t count) const {
+        for (uint64_t i = 0; i < count; ++i) {
+            if (not ReadImpl(sizes[i], offsets[i], data)) {
+                return false;
+            }
+            data += sizes[i];
+        }
+        return true;
+    }
+
+private:
+    std::shared_ptr<TrackingWriteIOState> state_;
+    uint64_t bucket_id_{0};
+    std::vector<uint8_t> data_;
 };
 
 }  // namespace
@@ -311,6 +472,111 @@ TEST_CASE("BucketDataCell rejects inconsistent serialized metadata", "[ut][Bucke
     }
 }
 
+TEST_CASE("BucketDataCell ReaderIO queries serialized bucket codes",
+          "[ut][BucketDataCell][ReaderIO]") {
+    auto allocator = SafeAllocator::FactoryDefaultAllocator();
+    constexpr int64_t dim = 4;
+    constexpr BucketIdType bucket_count = 3;
+    constexpr uint64_t base_count = 6;
+    auto vectors = fixtures::generate_vectors(base_count, dim);
+    auto query = fixtures::generate_vectors(1, dim, 53);
+
+    auto make_bucket = [&](const std::string& io_type) {
+        auto param_json = JsonType::Parse(fmt::format(
+            R"({{
+                "io_params": {{
+                    "type": "{}"
+                }},
+                "quantization_params": {{
+                    "type": "fp32"
+                }},
+                "buckets_count": {}
+            }})",
+            io_type,
+            bucket_count));
+        auto param = std::make_shared<BucketDataCellParameter>();
+        param->FromJson(param_json);
+
+        IndexCommonParam common_param;
+        common_param.allocator_ = allocator;
+        common_param.dim_ = dim;
+        common_param.metric_ = MetricType::METRIC_TYPE_L2SQR;
+        return BucketInterface::MakeInstance(param, common_param);
+    };
+
+    auto source = make_bucket("memory_io");
+    source->Train(vectors.data(), base_count);
+    std::vector<BucketIdType> inserted_bucket_ids{0, 1, 2, 0, 1, 2};
+    for (InnerIdType inner_id = 0; inner_id < base_count; ++inner_id) {
+        source->InsertVector(vectors.data() + static_cast<uint64_t>(inner_id) * dim,
+                             inserted_bucket_ids[inner_id],
+                             inner_id);
+    }
+
+    std::stringstream stream;
+    IOStreamWriter writer(stream);
+    source->Serialize(writer);
+    auto serialized = std::make_shared<std::string>(stream.str());
+
+    uint64_t deserialized_read_bytes = 0;
+    ReadFuncStreamReader stream_reader(
+        [&](uint64_t offset, uint64_t size, void* dest) {
+            if (offset > serialized->size() or size > serialized->size() - offset) {
+                throw VsagException(ErrorType::READ_ERROR, "serialized bucket read out of bounds");
+            }
+            deserialized_read_bytes += size;
+            std::memcpy(dest, serialized->data() + offset, size);
+        },
+        0,
+        serialized->size());
+    auto restored = make_bucket("reader_io");
+    REQUIRE(restored != nullptr);
+    restored->Deserialize(stream_reader);
+
+    constexpr uint64_t serialized_code_bytes = base_count * dim * sizeof(float);
+    REQUIRE(stream_reader.GetCursor() == serialized->size());
+    REQUIRE(deserialized_read_bytes == serialized->size() - serialized_code_bytes);
+
+    auto restored_computer = restored->FactoryComputer(query.data());
+    REQUIRE_THROWS(restored->QueryOneById(restored_computer, 0, 0));
+
+    auto tracking_reader = std::make_shared<TrackingReader>(serialized);
+    auto reader_param = std::make_shared<ReaderIOParameter>();
+    reader_param->reader = tracking_reader;
+    restored->InitIO(reader_param);
+
+    auto source_computer = source->FactoryComputer(query.data());
+    for (BucketIdType bucket_id = 0; bucket_id < bucket_count; ++bucket_id) {
+        for (InnerIdType offset_id = 0; offset_id < 2; ++offset_id) {
+            REQUIRE(restored->QueryOneById(restored_computer, bucket_id, offset_id) ==
+                    source->QueryOneById(source_computer, bucket_id, offset_id));
+        }
+    }
+
+    std::vector<BucketIdType> bucket_ids{2, 0, 1, 0, 2, 1, 0};
+    std::vector<InnerIdType> offset_ids{1, 0, 1, 1, 0, 0, 0};
+    std::vector<float> expected(bucket_ids.size());
+    std::vector<float> actual(bucket_ids.size());
+    for (uint64_t i = 0; i < bucket_ids.size(); ++i) {
+        expected[i] = source->QueryOneById(source_computer, bucket_ids[i], offset_ids[i]);
+    }
+
+    tracking_reader->ResetStats();
+    SearchStatistics stats;
+    QueryContext ctx{nullptr, &stats};
+    restored->Query(actual.data(),
+                    restored_computer,
+                    bucket_ids.data(),
+                    offset_ids.data(),
+                    static_cast<InnerIdType>(bucket_ids.size()),
+                    &ctx);
+    REQUIRE(actual == expected);
+    REQUIRE(tracking_reader->read_calls_ == 0);
+    REQUIRE(tracking_reader->multi_read_calls_ == bucket_count);
+    REQUIRE(tracking_reader->multi_read_ranges_ == bucket_count);
+    REQUIRE(stats.io_cnt.load(std::memory_order_relaxed) == bucket_count);
+}
+
 TEST_CASE("BucketDataCell batch query", "[ut][BucketDataCell]") {
     auto allocator = SafeAllocator::FactoryDefaultAllocator();
     auto query_allocator = SafeAllocator::FactoryDefaultAllocator();
@@ -563,6 +829,222 @@ TEST_CASE("BucketDataCell batch query handles all bucket quantizers", "[ut][Buck
             if (io_type == "buffer_io") {
                 REQUIRE(stats.io_cnt.load(std::memory_order_relaxed) == 4);
             }
+        }
+    }
+}
+
+TEST_CASE("BucketDataCell batch insert groups one write per bucket", "[ut][BucketDataCell]") {
+    auto allocator = SafeAllocator::FactoryDefaultAllocator();
+    constexpr uint64_t dim = 8;
+    constexpr BucketIdType bucket_count = 3;
+    constexpr uint64_t base_count = 10;
+    constexpr uint64_t code_size = dim * sizeof(float);
+    auto vectors = fixtures::generate_vectors(base_count, dim);
+    auto state = std::make_shared<TrackingWriteIOState>();
+    auto io_param = std::make_shared<TrackingWriteIOParameter>(state);
+    auto quantizer_param = std::make_shared<FP32QuantizerParameter>();
+
+    IndexCommonParam common_param;
+    common_param.allocator_ = allocator;
+    common_param.dim_ = dim;
+    common_param.metric_ = MetricType::METRIC_TYPE_L2SQR;
+    auto bucket = std::make_shared<
+        BucketDataCell<FP32Quantizer<MetricType::METRIC_TYPE_L2SQR>, TrackingWriteIO>>(
+        quantizer_param, io_param, common_param, bucket_count);
+    bucket->Train(vectors.data(), base_count);
+
+    std::vector<BucketIdType> first_bucket_ids{2, 0, 2, 1, 0, 2};
+    std::vector<InnerIdType> first_inner_ids{100, 101, 102, 103, 104, 105};
+    std::vector<InnerIdType> first_offsets(first_bucket_ids.size(),
+                                           std::numeric_limits<InnerIdType>::max());
+    bucket->BatchInsertVector(vectors.data(),
+                              first_bucket_ids.data(),
+                              first_inner_ids.data(),
+                              first_bucket_ids.size(),
+                              first_offsets.data());
+
+    REQUIRE(first_offsets == std::vector<InnerIdType>{0, 0, 1, 0, 1, 2});
+    REQUIRE(state->writes_by_bucket.size() == bucket_count);
+    REQUIRE(state->writes_by_bucket[0].size() == 1);
+    REQUIRE(state->writes_by_bucket[0][0].size == 2 * code_size);
+    REQUIRE(state->writes_by_bucket[0][0].offset == 0);
+    REQUIRE(state->writes_by_bucket[1].size() == 1);
+    REQUIRE(state->writes_by_bucket[1][0].size == code_size);
+    REQUIRE(state->writes_by_bucket[1][0].offset == 0);
+    REQUIRE(state->writes_by_bucket[2].size() == 1);
+    REQUIRE(state->writes_by_bucket[2][0].size == 3 * code_size);
+    REQUIRE(state->writes_by_bucket[2][0].offset == 0);
+
+    std::vector<BucketIdType> second_bucket_ids{1, 2, 1, 0};
+    std::vector<InnerIdType> second_inner_ids{200, 201, 202, 203};
+    std::vector<InnerIdType> second_offsets(second_bucket_ids.size(),
+                                            std::numeric_limits<InnerIdType>::max());
+    bucket->BatchInsertVector(vectors.data() + first_bucket_ids.size() * dim,
+                              second_bucket_ids.data(),
+                              second_inner_ids.data(),
+                              second_bucket_ids.size(),
+                              second_offsets.data());
+
+    REQUIRE(second_offsets == std::vector<InnerIdType>{1, 3, 2, 2});
+    for (BucketIdType bucket_id = 0; bucket_id < bucket_count; ++bucket_id) {
+        REQUIRE(state->writes_by_bucket[bucket_id].size() == 2);
+    }
+    REQUIRE(state->writes_by_bucket[0][1].size == code_size);
+    REQUIRE(state->writes_by_bucket[0][1].offset == 2 * code_size);
+    REQUIRE(state->writes_by_bucket[1][1].size == 2 * code_size);
+    REQUIRE(state->writes_by_bucket[1][1].offset == code_size);
+    REQUIRE(state->writes_by_bucket[2][1].size == code_size);
+    REQUIRE(state->writes_by_bucket[2][1].offset == 3 * code_size);
+
+    const std::vector<std::vector<InnerIdType>> expected_inner_ids{
+        {101, 104, 203}, {103, 200, 202}, {100, 102, 105, 201}};
+    const std::vector<std::vector<uint64_t>> expected_vector_ids{
+        {1, 4, 9}, {3, 6, 8}, {0, 2, 5, 7}};
+    std::vector<uint8_t> actual_codes(code_size);
+    for (BucketIdType bucket_id = 0; bucket_id < bucket_count; ++bucket_id) {
+        REQUIRE(bucket->GetBucketSize(bucket_id) == expected_inner_ids[bucket_id].size());
+        for (uint64_t offset = 0; offset < expected_inner_ids[bucket_id].size(); ++offset) {
+            REQUIRE(bucket->GetInnerIds(bucket_id)[offset] ==
+                    expected_inner_ids[bucket_id][offset]);
+            bucket->GetCodesById(bucket_id, offset, actual_codes.data());
+            const auto* expected_codes = reinterpret_cast<const uint8_t*>(
+                vectors.data() + expected_vector_ids[bucket_id][offset] * dim);
+            REQUIRE(std::memcmp(actual_codes.data(), expected_codes, code_size) == 0);
+        }
+    }
+}
+
+TEST_CASE("BucketDataCell batch insert validates before writing", "[ut][BucketDataCell]") {
+    auto allocator = SafeAllocator::FactoryDefaultAllocator();
+    constexpr uint64_t dim = 4;
+    constexpr BucketIdType bucket_count = 3;
+    constexpr uint64_t count = 3;
+    auto vectors = fixtures::generate_vectors(count, dim);
+    auto state = std::make_shared<TrackingWriteIOState>();
+    auto io_param = std::make_shared<TrackingWriteIOParameter>(state);
+    auto quantizer_param = std::make_shared<FP32QuantizerParameter>();
+
+    IndexCommonParam common_param;
+    common_param.allocator_ = allocator;
+    common_param.dim_ = dim;
+    common_param.metric_ = MetricType::METRIC_TYPE_L2SQR;
+    auto bucket = std::make_shared<
+        BucketDataCell<FP32Quantizer<MetricType::METRIC_TYPE_L2SQR>, TrackingWriteIO>>(
+        quantizer_param, io_param, common_param, bucket_count);
+    bucket->Train(vectors.data(), count);
+
+    std::vector<BucketIdType> bucket_ids{0, 1, 2};
+    std::vector<InnerIdType> inner_ids{10, 11, 12};
+    std::vector<InnerIdType> offsets(count, std::numeric_limits<InnerIdType>::max());
+    auto require_unchanged = [&]() {
+        REQUIRE(state->writes_by_bucket.size() == bucket_count);
+        for (BucketIdType bucket_id = 0; bucket_id < bucket_count; ++bucket_id) {
+            REQUIRE(state->writes_by_bucket[bucket_id].empty());
+            REQUIRE(bucket->GetBucketSize(bucket_id) == 0);
+        }
+    };
+
+    REQUIRE_NOTHROW(bucket->BatchInsertVector(nullptr, nullptr, nullptr, 0, nullptr));
+    require_unchanged();
+
+    REQUIRE_THROWS(bucket->BatchInsertVector(
+        nullptr, bucket_ids.data(), inner_ids.data(), count, offsets.data()));
+    require_unchanged();
+    REQUIRE_THROWS(bucket->BatchInsertVector(
+        vectors.data(), nullptr, inner_ids.data(), count, offsets.data()));
+    require_unchanged();
+    REQUIRE_THROWS(bucket->BatchInsertVector(
+        vectors.data(), bucket_ids.data(), nullptr, count, offsets.data()));
+    require_unchanged();
+    REQUIRE_THROWS(bucket->BatchInsertVector(
+        vectors.data(), bucket_ids.data(), inner_ids.data(), count, nullptr));
+    require_unchanged();
+
+    auto invalid_bucket_ids = bucket_ids;
+    invalid_bucket_ids[1] = bucket_count;
+    REQUIRE_THROWS(bucket->BatchInsertVector(
+        vectors.data(), invalid_bucket_ids.data(), inner_ids.data(), count, offsets.data()));
+    require_unchanged();
+
+    auto invalid_inner_ids = inner_ids;
+    invalid_inner_ids[1] = std::numeric_limits<InnerIdType>::max();
+    REQUIRE_THROWS(bucket->BatchInsertVector(
+        vectors.data(), bucket_ids.data(), invalid_inner_ids.data(), count, offsets.data()));
+    require_unchanged();
+}
+
+TEST_CASE("BucketDataCell batch insert preserves RaBitQ PCA input stride", "[ut][BucketDataCell]") {
+    auto allocator = SafeAllocator::FactoryDefaultAllocator();
+    constexpr uint64_t dim = 32;
+    constexpr uint64_t pca_dim = 16;
+    constexpr uint64_t train_count = 64;
+    constexpr uint64_t insert_count = 8;
+    constexpr BucketIdType bucket_count = 2;
+    auto vectors = fixtures::generate_vectors(train_count, dim);
+    auto queries = fixtures::generate_vectors(3, dim, 61);
+
+    auto make_bucket = [&]() {
+        auto param_json = JsonType::Parse(fmt::format(
+            R"({{
+                "io_params": {{
+                    "type": "memory_io"
+                }},
+                "quantization_params": {{
+                    "type": "rabitq",
+                    "pca_dim": {},
+                    "rabitq_bits_per_dim_query": 32,
+                    "rabitq_bits_per_dim_base": 1,
+                    "fast_encode_rabitq": false
+                }},
+                "buckets_count": {}
+            }})",
+            pca_dim,
+            bucket_count));
+        auto param = std::make_shared<BucketDataCellParameter>();
+        param->FromJson(param_json);
+
+        IndexCommonParam common_param;
+        common_param.allocator_ = allocator;
+        common_param.dim_ = dim;
+        common_param.metric_ = MetricType::METRIC_TYPE_L2SQR;
+        return BucketInterface::MakeInstance(param, common_param);
+    };
+
+    auto incremental = make_bucket();
+    auto batched = make_bucket();
+    incremental->Train(vectors.data(), train_count);
+    incremental->ExportModel(batched);
+
+    std::vector<BucketIdType> bucket_ids{1, 0, 1, 1, 0, 0, 1, 0};
+    std::vector<InnerIdType> inner_ids{70, 71, 72, 73, 74, 75, 76, 77};
+    std::vector<InnerIdType> expected_offsets(insert_count);
+    for (uint64_t i = 0; i < insert_count; ++i) {
+        expected_offsets[i] =
+            incremental->InsertVector(vectors.data() + i * dim, bucket_ids[i], inner_ids[i]);
+    }
+
+    std::vector<InnerIdType> actual_offsets(insert_count, std::numeric_limits<InnerIdType>::max());
+    batched->BatchInsertVector(
+        vectors.data(), bucket_ids.data(), inner_ids.data(), insert_count, actual_offsets.data());
+    REQUIRE(actual_offsets == expected_offsets);
+
+    for (BucketIdType bucket_id = 0; bucket_id < bucket_count; ++bucket_id) {
+        REQUIRE(batched->GetBucketSize(bucket_id) == incremental->GetBucketSize(bucket_id));
+        for (InnerIdType offset = 0; offset < incremental->GetBucketSize(bucket_id); ++offset) {
+            REQUIRE(batched->GetInnerIds(bucket_id)[offset] ==
+                    incremental->GetInnerIds(bucket_id)[offset]);
+        }
+    }
+
+    for (uint64_t query_id = 0; query_id < 3; ++query_id) {
+        auto incremental_computer = incremental->FactoryComputer(queries.data() + query_id * dim);
+        auto batched_computer = batched->FactoryComputer(queries.data() + query_id * dim);
+        for (uint64_t i = 0; i < insert_count; ++i) {
+            const auto expected =
+                incremental->QueryOneById(incremental_computer, bucket_ids[i], expected_offsets[i]);
+            const auto actual =
+                batched->QueryOneById(batched_computer, bucket_ids[i], actual_offsets[i]);
+            REQUIRE(std::abs(actual - expected) < 1e-5F);
         }
     }
 }

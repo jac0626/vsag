@@ -73,6 +73,13 @@ public:
     virtual InnerIdType
     InsertVector(const void* vector, BucketIdType bucket_id, InnerIdType inner_id) = 0;
 
+    virtual void
+    BatchInsertVector(const void* vectors,
+                      const BucketIdType* bucket_ids,
+                      const InnerIdType* inner_ids,
+                      InnerIdType count,
+                      InnerIdType* out_offsets) = 0;
+
     // Fixed-offset inserts may create holes: GetBucketSize() includes reserved offsets and
     // GetInnerIds() reports holes as InnerIdType::max(). Therefore inner_id must not be max.
     virtual void
@@ -139,6 +146,11 @@ public:
     Deserialize(lvalue_or_rvalue<StreamReader> reader) {
         StreamReader::ReadObj(reader, this->bucket_count_);
         StreamReader::ReadObj(reader, this->code_size_);
+    }
+
+    virtual void
+    InitIO(const IOParamPtr& io_param) {
+        throw VsagException(ErrorType::INTERNAL_ERROR, "InitIO not implemented in BucketInterface");
     }
 
     virtual void
