@@ -13,6 +13,7 @@
 // limitations under the License.
 
 #include <algorithm>
+#include <cmath>
 #include <exception>
 #include <future>
 #include <memory>
@@ -86,6 +87,10 @@ materialize_graph(const GraphInterfacePtr& source,
                   bool dense_ids,
                   const SafeThreadPoolPtr& thread_pool,
                   uint64_t parallelism) {
+    CHECK_ARGUMENT(source != nullptr, "source graph is required for max-degree reduction");
+    CHECK_ARGUMENT(target_param != nullptr,
+                   "target graph parameter is required for max-degree reduction");
+    CHECK_ARGUMENT(flatten != nullptr, "vector codes are required for max-degree reduction");
     auto common_param = flatten->ExportCommonParam();
     auto target = GraphInterface::MakeInstance(target_param, common_param);
     CHECK_ARGUMENT(target != nullptr, "failed to create compact graph storage");
@@ -181,6 +186,9 @@ HGraph::can_reduce_max_degree_unlocked() const {
     return this->hierarchical_datacell_param_ != nullptr &&
            !this->hierarchical_datacell_param_->support_delete_ &&
            !this->hierarchical_datacell_param_->use_reverse_edges_ &&
+           std::all_of(this->route_graphs_.begin(),
+                       this->route_graphs_.end(),
+                       [](const GraphInterfacePtr& route) { return route != nullptr; }) &&
            this->get_degree_reduction_codes() != nullptr;
 }
 
@@ -189,24 +197,20 @@ HGraph::get_degree_reduction_codes() const {
     if (this->has_precise_reorder() && !this->build_by_base_) {
         return this->high_precise_codes_;
     }
+    if (this->basic_flatten_codes_ == nullptr) {
+        return nullptr;
+    }
     if (this->basic_flatten_codes_->GetQuantizerName() == QUANTIZATION_TYPE_VALUE_RABITQ) {
         return this->raw_vector_;
     }
     return this->basic_flatten_codes_;
 }
 
-bool
-HGraph::CanReduceMaxDegree() const {
-    std::scoped_lock lock(this->add_mutex_, this->global_mutex_);
-    return this->can_reduce_max_degree_unlocked();
-}
-
 void
-HGraph::PrepareDegreeReduction() {
-    std::scoped_lock lock(this->add_mutex_, this->global_mutex_);
+HGraph::prepare_degree_reduction_unlocked() {
     CHECK_ARGUMENT(this->can_reduce_max_degree_unlocked(),
                    "HGraph max-degree reduction does not support this index");
-    if (this->degree_reduction_prepared_) {
+    if (this->degree_reduction_prepared_.load(std::memory_order_acquire)) {
         return;
     }
 
@@ -228,15 +232,14 @@ HGraph::PrepareDegreeReduction() {
                    this->build_thread_count_);
     }
 
-    this->degree_reduction_prepared_ = true;
+    this->degree_reduction_prepared_.store(true, std::memory_order_release);
 }
 
 void
-HGraph::ReduceMaxDegree(uint32_t max_degree) {
-    std::scoped_lock lock(this->add_mutex_, this->global_mutex_);
+HGraph::reduce_max_degree_unlocked(uint32_t max_degree) {
     CHECK_ARGUMENT(this->can_reduce_max_degree_unlocked(),
                    "HGraph max-degree reduction does not support this index");
-    CHECK_ARGUMENT(this->degree_reduction_prepared_,
+    CHECK_ARGUMENT(this->degree_reduction_prepared_.load(std::memory_order_acquire),
                    "PrepareDegreeReduction must be called before ReduceMaxDegree");
     CHECK_ARGUMENT(max_degree >= 4, "target max_degree must be at least 4");
     CHECK_ARGUMENT(max_degree < this->bottom_graph_->MaximumDegree(),
@@ -274,7 +277,7 @@ HGraph::ReduceMaxDegree(uint32_t max_degree) {
     hgraph_param->bottom_graph_param = bottom_param;
     hgraph_param->hierarchical_graph_param = route_param;
     this->hierarchical_datacell_param_ = route_param;
-    this->cal_memory_usage();
+    this->mult_ = 1 / std::log(1.0 * static_cast<double>(max_degree));
 }
 
 }  // namespace vsag

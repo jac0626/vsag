@@ -229,17 +229,6 @@ public:
     void
     SetImmutable() override;
 
-    // Internal AutoTune path. These methods rewrite graph storage between trials; normal build,
-    // search, Tune, and serialization entry points never call them.
-    [[nodiscard]] bool
-    CanReduceMaxDegree() const;
-
-    void
-    PrepareDegreeReduction();
-
-    void
-    ReduceMaxDegree(uint32_t max_degree);
-
     void
     ExportCache(std::ostream& out_stream) const override;
 
@@ -670,6 +659,12 @@ private:
     [[nodiscard]] bool
     can_reduce_max_degree_unlocked() const;
 
+    void
+    prepare_degree_reduction_unlocked();
+
+    void
+    reduce_max_degree_unlocked(uint32_t max_degree);
+
     [[nodiscard]] FlattenInterfacePtr
     get_degree_reduction_codes() const;
 
@@ -925,6 +920,6 @@ private:
     uint64_t build_cache_hit_nodes_{0};     // number of nodes with cache hit
     uint64_t build_cache_missed_nodes_{0};  // number of nodes without cache hit
 
-    bool degree_reduction_prepared_{false};
+    std::atomic<bool> degree_reduction_prepared_{false};
 };
 }  // namespace vsag
