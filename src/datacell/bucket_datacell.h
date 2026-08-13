@@ -23,6 +23,7 @@
 #include "bucket_interface.h"
 #include "impl/inner_search_param.h"
 #include "io/container/io_array.h"
+#include "io/read_cache/lru_page_cache.h"
 #include "io/read_cache/page.h"
 #include "io/reader_io/reader_io_parameter.h"
 #include "quantization/product_quantization/pq_fastscan_quantizer.h"
@@ -156,6 +157,10 @@ public:
 
     void
     InitIO(const IOParamPtr& io_param) override {
+        if constexpr (IOTmpl::SkipDeserialize) {
+            this->init_shared_read_cache_io(io_param);
+            return;
+        }
         auto adjusted_io_param = AdjustBucketReadCacheParam(io_param, this->bucket_count_);
         for (BucketIdType bucket_id = 0; bucket_id < this->bucket_count_; ++bucket_id) {
             this->datas_[bucket_id].InitIO(adjusted_io_param);
@@ -194,6 +199,48 @@ public:
     }
 
 private:
+    void
+    init_shared_read_cache_io(const IOParamPtr& io_param) {
+        for (BucketIdType bucket_id = 0; bucket_id < this->bucket_count_; ++bucket_id) {
+            this->datas_[bucket_id].SetReadCache(nullptr);
+        }
+        for (BucketIdType bucket_id = 0; bucket_id < this->bucket_count_; ++bucket_id) {
+            this->datas_[bucket_id].InitIO(io_param);
+        }
+
+        if (io_param == nullptr or not io_param->enable_read_cache_) {
+            return;
+        }
+        uint64_t cache_page_count = io_param->read_cache_total_size_ / Page::DEFAULT_PAGE_SIZE;
+        if (cache_page_count == 0) {
+            return;
+        }
+
+        uint64_t page_id_base = 0;
+        for (BucketIdType bucket_id = 0; bucket_id < this->bucket_count_; ++bucket_id) {
+            uint64_t bucket_page_count = get_page_count(this->datas_[bucket_id].size_);
+            if (bucket_page_count > UINT64_MAX - page_id_base) {
+                throw VsagException(ErrorType::INVALID_BINARY,
+                                    "bucket read cache page id overflow");
+            }
+            page_id_base += bucket_page_count;
+        }
+
+        auto shared_cache = std::make_shared<LRUPageCache>(cache_page_count);
+        page_id_base = 0;
+        for (BucketIdType bucket_id = 0; bucket_id < this->bucket_count_; ++bucket_id) {
+            uint64_t bucket_page_count = get_page_count(this->datas_[bucket_id].size_);
+            this->datas_[bucket_id].SetReadCache(shared_cache, page_id_base);
+            page_id_base += bucket_page_count;
+        }
+    }
+
+    static uint64_t
+    get_page_count(uint64_t data_size) {
+        return data_size / Page::DEFAULT_PAGE_SIZE +
+               static_cast<uint64_t>(data_size % Page::DEFAULT_PAGE_SIZE != 0);
+    }
+
     inline void
     check_valid_bucket_id(BucketIdType bucket_id) {
         if (bucket_id >= this->bucket_count_ or bucket_id < 0) {

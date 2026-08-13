@@ -348,14 +348,33 @@ public:
         if constexpr (not InMemory) {
             if (io_param == nullptr or not io_param->enable_read_cache_) {
                 cache_.reset();
+                cache_page_id_base_ = 0;
                 return;
             }
             auto page_count = io_param->read_cache_total_size_ / Page::DEFAULT_PAGE_SIZE;
             if (page_count == 0) {
                 cache_.reset();
+                cache_page_id_base_ = 0;
                 return;
             }
-            cache_ = std::make_unique<LRUPageCache>(page_count);
+            cache_ = std::make_shared<LRUPageCache>(page_count);
+            cache_page_id_base_ = 0;
+        }
+    }
+
+    /**
+     * @brief Replaces this IO's read cache with a shared cache.
+     *
+     * The page id base gives each logical IO a disjoint key range in the shared cache.
+     * Passing nullptr detaches the current cache without clearing caches shared by other IOs.
+     * This is intended for read-only logical IO views initialized before queries start.
+     */
+    void
+    SetReadCache(const std::shared_ptr<PageCache>& cache, uint64_t page_id_base = 0) {
+        if constexpr (not InMemory) {
+            std::scoped_lock<std::mutex> lock(cache_mutex_);
+            cache_ = cache;
+            cache_page_id_base_ = page_id_base;
         }
     }
 
@@ -462,7 +481,11 @@ private:
             return nullptr;
         }
         std::scoped_lock<std::mutex> lock(cache_mutex_);
-        auto page = cache_->Get(page_id);
+        if (page_id > UINT64_MAX - cache_page_id_base_) {
+            return nullptr;
+        }
+        uint64_t cache_page_id = cache_page_id_base_ + page_id;
+        auto page = cache_->Get(cache_page_id);
         if (page != nullptr) {
             return page;
         }
@@ -474,7 +497,7 @@ private:
         if (not cast().ReadImpl(read_size, offset, new_page->Data())) {
             return nullptr;
         }
-        return cache_->Insert(page_id, std::move(new_page));
+        return cache_->Insert(cache_page_id, std::move(new_page));
     }
 
     void
@@ -489,8 +512,15 @@ private:
         }
         uint64_t first_page = offset / Page::DEFAULT_PAGE_SIZE;
         uint64_t last_page = (offset + size - 1) / Page::DEFAULT_PAGE_SIZE;
-        for (uint64_t page_id = first_page; page_id <= last_page; ++page_id) {
-            cache_->Remove(page_id);
+        if (last_page > UINT64_MAX - cache_page_id_base_) {
+            cache_->Clear();
+            return;
+        }
+        for (uint64_t page_id = first_page;; ++page_id) {
+            cache_->Remove(cache_page_id_base_ + page_id);
+            if (page_id == last_page) {
+                break;
+            }
         }
     }
 
@@ -508,7 +538,8 @@ private:
     static constexpr uint64_t SERIALIZE_BUFFER_SIZE = 1024 * 1024 * 2;
 
     mutable std::mutex cache_mutex_;
-    mutable std::unique_ptr<PageCache> cache_;
+    mutable std::shared_ptr<PageCache> cache_;
+    uint64_t cache_page_id_base_{0};
     bool has_deserialized_{false};
 
 private:

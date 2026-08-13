@@ -577,6 +577,128 @@ TEST_CASE("BucketDataCell ReaderIO queries serialized bucket codes",
     REQUIRE(stats.io_cnt.load(std::memory_order_relaxed) == bucket_count);
 }
 
+TEST_CASE("BucketDataCell ReaderIO shares one read cache across buckets",
+          "[ut][BucketDataCell][ReaderIO][ReadCache]") {
+    auto allocator = SafeAllocator::FactoryDefaultAllocator();
+    constexpr BucketIdType bucket_count = 2;
+    constexpr uint64_t cache_page_count = 2;
+    constexpr int64_t dim = Page::DEFAULT_PAGE_SIZE / sizeof(float);
+    const auto cache_size = cache_page_count * Page::DEFAULT_PAGE_SIZE;
+
+    auto make_bucket = [&](const std::string& io_type) {
+        auto param_json = JsonType::Parse(fmt::format(
+            R"({{
+                "io_params": {{
+                    "type": "{}",
+                    "enable_read_cache": true,
+                    "total_cache_size": {}
+                }},
+                "quantization_params": {{
+                    "type": "fp32"
+                }},
+                "buckets_count": {}
+            }})",
+            io_type,
+            cache_size,
+            bucket_count));
+        auto param = std::make_shared<BucketDataCellParameter>();
+        param->FromJson(param_json);
+
+        IndexCommonParam common_param;
+        common_param.allocator_ = allocator;
+        common_param.dim_ = dim;
+        common_param.metric_ = MetricType::METRIC_TYPE_L2SQR;
+        return BucketInterface::MakeInstance(param, common_param);
+    };
+
+    auto build_source = [&](float first_value) {
+        auto source = make_bucket("memory_io");
+        std::vector<float> first(dim, first_value);
+        std::vector<float> second(dim, first_value + 1.0F);
+        std::vector<float> third(dim, first_value + 2.0F);
+        source->Train(first.data(), 1);
+        source->InsertVector(first.data(), 0, 0);
+        source->InsertVector(second.data(), 0, 1);
+        source->InsertVector(third.data(), 1, 2);
+
+        std::stringstream stream;
+        IOStreamWriter writer(stream);
+        source->Serialize(writer);
+        return std::make_pair(source, std::make_shared<std::string>(stream.str()));
+    };
+
+    auto [first_source, first_serialized] = build_source(1.0F);
+    auto [second_source, second_serialized] = build_source(11.0F);
+    REQUIRE(second_serialized->size() == first_serialized->size());
+
+    auto restored = make_bucket("reader_io");
+    std::stringstream stream(*first_serialized);
+    IOStreamReader stream_reader(stream);
+    restored->Deserialize(stream_reader);
+
+    auto make_reader_param = [&](const std::shared_ptr<TrackingReader>& reader) {
+        auto reader_param = std::make_shared<ReaderIOParameter>();
+        reader_param->reader = reader;
+        reader_param->enable_read_cache_ = true;
+        reader_param->read_cache_total_size_ = cache_size;
+        return reader_param;
+    };
+
+    std::vector<float> query(dim, 0.0F);
+    auto first_computer = first_source->FactoryComputer(query.data());
+    auto restored_computer = restored->FactoryComputer(query.data());
+    auto first_reader = std::make_shared<TrackingReader>(first_serialized);
+    restored->InitIO(make_reader_param(first_reader));
+
+    first_reader->ResetStats();
+    REQUIRE(restored->QueryOneById(restored_computer, 0, 0) ==
+            first_source->QueryOneById(first_computer, 0, 0));
+    REQUIRE(restored->QueryOneById(restored_computer, 0, 1) ==
+            first_source->QueryOneById(first_computer, 0, 1));
+    REQUIRE(restored->QueryOneById(restored_computer, 0, 0) ==
+            first_source->QueryOneById(first_computer, 0, 0));
+    REQUIRE(first_reader->read_calls_ == cache_page_count);
+    REQUIRE(first_reader->multi_read_calls_ == 0);
+
+    const auto reads_before_other_bucket = first_reader->read_calls_;
+    REQUIRE(restored->QueryOneById(restored_computer, 1, 0) ==
+            first_source->QueryOneById(first_computer, 1, 0));
+    REQUIRE(first_reader->read_calls_ == reads_before_other_bucket + 1);
+
+    auto second_reader = std::make_shared<TrackingReader>(second_serialized);
+    restored->InitIO(make_reader_param(second_reader));
+    second_reader->ResetStats();
+    auto second_computer = second_source->FactoryComputer(query.data());
+    REQUIRE(restored->QueryOneById(restored_computer, 1, 0) ==
+            second_source->QueryOneById(second_computer, 1, 0));
+    REQUIRE(second_reader->read_calls_ == 1);
+
+    std::vector<BucketIdType> bucket_ids{1, 0, 0, 1, 0};
+    std::vector<InnerIdType> offset_ids{0, 1, 0, 0, 1};
+    std::vector<float> expected(bucket_ids.size());
+    std::vector<float> actual(bucket_ids.size());
+    for (uint64_t i = 0; i < bucket_ids.size(); ++i) {
+        expected[i] = second_source->QueryOneById(second_computer, bucket_ids[i], offset_ids[i]);
+    }
+    restored->Query(actual.data(),
+                    restored_computer,
+                    bucket_ids.data(),
+                    offset_ids.data(),
+                    static_cast<InnerIdType>(bucket_ids.size()));
+    REQUIRE(actual == expected);
+
+    auto no_cache_param = make_reader_param(second_reader);
+    no_cache_param->enable_read_cache_ = false;
+    no_cache_param->read_cache_total_size_ = 0;
+    restored->InitIO(no_cache_param);
+    second_reader->ResetStats();
+    REQUIRE(restored->QueryOneById(restored_computer, 0, 0) ==
+            second_source->QueryOneById(second_computer, 0, 0));
+    REQUIRE(restored->QueryOneById(restored_computer, 0, 0) ==
+            second_source->QueryOneById(second_computer, 0, 0));
+    REQUIRE(second_reader->read_calls_ == 2);
+}
+
 TEST_CASE("BucketDataCell batch query", "[ut][BucketDataCell]") {
     auto allocator = SafeAllocator::FactoryDefaultAllocator();
     auto query_allocator = SafeAllocator::FactoryDefaultAllocator();
