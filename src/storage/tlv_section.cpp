@@ -337,7 +337,7 @@ ReadExternalBlockPayload(const ReaderPtr& reader,
                         header.value_len));
     }
 
-    constexpr uint64_t checksum_buffer_size = 1024 * 1024;
+    constexpr uint64_t checksum_buffer_size = uint64_t{1024} * 1024;
     std::vector<char> checksum_buffer(
         static_cast<size_t>(std::min(header.value_len, checksum_buffer_size)));
     uint32_t crc = StreamHeader::InitialChecksum();
