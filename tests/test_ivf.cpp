@@ -643,6 +643,7 @@ TEST_CASE_PERSISTENT_FIXTURE(IVFTestIndex,
     constexpr int64_t buckets_count = 16;
     constexpr int64_t query_id = 3;
     constexpr int64_t batch_count = 8;
+    constexpr uint64_t precise_cache_total_size = 16ULL * 128 * 1024;
     const auto precise_codes_layout = GENERATE(std::string("flat"), std::string("bucket"));
     const bool enable_read_cache = GENERATE(false, true);
     CAPTURE(precise_codes_layout);
@@ -662,7 +663,7 @@ TEST_CASE_PERSISTENT_FIXTURE(IVFTestIndex,
         vsag::LoadParameters load_parameters;
         load_parameters.Set("precise_io_type", "reader_io")
             .Set("precise_enable_read_cache", enable_read_cache)
-            .Set("precise_cache_total_size", 16ULL * 128 * 1024)
+            .Set("precise_cache_total_size", precise_cache_total_size)
             .SetReader("precise_reader", reader);
         std::stringstream load_stream(bytes);
         return vsag::Index::Load(load_stream, load_parameters);
