@@ -385,8 +385,10 @@ TEST_CASE("Pyramid query analyzer supports a built root without query paths",
     REQUIRE(std::abs(stats["avg_distance_query"].GetFloat()) < 1e-6F);
 }
 
-TEST_CASE("Pyramid query analyzer uses stored raw vectors for ground truth",
+TEST_CASE("Pyramid query analyzer selects an available ground truth code source",
           "[ut][pyramid][raw_vector][analyzer]") {
+    const bool store_raw_vector = GENERATE(false, true);
+    CAPTURE(store_raw_vector);
     constexpr int64_t dim = 4;
     std::array<float, dim* 3> vectors = {
         0.0F, 0.0F, 0.0F, 0.0F, 0.123456F, 0.234567F, 0.345678F, 0.456789F, 1.0F, 1.0F, 1.0F, 1.0F};
@@ -408,9 +410,18 @@ TEST_CASE("Pyramid query analyzer uses stored raw vectors for ground truth",
         "rabitq_bits_per_dim_precise": 5,
         "max_degree": 4,
         "ef_construction": 8,
-        "no_build_levels": [0, 1]
+        "index_min_size": 4,
+        "no_build_levels": [0]
     })");
+    external_param[vsag::STORE_RAW_VECTOR].SetBool(store_raw_vector);
     auto param = vsag::Pyramid::CheckAndMappingExternalParam(external_param, common_param);
+    auto pyramid_param = std::dynamic_pointer_cast<vsag::PyramidParameters>(param);
+    REQUIRE(pyramid_param != nullptr);
+    REQUIRE(pyramid_param->store_raw_vector == store_raw_vector);
+    REQUIRE((pyramid_param->raw_vector_param != nullptr) == store_raw_vector);
+    REQUIRE(pyramid_param->precise_codes_param == nullptr);
+    REQUIRE(pyramid_param->base_codes_param != nullptr);
+    REQUIRE(pyramid_param->base_codes_param->name == vsag::RABITQ_SPLIT_DATA_CELL);
     auto index = std::make_shared<vsag::Pyramid>(param, common_param);
     auto base = vsag::Dataset::Make()
                     ->NumElements(3)
@@ -433,7 +444,12 @@ TEST_CASE("Pyramid query analyzer uses stored raw vectors for ground truth",
     request.params_str_ = R"({"pyramid":{"ef_search":10}})";
 
     auto stats = vsag::JsonType::Parse(index->AnalyzeIndexBySearch(request));
-    REQUIRE(std::abs(stats["avg_distance_query"].GetFloat()) < 1e-12F);
+    REQUIRE(std::abs(stats["recall_query"].GetFloat() - 1.0F) < 1e-6F);
+    const auto avg_distance = stats["avg_distance_query"].GetFloat();
+    REQUIRE(std::isfinite(avg_distance));
+    if (store_raw_vector) {
+        REQUIRE(std::abs(avg_distance) < 1e-12F);
+    }
 }
 
 TEST_CASE("Pyramid promotes flat node at index minimum size", "[ut][pyramid]") {

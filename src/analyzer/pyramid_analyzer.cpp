@@ -567,9 +567,7 @@ PyramidAnalyzer::calculate_groundtruth(const Vector<float>& sample_datas,
         return;
     }
 
-    auto codes = pyramid_->raw_vector_ != nullptr
-                     ? pyramid_->raw_vector_
-                     : (pyramid_->use_reorder_ ? pyramid_->precise_codes_ : pyramid_->base_codes_);
+    auto codes = pyramid_->decodable_codes();
 
     for (uint32_t i = 0; i < sample_size; ++i) {
         if (i % 10 == 0) {
