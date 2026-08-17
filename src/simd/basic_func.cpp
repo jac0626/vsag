@@ -20,6 +20,13 @@
 namespace vsag {
 
 static DistanceFuncType
+GetL1Distance() {
+    //TODO: SIMD-accelerated implementations are planned for a follow-up PR
+    return generic::L1Distance;
+}
+DistanceFuncType L1Distance = GetL1Distance();
+
+static DistanceFuncType
 GetL2Sqr() {
     if (SimdStatus::SupportAVX512()) {
 #if defined(ENABLE_AVX512)

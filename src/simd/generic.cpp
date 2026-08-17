@@ -13,10 +13,25 @@
 // See the License for the specific language governing permissions and
 // limitations under the License.
 
+#include <cmath>
+
 #include "simd.h"
 #include "simd/int8_simd.h"
 
 namespace vsag::generic {
+
+float
+L1Distance(const void* query1, const void* query2, const void* dim_ptr) {
+    const auto* lhs = static_cast<const float*>(query1);
+    const auto* rhs = static_cast<const float*>(query2);
+    const uint64_t dim = *static_cast<const uint64_t*>(dim_ptr);
+    float distance = 0.0F;
+
+    for (uint64_t i = 0; i < dim; ++i) {
+        distance += std::fabs(lhs[i] - rhs[i]);
+    }
+    return distance;
+}
 
 float
 L2Sqr(const void* pVect1v, const void* pVect2v, const void* qty_ptr) {
@@ -148,6 +163,25 @@ FP32ComputeL2SqrBatch4(const float* RESTRICT query,
         result2 += (query[i] - codes2[i]) * (query[i] - codes2[i]);
         result3 += (query[i] - codes3[i]) * (query[i] - codes3[i]);
         result4 += (query[i] - codes4[i]) * (query[i] - codes4[i]);
+    }
+}
+
+void
+L1DistanceBatch4(const float* RESTRICT query,
+                 uint64_t dim,
+                 const float* RESTRICT codes1,
+                 const float* RESTRICT codes2,
+                 const float* RESTRICT codes3,
+                 const float* RESTRICT codes4,
+                 float& result1,
+                 float& result2,
+                 float& result3,
+                 float& result4) {
+    for (uint64_t i = 0; i < dim; ++i) {
+        result1 += std::fabs(query[i] - codes1[i]);
+        result2 += std::fabs(query[i] - codes2[i]);
+        result3 += std::fabs(query[i] - codes3[i]);
+        result4 += std::fabs(query[i] - codes4[i]);
     }
 }
 

@@ -57,13 +57,16 @@ fill_metrictype(IndexCommonParam& result, const JsonType& metric_obj) {
         result.metric_ = MetricType::METRIC_TYPE_IP;
     } else if (metric == METRIC_COSINE) {
         result.metric_ = MetricType::METRIC_TYPE_COSINE;
+    } else if (metric == METRIC_L1) {
+        result.metric_ = MetricType::METRIC_TYPE_L1;
     } else {
         throw VsagException(ErrorType::INVALID_ARGUMENT,
-                            fmt::format("parameters[{}] must in [{}, {}, {}], now is {}",
+                            fmt::format("parameters[{}] must in [{}, {}, {}, {}], now is {}",
                                         PARAMETER_METRIC_TYPE,
                                         METRIC_L2,
                                         METRIC_IP,
                                         METRIC_COSINE,
+                                        METRIC_L1,
                                         metric));
     }
 }
@@ -110,6 +113,11 @@ IndexCommonParam::CheckAndCreate(JsonType& params, const std::shared_ptr<Resourc
                                       fmt::format("parameters must contain {}", PARAMETER_DIM));
         }
         result.dim_ = MAX_DIM_SPARSE;
+    }
+
+    if (result.metric_ == MetricType::METRIC_TYPE_L1 &&
+        result.data_type_ != DataTypes::DATA_TYPE_FLOAT) {
+        throw VsagException(ErrorType::INVALID_ARGUMENT, "l1 metric must use float32 dtype");
     }
 
     if (params.Contains(EXTRA_INFO_SIZE)) {
