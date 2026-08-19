@@ -207,7 +207,11 @@ Pyramid::add_to_root_routes(Hierarchy& hierarchy, InnerIdType inner_id) {
     }
     std::unique_lock lock(hierarchy.root_routing_mutex);
     const int current_top = static_cast<int>(hierarchy.root_route_graphs.size()) - 1;
-    InnerIdType entry_point = hierarchy.root->entry_point_;
+    InnerIdType entry_point = 0;
+    {
+        std::shared_lock root_lock(hierarchy.root->mutex_);
+        entry_point = hierarchy.root->entry_point_;
+    }
     for (int route_level = current_top; route_level >= 0; --route_level) {
         if (route_level <= level) {
             insert_route_graph_point(
@@ -236,6 +240,9 @@ Pyramid::add_to_root_routes(Hierarchy& hierarchy, InnerIdType inner_id) {
         auto graph = make_root_route_graph(hierarchy);
         graph->InsertNeighborsById(inner_id, Vector<InnerIdType>(allocator_));
         hierarchy.root_route_graphs.push_back(std::move(graph));
+    }
+    if (level > current_top) {
+        std::unique_lock root_lock(hierarchy.root->mutex_);
         hierarchy.root->entry_point_ = inner_id;
     }
 }
@@ -249,7 +256,11 @@ Pyramid::search_root_routes(const Hierarchy& hierarchy,
                             const InnerSearchParam& search_param,
                             QueryContext& ctx) const {
     std::shared_lock lock(hierarchy.root_routing_mutex);
-    InnerIdType entry_point = hierarchy.root->entry_point_;
+    InnerIdType entry_point = 0;
+    {
+        std::shared_lock root_lock(hierarchy.root->mutex_);
+        entry_point = hierarchy.root->entry_point_;
+    }
     InnerSearchParam route_param = search_param;
     route_param.ef = 1;
     route_param.topk = 1;
@@ -423,12 +434,14 @@ IndexNode::Search(const SearchFunc& search_func,
                   const DistHeapPtr& search_result,
                   uint64_t ef_search) const {
     bool has_index = false;
+    InnerIdType entry_point = 0;
     {
         std::shared_lock lock(mutex_);
         has_index = status_ != IndexNode::Status::NO_INDEX;
+        entry_point = entry_point_;
     }
     if (has_index) {
-        auto self_search_result = search_func(this, vl, entry_point_);
+        auto self_search_result = search_func(this, vl, entry_point);
         search_result->Merge(*self_search_result);
         while (search_result->Size() > ef_search) {
             search_result->Pop();
@@ -480,7 +493,9 @@ Pyramid::build_by_odescent(const DatasetPtr& base) {
                                  data_num,
                                  build_flatten);
                 hierarchy->root->Build(builder);
-                build_root_routes_by_odescent(*hierarchy, codes);
+                std::unique_lock route_lock(hierarchy->root_routing_mutex);
+                std::unique_lock root_lock(hierarchy->root->mutex_);
+                build_root_routes_by_odescent(*hierarchy, base_codes_);
                 hierarchy->root_routes_initialized = true;
             }));
         }
@@ -497,7 +512,9 @@ Pyramid::build_by_odescent(const DatasetPtr& base) {
                                data_num);
         for (const auto& [hname, h_ptr] : hierarchies_) {
             h_ptr->root->Build(graph_builder);
-            build_root_routes_by_odescent(*h_ptr, codes);
+            std::unique_lock route_lock(h_ptr->root_routing_mutex);
+            std::unique_lock root_lock(h_ptr->root->mutex_);
+            build_root_routes_by_odescent(*h_ptr, base_codes_);
             h_ptr->root_routes_initialized = true;
         }
     }
@@ -1431,13 +1448,17 @@ Pyramid::add_internal(const DatasetPtr& base, bool defer_root_routes) {
         const auto* hpath = base->GetPaths(hname);
         if (hpath != nullptr) {
             add_to_hierarchy(*h_ptr, data_vectors, hpath, data_biases, local_cur_element_count);
-            if (not defer_root_routes && h_ptr->HasMultiLayerRoot() &&
-                h_ptr->root->status_ == IndexNode::Status::GRAPH) {
+            bool root_has_graph = false;
+            {
+                std::shared_lock root_lock(h_ptr->root->mutex_);
+                root_has_graph = h_ptr->root->status_ == IndexNode::Status::GRAPH;
+            }
+            if (not defer_root_routes && h_ptr->HasMultiLayerRoot() && root_has_graph) {
                 bool rebuilt_routes = false;
                 {
                     std::unique_lock route_lock(h_ptr->root_routing_mutex);
                     if (not h_ptr->root_routes_initialized) {
-                        std::shared_lock root_lock(h_ptr->root->mutex_);
+                        std::unique_lock root_lock(h_ptr->root->mutex_);
                         rebuild_root_routes_by_nsw(*h_ptr);
                         h_ptr->root_routes_initialized = true;
                         rebuilt_routes = true;
@@ -1750,11 +1771,10 @@ Pyramid::Build(const DatasetPtr& base) {
         ret = this->add_internal(base, true);
         for (const auto& [name, hierarchy] : hierarchies_) {
             (void)name;
-            if (hierarchy->HasMultiLayerRoot() &&
-                hierarchy->root->status_ == IndexNode::Status::GRAPH) {
+            if (hierarchy->HasMultiLayerRoot()) {
                 std::unique_lock route_lock(hierarchy->root_routing_mutex);
-                auto build_codes = has_precise_reorder() ? precise_codes_ : base_codes_;
-                build_root_routes_by_odescent(*hierarchy, build_codes, true);
+                std::unique_lock root_lock(hierarchy->root->mutex_);
+                build_root_routes_by_odescent(*hierarchy, base_codes_, true);
                 hierarchy->root_routes_initialized = true;
             }
         }
