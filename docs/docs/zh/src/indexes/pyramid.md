@@ -99,9 +99,10 @@ auto result = index->KnnSearch(
 | `base_file_path` / `precise_file_path` | string | — | `buffer_io`、`async_io`、`uring_io`、`mmap_io` 等磁盘存储必须设置 |
 | `store_raw_vector` | bool | `false` | 保留 FP32 原始向量，用于 `GetRawVectorByIds` 和精确的按 ID 距离计算 |
 | `index_min_size` | int | `0` | 子索引的最小规模；小于该值的分区会退化为线性扫描 |
+| `root_graph_type` | string | `"single_layer"` | 根图结构：`single_layer` 只保留完整底图；`multi_layer` 在完整底图上增加类似 HGraph 的稀疏路由层。多层根图要求构建第 0 层。 |
 | `support_duplicate` | bool | `false` | 是否允许重复 ID |
 | `build_thread_count` | int | `1` | 构建阶段并发线程数 |
-| `hierarchies` | array | `[]` | 命名层级定义。每个元素可以是字符串（继承全部顶层参数）或对象（含 `name` 及可选覆盖参数：`max_degree`、`ef_construction`、`alpha`、`no_build_levels`、`index_min_size`）。设置后激活多层级模式，每个层级维护独立的路径树。 |
+| `hierarchies` | array | `[]` | 命名层级定义。每个元素可以是字符串（继承全部顶层参数）或对象（含 `name` 及可选覆盖参数：`max_degree`、`ef_construction`、`alpha`、`no_build_levels`、`index_min_size`、`root_graph_type`）。设置后激活多层级模式，每个层级维护独立的路径树。 |
 
 ### RaBitQ split 配置
 
@@ -154,7 +155,8 @@ Pyramid 使用 split code 的 code-code 距离完成增量 FLAT→GRAPH 晋升�
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `ef_search` | int | `100` | 叶子层子图检索的候选集大小 |
-| `hops_limit` | int | 不限 | 根图 KNN 检索的最大跳数；不大于 `ef_search` 时忽略 |
+| `factor` | float | 未设置 | 重排候选倍率。值 `<= 1` 时最多重排 `max(ef_search, topk)` 个候选；值大于 `1` 时最多重排 `min(max(ef_search, topk), floor(topk * factor))` 个候选。必须为有限正数；关闭重排时不生效。 |
+| `hops_limit` | int | 不限 | 根节点底图及每个非根 GRAPH 的逐图 KNN 跳数上限；不大于 `ef_search` 时忽略。根节点的稀疏路由层不受限制，FLAT 扫描与范围检索不受影响。 |
 | `subindex_ef_search` | int | `50` | 沿路径向下遍历中间子图时的候选集大小 |
 | `hierarchies` | string[] | `[]` | 指定检索哪个层级。空数组表示使用默认（匿名）层级。 |
 | `hierarchy_op` | string | `"single"` | 多层级结果合并方式：`single`（检索单个层级）、`union`、`intersection`。**注意：** `union` 和 `intersection` 尚未实现——设置后 `KnnSearch`/`RangeSearch` 会返回错误。 |
@@ -184,7 +186,10 @@ auto result = index->KnnSearch(
   `{"name": "category", "max_degree": 64, "no_build_levels": [0]}`
 
 可按层级覆盖的参数：`max_degree`、`ef_construction`、`alpha`、`no_build_levels`、
-`index_min_size`。
+`index_min_size`、`root_graph_type`。
+
+`root_graph_type: "multi_layer"` 只改变所选层级的根节点：完整根节点底图仍然保留，
+稀疏路由图先选择更好的入口点，再进入底图检索。Pyramid 的非根节点仍然使用单层图。
 
 ```json
 {
@@ -292,7 +297,9 @@ new_index->Deserialize(binary_set);
 如果不需要按路径限定查询范围，[HGraph](hgraph.md) 更简洁，性能通常也更高。
 
 可以通过[索引分析](../resources/analyze_index.md)检查 Pyramid 的树结构、子索引质量、
-`GetStats()` 输出的 base 采样召回率和重复比例。`AnalyzeIndexBySearch` 还会输出按路径限定的
+`GetStats()` 输出的 base 采样召回率和重复比例。每个 hierarchy 的 `root_graphs` 会报告
+`root_graph_type`、`bottom_graph_node_count`、`bottom_graph_size`、`route_graph_count`、
+`route_node_counts` 和 `route_graph_size`。`AnalyzeIndexBySearch` 还会输出按路径限定的
 query 召回率、距离、耗时，以及开启 reorder 时的量化指标。query 数据集必须包含与
 `KnnSearch` 相同的默认或命名 hierarchy 路径；批量数据集在需要或提供路径时，应为每条 query
 提供一条路径。`analyze_index` 工具当前无法从 dense query 文件加载 hierarchy 路径，因此

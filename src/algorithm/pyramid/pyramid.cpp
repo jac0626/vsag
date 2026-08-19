@@ -76,6 +76,210 @@ get_suitable_ef_search(int64_t topk, int64_t data_num, uint64_t subindex_ef_sear
     return std::max(static_cast<uint64_t>(4.0F * topk_float), subindex_ef_search * 8);
 }
 
+GraphInterfaceParamPtr
+Pyramid::make_root_route_graph_param(const GraphInterfaceParamPtr& bottom_graph_param) {
+    auto bottom = std::dynamic_pointer_cast<SparseGraphDatacellParameter>(bottom_graph_param);
+    CHECK_ARGUMENT(bottom != nullptr, "Pyramid multi-layer root requires sparse graph storage");
+    auto route = std::make_shared<SparseGraphDatacellParameter>();
+    route->FromJson(bottom->ToJson());
+    route->max_degree_ = std::max<InnerIdType>(1, bottom->max_degree_ / 2);
+    return route;
+}
+
+GraphInterfacePtr
+Pyramid::make_root_route_graph(const Hierarchy& hierarchy) const {
+    return std::make_shared<SparseGraphDataCell>(
+        std::dynamic_pointer_cast<SparseGraphDatacellParameter>(hierarchy.route_graph_param),
+        allocator_);
+}
+
+int
+Pyramid::sample_root_route_level(const Hierarchy& hierarchy) {
+    const auto max_degree = hierarchy.root->graph_param_->max_degree_;
+    CHECK_ARGUMENT(max_degree > 1, "multi-layer root requires max_degree greater than one");
+    std::scoped_lock lock(entry_point_mutex_);
+    std::uniform_real_distribution<double> distribution(0.0, 1.0);
+    const auto sample =
+        std::max(distribution(level_generator_), std::numeric_limits<double>::min());
+    const double level_mult = 1.0 / std::log(static_cast<double>(max_degree));
+    return static_cast<int>(-std::log(sample) * level_mult) - 1;
+}
+
+Vector<Vector<InnerIdType>>
+Pyramid::plan_root_route_ids(Hierarchy& hierarchy) {
+    Vector<Vector<InnerIdType>> route_ids(allocator_);
+    if (hierarchy.root->graph_ == nullptr) {
+        return route_ids;
+    }
+    const auto root_ids = hierarchy.root->graph_->GetIds();
+    for (const auto inner_id : root_ids) {
+        const int level = sample_root_route_level(hierarchy);
+        if (level < 0) {
+            continue;
+        }
+        while (route_ids.size() <= static_cast<uint64_t>(level)) {
+            route_ids.emplace_back(allocator_);
+            hierarchy.root->entry_point_ = inner_id;
+        }
+        for (int route_level = 0; route_level <= level; ++route_level) {
+            route_ids[route_level].push_back(inner_id);
+        }
+    }
+    return route_ids;
+}
+
+void
+Pyramid::build_root_routes_by_odescent(Hierarchy& hierarchy,
+                                       const FlattenInterfacePtr& codes,
+                                       bool use_thread_pool) {
+    if (not hierarchy.HasMultiLayerRoot() || hierarchy.root->status_ != IndexNode::Status::GRAPH) {
+        return;
+    }
+    auto route_ids = plan_root_route_ids(hierarchy);
+    hierarchy.root_route_graphs.clear();
+    hierarchy.root_route_graphs.reserve(route_ids.size());
+    for (auto& ids : route_ids) {
+        auto graph = make_root_route_graph(hierarchy);
+        auto route_param = std::make_shared<ODescentParameter>();
+        if (odescent_param_ != nullptr) {
+            route_param->FromJson(odescent_param_->ToJson());
+        }
+        route_param->max_degree = static_cast<int32_t>(graph->MaximumDegree());
+        route_param->alpha = hierarchy.alpha;
+        ODescent builder(
+            route_param, codes, allocator_, use_thread_pool ? thread_pool_.get() : nullptr);
+        builder.Build(ids);
+        builder.SaveGraph(graph);
+        hierarchy.root_route_graphs.push_back(std::move(graph));
+    }
+}
+
+void
+Pyramid::insert_route_graph_point(const Hierarchy& hierarchy,
+                                  const GraphInterfacePtr& graph,
+                                  InnerIdType& entry_point,
+                                  InnerIdType inner_id) {
+    if (graph->CheckIdExists(inner_id)) {
+        return;
+    }
+    if (graph->TotalCount() == 0) {
+        graph->InsertNeighborsById(inner_id, Vector<InnerIdType>(allocator_));
+        entry_point = inner_id;
+        return;
+    }
+    InnerSearchParam param;
+    param.ep = entry_point;
+    param.ef = hierarchy.ef_construction;
+    param.topk = static_cast<int64_t>(param.ef);
+    param.search_mode = KNN_SEARCH;
+    param.hops_limit = std::numeric_limits<uint32_t>::max();
+    VisitedListGuard vl_guard(pool_.get());
+    FlattenIdDistanceProvider distance_provider(base_codes_, inner_id);
+    auto results =
+        searcher_->Search(graph, distance_provider, vl_guard.get(), param, nullptr, nullptr);
+    mutually_connect_new_element(
+        inner_id, results, graph, base_codes_, points_mutex_, allocator_, hierarchy.alpha);
+}
+
+void
+Pyramid::rebuild_root_routes_by_nsw(Hierarchy& hierarchy) {
+    if (not hierarchy.HasMultiLayerRoot() || hierarchy.root->status_ != IndexNode::Status::GRAPH) {
+        return;
+    }
+    auto route_ids = plan_root_route_ids(hierarchy);
+    hierarchy.root_route_graphs.clear();
+    hierarchy.root_route_graphs.reserve(route_ids.size());
+    for (const auto& ids : route_ids) {
+        auto graph = make_root_route_graph(hierarchy);
+        InnerIdType entry_point = ids.front();
+        for (const auto inner_id : ids) {
+            insert_route_graph_point(hierarchy, graph, entry_point, inner_id);
+        }
+        hierarchy.root_route_graphs.push_back(std::move(graph));
+    }
+}
+
+void
+Pyramid::add_to_root_routes(Hierarchy& hierarchy, InnerIdType inner_id) {
+    const int level = sample_root_route_level(hierarchy);
+    if (level < 0) {
+        return;
+    }
+    std::unique_lock lock(hierarchy.root_routing_mutex);
+    const int current_top = static_cast<int>(hierarchy.root_route_graphs.size()) - 1;
+    InnerIdType entry_point = hierarchy.root->entry_point_;
+    for (int route_level = current_top; route_level >= 0; --route_level) {
+        if (route_level <= level) {
+            insert_route_graph_point(
+                hierarchy, hierarchy.root_route_graphs[route_level], entry_point, inner_id);
+            continue;
+        }
+        InnerSearchParam param;
+        param.ep = entry_point;
+        param.ef = 1;
+        param.topk = 1;
+        param.search_mode = KNN_SEARCH;
+        param.hops_limit = std::numeric_limits<uint32_t>::max();
+        VisitedListGuard vl_guard(pool_.get());
+        FlattenIdDistanceProvider provider(base_codes_, inner_id);
+        auto result = searcher_->Search(hierarchy.root_route_graphs[route_level],
+                                        provider,
+                                        vl_guard.get(),
+                                        param,
+                                        nullptr,
+                                        nullptr);
+        if (not result->Empty()) {
+            entry_point = result->Top().second;
+        }
+    }
+    for (int route_level = current_top + 1; route_level <= level; ++route_level) {
+        auto graph = make_root_route_graph(hierarchy);
+        graph->InsertNeighborsById(inner_id, Vector<InnerIdType>(allocator_));
+        hierarchy.root_route_graphs.push_back(std::move(graph));
+        hierarchy.root->entry_point_ = inner_id;
+    }
+}
+
+InnerIdType
+Pyramid::search_root_routes(const Hierarchy& hierarchy,
+                            const VisitedListPtr& vl,
+                            const DatasetPtr& query,
+                            const FlattenInterfacePtr& codes,
+                            const ComputerInterfacePtr& computer,
+                            const InnerSearchParam& search_param,
+                            QueryContext& ctx) const {
+    std::shared_lock lock(hierarchy.root_routing_mutex);
+    InnerIdType entry_point = hierarchy.root->entry_point_;
+    InnerSearchParam route_param = search_param;
+    route_param.ef = 1;
+    route_param.topk = 1;
+    route_param.search_mode = KNN_SEARCH;
+    route_param.is_inner_id_allowed = nullptr;
+    route_param.consider_duplicate = false;
+    route_param.hops_limit = std::numeric_limits<uint32_t>::max();
+    ScopedDistancePhase route_phase(ctx, DistanceEvaluationPhase::ROUTING);
+    auto route_computer =
+        computer != nullptr ? computer : codes->FactoryComputer(query->GetFloat32Vectors());
+    for (int64_t level = static_cast<int64_t>(hierarchy.root_route_graphs.size()) - 1; level >= 0;
+         --level) {
+        vl->Reset();
+        route_param.ep = entry_point;
+        auto result = searcher_->SearchWithPresetComputer(hierarchy.root_route_graphs[level],
+                                                          codes,
+                                                          vl,
+                                                          query->GetFloat32Vectors(),
+                                                          route_param,
+                                                          nullptr,
+                                                          &ctx,
+                                                          nullptr,
+                                                          route_computer);
+        if (not result->Empty()) {
+            entry_point = result->Top().second;
+        }
+    }
+    return entry_point;
+}
+
 IndexNode::IndexNode(Allocator* allocator,
                      GraphInterfaceParamPtr graph_param,
                      uint32_t index_min_size)
@@ -174,6 +378,22 @@ IndexNode::Serialize(StreamWriter& writer) const {
         item.second->Serialize(writer);
     }
 }
+
+uint64_t
+IndexNode::GetMemoryUsage() const {
+    std::shared_lock lock(mutex_);
+    uint64_t memory = sizeof(IndexNode) + ids_.capacity() * sizeof(InnerIdType);
+    memory +=
+        children_.bucket_count() * (sizeof(decltype(children_)::value_type) + sizeof(uint32_t));
+    for (const auto& [key, child] : children_) {
+        memory += key.capacity() + 1;
+        memory += child->GetMemoryUsage();
+    }
+    if (graph_ != nullptr) {
+        memory += graph_->GetMemoryUsage();
+    }
+    return memory;
+}
 void
 IndexNode::Init() {
     if (status_ == Status::NO_INDEX) {
@@ -208,7 +428,7 @@ IndexNode::Search(const SearchFunc& search_func,
         has_index = status_ != IndexNode::Status::NO_INDEX;
     }
     if (has_index) {
-        auto self_search_result = search_func(this, vl);
+        auto self_search_result = search_func(this, vl, entry_point_);
         search_result->Merge(*self_search_result);
         while (search_result->Size() > ef_search) {
             search_result->Pop();
@@ -249,8 +469,8 @@ Pyramid::build_by_odescent(const DatasetPtr& base) {
         auto build_flatten = ODescent::CreateBuildFlatten(codes, data_vectors, data_num);
         Vector<std::future<void>> futures(allocator_);
         for (const auto& [hname, h_ptr] : hierarchies_) {
-            auto* root_ptr = h_ptr->root.get();
-            futures.push_back(thread_pool_->GeneralEnqueue([&, codes, build_flatten, root_ptr]() {
+            auto* hierarchy = h_ptr.get();
+            futures.push_back(thread_pool_->GeneralEnqueue([&, codes, build_flatten, hierarchy]() {
                 ODescent builder(odescent_param_,
                                  codes,
                                  allocator_,
@@ -259,7 +479,9 @@ Pyramid::build_by_odescent(const DatasetPtr& base) {
                                  data_vectors,
                                  data_num,
                                  build_flatten);
-                root_ptr->Build(builder);
+                hierarchy->root->Build(builder);
+                build_root_routes_by_odescent(*hierarchy, codes);
+                hierarchy->root_routes_initialized = true;
             }));
         }
         for (auto& f : futures) {
@@ -275,6 +497,8 @@ Pyramid::build_by_odescent(const DatasetPtr& base) {
                                data_num);
         for (const auto& [hname, h_ptr] : hierarchies_) {
             h_ptr->root->Build(graph_builder);
+            build_root_routes_by_odescent(*h_ptr, codes);
+            h_ptr->root_routes_initialized = true;
         }
     }
     cur_element_count_ = data_num;
@@ -305,6 +529,15 @@ Pyramid::KnnSearch(const DatasetPtr& query,
     search_param.ef = std::max<uint64_t>(parsed_param.ef_search, static_cast<uint64_t>(k));
     search_param.radius = std::numeric_limits<float>::max();
     search_param.topk = threshold.has_value() ? static_cast<int64_t>(search_param.ef) : k;
+    if (use_reorder_ and parsed_param.has_topk_factor) {
+        if (parsed_param.topk_factor <= 1.0F) {
+            search_param.topk = static_cast<int64_t>(search_param.ef);
+        } else {
+            const auto amplified_topk = static_cast<uint64_t>(
+                std::floor(static_cast<double>(k) * parsed_param.topk_factor));
+            search_param.topk = static_cast<int64_t>(std::min(search_param.ef, amplified_topk));
+        }
+    }
     search_param.distance_threshold = threshold;
     search_param.enable_reorder = use_reorder_;
     search_param.search_mode = KNN_SEARCH;
@@ -338,33 +571,45 @@ Pyramid::KnnSearch(const DatasetPtr& query,
     const bool collect_rabitq_lower_bounds = search_param.enable_rabitq_one_bit_search and
                                              use_reorder_ and
                                              base_codes_->SupportSplitCodeStorage();
-    DistanceRecordVector rabitq_lower_bound_candidates(allocator_);
-    std::mutex rabitq_lower_bound_mutex;
-    SearchFunc search_func = [&](const IndexNode* node, const VisitedListPtr& vl) {
-        DistanceRecordVector local_candidates(allocator_);
-        auto* candidates = collect_rabitq_lower_bounds ? &local_candidates : nullptr;
-        auto result = this->search_node(node,
-                                        vl,
-                                        search_param,
-                                        query,
-                                        base_codes_,
-                                        ctx,
-                                        parsed_param.subindex_ef_search,
-                                        candidates);
-        if (candidates != nullptr and not candidates->empty()) {
-            std::lock_guard lock(rabitq_lower_bound_mutex);
-            rabitq_lower_bound_candidates.insert(
-                rabitq_lower_bound_candidates.end(), candidates->begin(), candidates->end());
-        }
-        return result;
-    };
-
     std::string hierarchy_name =
         parsed_param.hierarchies.empty() ? "" : parsed_param.hierarchies[0];
+    const auto* query_paths = query->GetPaths(hierarchy_name);
+    if (query_paths == nullptr) {
+        query_paths = query->GetPaths();
+    }
+    auto base_computer =
+        query_paths == nullptr ? base_codes_->FactoryComputer(query->GetFloat32Vectors()) : nullptr;
+    DistanceRecordVector rabitq_lower_bound_candidates(allocator_);
+    std::mutex rabitq_lower_bound_mutex;
+    SearchFunc search_func =
+        [&](const IndexNode* node, const VisitedListPtr& vl, InnerIdType entry_point) {
+            DistanceRecordVector local_candidates(allocator_);
+            auto* candidates = collect_rabitq_lower_bounds ? &local_candidates : nullptr;
+            auto result = this->search_node(node,
+                                            vl,
+                                            search_param,
+                                            query,
+                                            base_codes_,
+                                            ctx,
+                                            parsed_param.subindex_ef_search,
+                                            entry_point,
+                                            candidates,
+                                            base_computer);
+            if (candidates != nullptr and not candidates->empty()) {
+                std::lock_guard lock(rabitq_lower_bound_mutex);
+                rabitq_lower_bound_candidates.insert(
+                    rabitq_lower_bound_candidates.end(), candidates->begin(), candidates->end());
+            }
+            return result;
+        };
+
     auto result =
         this->search_impl(query,
                           search_func,
                           search_param,
+                          k,
+                          parsed_param.has_topk_factor ? search_param.topk : -1,
+                          base_computer,
                           ctx,
                           hierarchy_name,
                           collect_rabitq_lower_bounds ? &rabitq_lower_bound_candidates : nullptr);
@@ -410,33 +655,45 @@ Pyramid::RangeSearch(const DatasetPtr& query,
     const bool collect_rabitq_lower_bounds = search_param.enable_rabitq_one_bit_search and
                                              use_reorder_ and
                                              base_codes_->SupportSplitCodeStorage();
-    DistanceRecordVector rabitq_lower_bound_candidates(allocator_);
-    std::mutex rabitq_lower_bound_mutex;
-    SearchFunc search_func = [&](const IndexNode* node, const VisitedListPtr& vl) {
-        DistanceRecordVector local_candidates(allocator_);
-        auto* candidates = collect_rabitq_lower_bounds ? &local_candidates : nullptr;
-        auto result = this->search_node(node,
-                                        vl,
-                                        search_param,
-                                        query,
-                                        base_codes_,
-                                        ctx,
-                                        parsed_param.subindex_ef_search,
-                                        candidates);
-        if (candidates != nullptr and not candidates->empty()) {
-            std::lock_guard lock(rabitq_lower_bound_mutex);
-            rabitq_lower_bound_candidates.insert(
-                rabitq_lower_bound_candidates.end(), candidates->begin(), candidates->end());
-        }
-        return result;
-    };
-
     std::string hierarchy_name =
         parsed_param.hierarchies.empty() ? "" : parsed_param.hierarchies[0];
+    const auto* query_paths = query->GetPaths(hierarchy_name);
+    if (query_paths == nullptr) {
+        query_paths = query->GetPaths();
+    }
+    auto base_computer =
+        query_paths == nullptr ? base_codes_->FactoryComputer(query->GetFloat32Vectors()) : nullptr;
+    DistanceRecordVector rabitq_lower_bound_candidates(allocator_);
+    std::mutex rabitq_lower_bound_mutex;
+    SearchFunc search_func =
+        [&](const IndexNode* node, const VisitedListPtr& vl, InnerIdType entry_point) {
+            DistanceRecordVector local_candidates(allocator_);
+            auto* candidates = collect_rabitq_lower_bounds ? &local_candidates : nullptr;
+            auto result = this->search_node(node,
+                                            vl,
+                                            search_param,
+                                            query,
+                                            base_codes_,
+                                            ctx,
+                                            parsed_param.subindex_ef_search,
+                                            entry_point,
+                                            candidates,
+                                            base_computer);
+            if (candidates != nullptr and not candidates->empty()) {
+                std::lock_guard lock(rabitq_lower_bound_mutex);
+                rabitq_lower_bound_candidates.insert(
+                    rabitq_lower_bound_candidates.end(), candidates->begin(), candidates->end());
+            }
+            return result;
+        };
+
     auto result =
         this->search_impl(query,
                           search_func,
                           search_param,
+                          search_param.topk,
+                          -1,
+                          base_computer,
                           ctx,
                           hierarchy_name,
                           collect_rabitq_lower_bounds ? &rabitq_lower_bound_candidates : nullptr);
@@ -448,6 +705,9 @@ DatasetPtr
 Pyramid::search_impl(const DatasetPtr& query,
                      const SearchFunc& search_func,
                      InnerSearchParam& search_param,
+                     int64_t final_topk,
+                     int64_t reorder_candidate_limit,
+                     const ComputerInterfacePtr& base_computer,
                      QueryContext& ctx,
                      const std::string& hierarchy_name,
                      const DistanceRecordVector* rabitq_lower_bound_candidates) const {
@@ -470,14 +730,28 @@ Pyramid::search_impl(const DatasetPtr& query,
     std::shared_lock<std::shared_mutex> lock(resize_mutex_);
     VisitedListGuard vl_guard(pool_.get());
     const VisitedListPtr& vl = vl_guard.get();
+    SearchFunc routed_search_func =
+        [&](const IndexNode* node, const VisitedListPtr& search_vl, InnerIdType entry_point) {
+            if (node == h.root.get() && h.HasMultiLayerRoot()) {
+                entry_point = search_root_routes(
+                    h, search_vl, query, base_codes_, base_computer, search_param, ctx);
+                search_vl->Reset();
+            }
+            return search_func(node, search_vl, entry_point);
+        };
     if (query_path != nullptr) {
         const std::string& current_path = query_path[0];
-        search_hierarchy(h, search_func, vl, search_result, current_path, search_param);
+        search_hierarchy(h, routed_search_func, vl, search_result, current_path, search_param);
     } else {
-        h.root->Search(search_func, vl, search_result, search_param.ef);
+        h.root->Search(routed_search_func, vl, search_result, search_param.ef);
     }
 
     if (use_reorder_) {
+        if (reorder_candidate_limit >= 0) {
+            while (search_result->Size() > reorder_candidate_limit) {
+                search_result->Pop();
+            }
+        }
         search_result = this->reorder_->Reorder(search_result,
                                                 query->GetFloat32Vectors(),
                                                 search_param.topk,
@@ -490,7 +764,7 @@ Pyramid::search_impl(const DatasetPtr& query,
         return DatasetImpl::MakeEmptyDataset();
     }
 
-    while (not search_result->Empty() && (search_result->Size() > search_param.topk ||
+    while (not search_result->Empty() && (search_result->Size() > final_topk ||
                                           search_result->Top().first > search_param.radius)) {
         search_result->Pop();
     }
@@ -528,6 +802,50 @@ Pyramid::GetNumberRemoved() const {
     return delete_count_.load();
 }
 
+uint64_t
+Pyramid::GetMemoryUsage() const {
+    auto detail = GetMemoryUsageDetail();
+    uint64_t memory = sizeof(Pyramid);
+    for (const auto& [name, usage] : detail) {
+        (void)name;
+        memory += usage;
+    }
+    return memory;
+}
+
+std::unordered_map<std::string, uint64_t>
+Pyramid::GetMemoryUsageDetail() const {
+    std::shared_lock resize_lock(resize_mutex_);
+    std::unordered_map<std::string, uint64_t> memory_usage;
+    memory_usage["points_mutex"] = points_mutex_ == nullptr ? 0 : points_mutex_->GetMemoryUsage();
+    memory_usage["pool"] = pool_ == nullptr ? 0 : pool_->GetMemoryUsage();
+    memory_usage["label_table"] = label_table_ == nullptr ? 0 : label_table_->GetMemoryUsage();
+    memory_usage["base_codes"] = base_codes_ == nullptr ? 0 : base_codes_->GetMemoryUsage();
+    if (precise_codes_ != nullptr) {
+        memory_usage["precise_codes"] = precise_codes_->GetMemoryUsage();
+    }
+    if (raw_vector_ != nullptr) {
+        memory_usage["raw_vector"] = raw_vector_->GetMemoryUsage();
+    }
+    uint64_t hierarchy_memory = hierarchies_.bucket_count() *
+                                (sizeof(decltype(hierarchies_)::value_type) + sizeof(uint32_t));
+    uint64_t route_memory = 0;
+    for (const auto& [name, hierarchy] : hierarchies_) {
+        std::shared_lock route_lock(hierarchy->root_routing_mutex);
+        hierarchy_memory +=
+            name.capacity() + 1 + sizeof(Hierarchy) + hierarchy->name.capacity() + 1;
+        hierarchy_memory += hierarchy->no_build_levels.capacity() * sizeof(int32_t);
+        hierarchy_memory += hierarchy->root_route_graphs.capacity() * sizeof(GraphInterfacePtr);
+        hierarchy_memory += hierarchy->root->GetMemoryUsage();
+        for (const auto& graph : hierarchy->root_route_graphs) {
+            route_memory += graph->GetMemoryUsage();
+        }
+    }
+    memory_usage["hierarchies"] = hierarchy_memory;
+    memory_usage["root_route_graphs"] = route_memory;
+    return memory_usage;
+}
+
 uint32_t
 Pyramid::Remove(const std::vector<int64_t>& ids, RemoveMode mode) {
     if (mode != RemoveMode::MARK_REMOVE) {
@@ -558,9 +876,12 @@ Pyramid::Serialize(StreamWriter& writer) const {
         for (const auto& [hname, h_ptr] : hierarchies_) {
             StreamWriter::WriteString(writer, hname);
             h_ptr->root->Serialize(writer);
+            serialize_root_routes(writer, *h_ptr);
         }
     } else {
-        hierarchies_.at("")->root->Serialize(writer);
+        const auto& hierarchy = *hierarchies_.at("");
+        hierarchy.root->Serialize(writer);
+        serialize_root_routes(writer, hierarchy);
     }
 
     // serialize footer (introduced since v0.15)
@@ -584,6 +905,18 @@ Pyramid::serialize_source_id_table(StreamWriter& writer) const {
 }
 
 void
+Pyramid::serialize_root_routes(StreamWriter& writer, const Hierarchy& hierarchy) {
+    if (not hierarchy.HasMultiLayerRoot()) {
+        return;
+    }
+    std::shared_lock lock(hierarchy.root_routing_mutex);
+    StreamWriter::WriteObj(writer, static_cast<uint64_t>(hierarchy.root_route_graphs.size()));
+    for (const auto& graph : hierarchy.root_route_graphs) {
+        graph->Serialize(writer);
+    }
+}
+
+void
 Pyramid::deserialize_source_id_table(StreamReader& reader) {
     if (not persist_source_id_) {
         return;
@@ -603,6 +936,23 @@ Pyramid::deserialize_source_id_table(StreamReader& reader) {
         source_ids[i] = StreamReader::ReadString(reader);
     }
     label_table_->ReplaceSourceIdTable(std::move(source_ids));
+}
+
+void
+Pyramid::deserialize_root_routes(StreamReader& reader, Hierarchy& hierarchy) {
+    if (not hierarchy.HasMultiLayerRoot()) {
+        return;
+    }
+    uint64_t route_count = 0;
+    StreamReader::ReadObj(reader, route_count);
+    hierarchy.root_route_graphs.clear();
+    hierarchy.root_route_graphs.reserve(route_count);
+    for (uint64_t i = 0; i < route_count; ++i) {
+        auto graph = make_root_route_graph(hierarchy);
+        graph->Deserialize(reader);
+        hierarchy.root_route_graphs.push_back(std::move(graph));
+    }
+    hierarchy.root_routes_initialized = true;
 }
 
 MetadataPtr
@@ -664,9 +1014,12 @@ Pyramid::serialize_hierarchies(StreamWriter& writer) const {
         for (const auto& [hname, h_ptr] : hierarchies_) {
             StreamWriter::WriteString(writer, hname);
             h_ptr->root->Serialize(writer);
+            serialize_root_routes(writer, *h_ptr);
         }
     } else {
-        hierarchies_.at("")->root->Serialize(writer);
+        const auto& hierarchy = *hierarchies_.at("");
+        hierarchy.root->Serialize(writer);
+        serialize_root_routes(writer, hierarchy);
     }
 }
 
@@ -720,6 +1073,7 @@ Pyramid::deserialize_hierarchies(StreamReader& reader, const JsonType& basic_inf
             CHECK_ARGUMENT(h_iter != hierarchies_.end(),
                            fmt::format("deserialized hierarchy '{}' not in config", hname));
             h_iter->second->root->Deserialize(reader);
+            deserialize_root_routes(reader, *h_iter->second);
         }
     } else {
         auto h_iter = hierarchies_.find("");
@@ -727,6 +1081,7 @@ Pyramid::deserialize_hierarchies(StreamReader& reader, const JsonType& basic_inf
             h_iter != hierarchies_.end(),
             "deserialized single-hierarchy index but current config has named hierarchies");
         h_iter->second->root->Deserialize(reader);
+        deserialize_root_routes(reader, *h_iter->second);
     }
 }
 
@@ -904,6 +1259,7 @@ Pyramid::Deserialize(StreamReader& reader) {
             CHECK_ARGUMENT(h_iter != hierarchies_.end(),
                            fmt::format("deserialized hierarchy '{}' not in config", hname));
             h_iter->second->root->Deserialize(buffer_reader);
+            deserialize_root_routes(buffer_reader, *h_iter->second);
         }
     } else {
         auto h_iter = hierarchies_.find("");
@@ -911,6 +1267,7 @@ Pyramid::Deserialize(StreamReader& reader) {
             h_iter != hierarchies_.end(),
             "deserialized single-hierarchy index but current config has named hierarchies");
         h_iter->second->root->Deserialize(buffer_reader);
+        deserialize_root_routes(buffer_reader, *h_iter->second);
     }
 
     resize(max_capacity);
@@ -945,6 +1302,11 @@ Pyramid::ExportModel(const IndexCommonParam& param) const {
 
 std::vector<int64_t>
 Pyramid::Add(const DatasetPtr& base) {
+    return add_internal(base, false);
+}
+
+std::vector<int64_t>
+Pyramid::add_internal(const DatasetPtr& base, bool defer_root_routes) {
     const int64_t data_num = base->GetNumElements();
     const auto* data_vectors = base->GetFloat32Vectors();
     const auto* data_ids = base->GetIds();
@@ -1069,6 +1431,27 @@ Pyramid::Add(const DatasetPtr& base) {
         const auto* hpath = base->GetPaths(hname);
         if (hpath != nullptr) {
             add_to_hierarchy(*h_ptr, data_vectors, hpath, data_biases, local_cur_element_count);
+            if (not defer_root_routes && h_ptr->HasMultiLayerRoot() &&
+                h_ptr->root->status_ == IndexNode::Status::GRAPH) {
+                bool rebuilt_routes = false;
+                {
+                    std::unique_lock route_lock(h_ptr->root_routing_mutex);
+                    if (not h_ptr->root_routes_initialized) {
+                        std::shared_lock root_lock(h_ptr->root->mutex_);
+                        rebuild_root_routes_by_nsw(*h_ptr);
+                        h_ptr->root_routes_initialized = true;
+                        rebuilt_routes = true;
+                    }
+                }
+                if (not rebuilt_routes) {
+                    for (uint64_t i = 0; i < data_biases.size(); ++i) {
+                        const auto inner_id = static_cast<InnerIdType>(local_cur_element_count + i);
+                        if (h_ptr->root->graph_->CheckIdExists(inner_id)) {
+                            add_to_root_routes(*h_ptr, inner_id);
+                        }
+                    }
+                }
+            }
         }
     }
     return failed_ids;
@@ -1222,6 +1605,7 @@ static const std::string HGRAPH_PARAMS_TEMPLATE =
         "{EF_CONSTRUCTION_KEY}": 400,
         "{NO_BUILD_LEVELS}":[],
         "{INDEX_MIN_SIZE}": 0,
+        "{PYRAMID_ROOT_GRAPH_TYPE}": "{PYRAMID_ROOT_GRAPH_TYPE_SINGLE_LAYER}",
         "{SUPPORT_DUPLICATE}": false
     })";
 
@@ -1280,6 +1664,7 @@ Pyramid::CheckAndMappingExternalParam(const JsonType& external_param,
         {ODESCENT_PARAMETER_NEIGHBOR_SAMPLE_RATE,
          {GRAPH_KEY, ODESCENT_PARAMETER_NEIGHBOR_SAMPLE_RATE}},
         {PYRAMID_INDEX_MIN_SIZE, {INDEX_MIN_SIZE}},
+        {PYRAMID_ROOT_GRAPH_TYPE, {PYRAMID_ROOT_GRAPH_TYPE}},
         {PYRAMID_SUPPORT_DUPLICATE, {SUPPORT_DUPLICATE}},
         {PYRAMID_SUPPORT_DUPLICATE, {GRAPH_KEY, SUPPORT_DUPLICATE}}};
 
@@ -1362,7 +1747,17 @@ Pyramid::Build(const DatasetPtr& base) {
     }
 
     if (graph_type_ == GRAPH_TYPE_VALUE_NSW) {
-        ret = this->Add(base);
+        ret = this->add_internal(base, true);
+        for (const auto& [name, hierarchy] : hierarchies_) {
+            (void)name;
+            if (hierarchy->HasMultiLayerRoot() &&
+                hierarchy->root->status_ == IndexNode::Status::GRAPH) {
+                std::unique_lock route_lock(hierarchy->root_routing_mutex);
+                auto build_codes = has_precise_reorder() ? precise_codes_ : base_codes_;
+                build_root_routes_by_odescent(*hierarchy, build_codes, true);
+                hierarchy->root_routes_initialized = true;
+            }
+        }
     } else {
         ret = this->build_by_odescent(base);
     }
@@ -1443,7 +1838,8 @@ Pyramid::add_one_point(const Hierarchy& h,
         bool update_entry_point;
         {
             std::scoped_lock<std::mutex> entry_point_lock(entry_point_mutex_);
-            update_entry_point = is_update_entry_point(node->graph_->TotalCount());
+            update_entry_point = (not h.HasMultiLayerRoot() || node != h.root.get()) &&
+                                 is_update_entry_point(node->graph_->TotalCount());
         }
         Vector<InnerIdType> cached_neighbors(allocator_);
         node->graph_->GetNeighbors(inner_id, cached_neighbors);
@@ -1653,7 +2049,9 @@ Pyramid::search_node(const IndexNode* node,
                      const FlattenInterfacePtr& codes,
                      QueryContext& ctx,
                      uint64_t subindex_ef_search,
-                     DistanceRecordVector* rabitq_lower_bound_candidates) const {
+                     InnerIdType entry_point,
+                     DistanceRecordVector* rabitq_lower_bound_candidates,
+                     const ComputerInterfacePtr& preset_computer) const {
     std::shared_lock lock(node->mutex_);
     DistHeapPtr results = nullptr;
 
@@ -1681,7 +2079,9 @@ Pyramid::search_node(const IndexNode* node,
         }
 
         Vector<float> dists(id_count, allocator_);
-        auto computer = codes->FactoryComputer(query->GetFloat32Vectors());
+        auto computer = preset_computer != nullptr
+                            ? preset_computer
+                            : codes->FactoryComputer(query->GetFloat32Vectors());
         codes->Query(dists.data(), computer, ids_ptr, id_count, &ctx);
 
         for (int i = 0; i < id_count; ++i) {
@@ -1698,9 +2098,8 @@ Pyramid::search_node(const IndexNode* node,
         }
     } else if (node->status_ == IndexNode::Status::GRAPH) {
         InnerSearchParam modified_param = search_param;
-        modified_param.ep = node->entry_point_;
+        modified_param.ep = entry_point;
         if (node->level_ != 0) {
-            modified_param.hops_limit = std::numeric_limits<uint32_t>::max();
             if (search_param.search_mode == KNN_SEARCH) {
                 modified_param.ef = std::min(
                     modified_param.ef,
@@ -1709,14 +2108,26 @@ Pyramid::search_node(const IndexNode* node,
             }
         }
         modified_param.topk = static_cast<int64_t>(modified_param.ef);
-        results = searcher_->Search(node->graph_,
-                                    codes,
-                                    vl,
-                                    query->GetFloat32Vectors(),
-                                    modified_param,
-                                    label_table_,
-                                    &ctx,
-                                    rabitq_lower_bound_candidates);
+        if (preset_computer != nullptr) {
+            results = searcher_->SearchWithPresetComputer(node->graph_,
+                                                          codes,
+                                                          vl,
+                                                          query->GetFloat32Vectors(),
+                                                          modified_param,
+                                                          label_table_,
+                                                          &ctx,
+                                                          rabitq_lower_bound_candidates,
+                                                          preset_computer);
+        } else {
+            results = searcher_->Search(node->graph_,
+                                        codes,
+                                        vl,
+                                        query->GetFloat32Vectors(),
+                                        modified_param,
+                                        label_table_,
+                                        &ctx,
+                                        rabitq_lower_bound_candidates);
+        }
     }
 
     return results;
@@ -1808,6 +2219,31 @@ Pyramid::GetStats() const {
         stats["build_cache_hit_rate"]["skipped_reason"].SetString(
             "index was not built from an imported cache");
     }
+    uint64_t total_route_graph_size = 0;
+    for (const auto& [name, hierarchy] : hierarchies_) {
+        std::shared_lock route_lock(hierarchy->root_routing_mutex);
+        std::shared_lock root_lock(hierarchy->root->mutex_);
+        JsonType root_stats;
+        root_stats[PYRAMID_ROOT_GRAPH_TYPE].SetString(hierarchy->root_graph_type);
+        const auto& bottom_graph = hierarchy->root->graph_;
+        root_stats["bottom_graph_node_count"].SetUint64(
+            bottom_graph == nullptr ? 0 : bottom_graph->TotalCount());
+        root_stats["bottom_graph_size"].SetUint64(
+            bottom_graph == nullptr ? 0 : bottom_graph->GetMemoryUsage());
+        root_stats["route_graph_count"].SetUint64(hierarchy->root_route_graphs.size());
+        std::vector<int32_t> route_node_counts;
+        route_node_counts.reserve(hierarchy->root_route_graphs.size());
+        uint64_t route_graph_size = 0;
+        for (const auto& graph : hierarchy->root_route_graphs) {
+            route_node_counts.push_back(static_cast<int32_t>(graph->TotalCount()));
+            route_graph_size += graph->GetMemoryUsage();
+        }
+        root_stats["route_node_counts"].SetVector(route_node_counts);
+        root_stats["route_graph_size"].SetUint64(route_graph_size);
+        stats["root_graphs"][name.empty() ? "default" : name].SetJson(root_stats);
+        total_route_graph_size += route_graph_size;
+    }
+    stats["total_route_graph_size"].SetUint64(total_route_graph_size);
     return stats.Dump(4);
 }
 void

@@ -118,6 +118,9 @@ extern const char* const PYRAMID_PARAMETER_HIERARCHY_OP;
 extern const char* const PYRAMID_NO_BUILD_LEVELS;
 extern const char* const PYRAMID_HIERARCHIES;
 extern const char* const PYRAMID_INDEX_MIN_SIZE;
+extern const char* const PYRAMID_ROOT_GRAPH_TYPE;
+extern const char* const PYRAMID_ROOT_GRAPH_TYPE_SINGLE_LAYER;
+extern const char* const PYRAMID_ROOT_GRAPH_TYPE_MULTI_LAYER;
 
 extern const char PART_SLASH;
 extern const char PART_BAR;

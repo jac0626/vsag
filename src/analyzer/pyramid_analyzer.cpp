@@ -1072,8 +1072,14 @@ PyramidAnalyzer::search_single_node(const IndexNode* node,
 
         DistHeapPtr result;
         try {
-            result = pyramid_->search_node(
-                node, vl, inner_param, query_dataset, pyramid_->base_codes_, ctx, ef_search);
+            result = pyramid_->search_node(node,
+                                           vl,
+                                           inner_param,
+                                           query_dataset,
+                                           pyramid_->base_codes_,
+                                           ctx,
+                                           ef_search,
+                                           node->entry_point_);
 
             if (pyramid_->use_reorder_ && result != nullptr && !result->Empty()) {
                 result = pyramid_->reorder_->Reorder(result, query, inner_param.topk, ctx);
