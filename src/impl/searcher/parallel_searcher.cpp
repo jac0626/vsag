@@ -240,6 +240,9 @@ ParallelSearcher::search_impl(const GraphInterfacePtr& graph,
 
     while (not candidate_set->Empty()) {
         hops++;
+        if (hops >= inner_search_param.hops_limit) {
+            break;
+        }
         auto num_explore_nodes = candidate_set->Size() < beam ? candidate_set->Size() : beam;
 
         auto current_first_node_pair = candidate_set->Top();

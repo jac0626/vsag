@@ -38,7 +38,8 @@
 namespace vsag {
 
 class IndexNode;
-using SearchFunc = std::function<DistHeapPtr(const IndexNode* node, const VisitedListPtr& vl)>;
+using SearchFunc = std::function<DistHeapPtr(
+    const IndexNode* node, const VisitedListPtr& vl, InnerIdType entry_point)>;
 
 std::vector<std::string>
 split(const std::string& str, char delimiter);
@@ -89,6 +90,9 @@ public:
 
     void
     Serialize(StreamWriter& writer) const;
+
+    uint64_t
+    GetMemoryUsage() const;
 
     void
     Deserialize(StreamReader& reader);
@@ -155,6 +159,10 @@ public:
                                           h_param.no_build_levels.end());
                 h->ef_construction = h_param.ef_construction;
                 h->alpha = h_param.alpha;
+                h->root_graph_type = h_param.root_graph_type;
+                if (h->HasMultiLayerRoot()) {
+                    h->route_graph_param = make_root_route_graph_param(graph_param);
+                }
                 hierarchies_.insert({h_param.name, std::move(h)});
             }
         } else {
@@ -165,6 +173,10 @@ public:
                                       pyramid_param->no_build_levels.end());
             h->ef_construction = pyramid_param->ef_construction;
             h->alpha = pyramid_param->alpha;
+            h->root_graph_type = pyramid_param->root_graph_type;
+            if (h->HasMultiLayerRoot()) {
+                h->route_graph_param = make_root_route_graph_param(pyramid_param->graph_param);
+            }
             hierarchies_.insert({"", std::move(h)});
         }
         points_mutex_ = std::make_shared<PointsMutex>(max_capacity_, allocator_);
@@ -238,6 +250,12 @@ public:
 
     int64_t
     GetNumberRemoved() const override;
+
+    [[nodiscard]] uint64_t
+    GetMemoryUsage() const override;
+
+    [[nodiscard]] std::unordered_map<std::string, uint64_t>
+    GetMemoryUsageDetail() const override;
 
     uint32_t
     Remove(const std::vector<int64_t>& ids, RemoveMode mode) override;
@@ -342,11 +360,21 @@ private:
         std::string name;                          // hierarchy name (empty = default)
         std::unique_ptr<IndexNode> root{nullptr};  // root node of the tree
         Vector<int32_t> no_build_levels;           // depths where graph build is skipped
-        uint64_t ef_construction{400};             // expansion factor during graph build
-        float alpha{1.2F};  // Relative Neighborhood Graph pruning coefficient
+        Vector<GraphInterfacePtr> root_route_graphs;
+        GraphInterfaceParamPtr route_graph_param{nullptr};
+        uint64_t ef_construction{400};  // expansion factor during graph build
+        float alpha{1.2F};              // Relative Neighborhood Graph pruning coefficient
+        std::string root_graph_type{PYRAMID_ROOT_GRAPH_TYPE_SINGLE_LAYER};
+        bool root_routes_initialized{false};
+        mutable std::shared_mutex root_routing_mutex;
 
         Hierarchy(const std::string& n, std::unique_ptr<IndexNode> r, Allocator* alloc)
-            : name(n), root(std::move(r)), no_build_levels(alloc) {
+            : name(n), root(std::move(r)), no_build_levels(alloc), root_route_graphs(alloc) {
+        }
+
+        [[nodiscard]] bool
+        HasMultiLayerRoot() const {
+            return root_graph_type == PYRAMID_ROOT_GRAPH_TYPE_MULTI_LAYER;
         }
     };
 
@@ -380,6 +408,9 @@ private:
     search_impl(const DatasetPtr& query,
                 const SearchFunc& search_func,
                 InnerSearchParam& search_param,
+                int64_t final_topk,
+                int64_t reorder_candidate_limit,
+                const ComputerInterfacePtr& base_computer,
                 QueryContext& ctx,
                 const std::string& hierarchy_name,
                 const DistanceRecordVector* rabitq_lower_bound_candidates = nullptr) const;
@@ -395,6 +426,53 @@ private:
     /// Build all hierarchy graphs via ODescent in batch mode.
     std::vector<int64_t>
     build_by_odescent(const DatasetPtr& base);
+
+    std::vector<int64_t>
+    add_internal(const DatasetPtr& base, bool defer_root_routes);
+
+    static GraphInterfaceParamPtr
+    make_root_route_graph_param(const GraphInterfaceParamPtr& bottom_graph_param);
+
+    GraphInterfacePtr
+    make_root_route_graph(const Hierarchy& hierarchy) const;
+
+    int
+    sample_root_route_level(const Hierarchy& hierarchy);
+
+    Vector<Vector<InnerIdType>>
+    plan_root_route_ids(Hierarchy& hierarchy);
+
+    void
+    build_root_routes_by_odescent(Hierarchy& hierarchy,
+                                  const FlattenInterfacePtr& codes,
+                                  bool use_thread_pool = false);
+
+    void
+    rebuild_root_routes_by_nsw(Hierarchy& hierarchy);
+
+    void
+    add_to_root_routes(Hierarchy& hierarchy, InnerIdType inner_id);
+
+    void
+    insert_route_graph_point(const Hierarchy& hierarchy,
+                             const GraphInterfacePtr& graph,
+                             InnerIdType& entry_point,
+                             InnerIdType inner_id);
+
+    InnerIdType
+    search_root_routes(const Hierarchy& hierarchy,
+                       const VisitedListPtr& vl,
+                       const DatasetPtr& query,
+                       const FlattenInterfacePtr& codes,
+                       const ComputerInterfacePtr& computer,
+                       const InnerSearchParam& search_param,
+                       QueryContext& ctx) const;
+
+    static void
+    serialize_root_routes(StreamWriter& writer, const Hierarchy& hierarchy);
+
+    void
+    deserialize_root_routes(StreamReader& reader, Hierarchy& hierarchy);
 
     /// Recursively insert a single vector into the hierarchy tree.
     void
@@ -418,7 +496,9 @@ private:
                 const FlattenInterfacePtr& codes,
                 QueryContext& ctx,
                 uint64_t subindex_ef_search,
-                DistanceRecordVector* rabitq_lower_bound_candidates = nullptr) const;
+                InnerIdType entry_point,
+                DistanceRecordVector* rabitq_lower_bound_candidates = nullptr,
+                const ComputerInterfacePtr& preset_computer = nullptr) const;
 
     [[nodiscard]] bool
     has_precise_reorder() const {

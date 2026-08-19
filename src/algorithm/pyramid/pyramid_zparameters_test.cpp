@@ -688,3 +688,47 @@ TEST_CASE("Pyramid parses hops limit search parameter", "[ut][PyramidParameters]
     REQUIRE_THROWS(vsag::PyramidSearchParameters::FromJson(
         R"({"pyramid":{"ef_search":100,"hops_limit":4294967296}})"));
 }
+
+TEST_CASE("Pyramid validates root graph type and hierarchy overrides", "[ut][PyramidParameters]") {
+    vsag::IndexCommonParam common_param;
+    common_param.dim_ = 128;
+    common_param.data_type_ = vsag::DataTypes::DATA_TYPE_FLOAT;
+
+    auto external = vsag::JsonType::Parse(R"({
+        "base_quantization_type": "fp32",
+        "root_graph_type": "single_layer",
+        "hierarchies": [
+            {"name": "single"},
+            {"name": "multi", "root_graph_type": "multi_layer", "no_build_levels": []}
+        ]
+    })");
+    auto mapped = std::dynamic_pointer_cast<vsag::PyramidParameters>(
+        vsag::Pyramid::CheckAndMappingExternalParam(external, common_param));
+    REQUIRE(mapped->root_graph_type == vsag::PYRAMID_ROOT_GRAPH_TYPE_SINGLE_LAYER);
+    REQUIRE(mapped->hierarchies[0].root_graph_type == vsag::PYRAMID_ROOT_GRAPH_TYPE_SINGLE_LAYER);
+    REQUIRE(mapped->hierarchies[1].root_graph_type == vsag::PYRAMID_ROOT_GRAPH_TYPE_MULTI_LAYER);
+
+    external[vsag::PYRAMID_ROOT_GRAPH_TYPE].SetString("unknown");
+    REQUIRE_THROWS(vsag::Pyramid::CheckAndMappingExternalParam(external, common_param));
+
+    auto unbuilt_root = vsag::JsonType::Parse(R"({
+        "base_quantization_type": "fp32",
+        "root_graph_type": "multi_layer",
+        "no_build_levels": [0]
+    })");
+    REQUIRE_THROWS(vsag::Pyramid::CheckAndMappingExternalParam(unbuilt_root, common_param));
+}
+
+TEST_CASE("Pyramid validates explicit factor", "[ut][PyramidParameters]") {
+    auto absent = vsag::PyramidSearchParameters::FromJson(R"({"pyramid":{"ef_search":20}})");
+    REQUIRE_FALSE(absent.has_topk_factor);
+
+    auto present =
+        vsag::PyramidSearchParameters::FromJson(R"({"pyramid":{"ef_search":20,"factor":1.5}})");
+    REQUIRE(present.has_topk_factor);
+    REQUIRE(std::abs(present.topk_factor - 1.5F) < 1e-6F);
+    REQUIRE_THROWS(
+        vsag::PyramidSearchParameters::FromJson(R"({"pyramid":{"ef_search":20,"factor":0}})"));
+    REQUIRE_THROWS(
+        vsag::PyramidSearchParameters::FromJson(R"({"pyramid":{"ef_search":20,"factor":-1}})"));
+}
