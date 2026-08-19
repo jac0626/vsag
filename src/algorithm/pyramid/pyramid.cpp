@@ -40,6 +40,8 @@ namespace vsag {
 
 const static float RADIUS_EPSILON = 1.1F;
 static constexpr uint64_t SOURCE_ID_TABLE_MAGIC = 0x534F555243454944ULL;  // SOURCEID
+// The sampler clamps its input to double::min() and requires max_degree > 1.
+const static uint64_t MAX_ROOT_ROUTE_GRAPH_COUNT = 1024;
 
 std::vector<std::string>
 split(const std::string& str, char delimiter) {
@@ -962,6 +964,8 @@ Pyramid::deserialize_root_routes(StreamReader& reader, Hierarchy& hierarchy) {
     }
     uint64_t route_count = 0;
     StreamReader::ReadObj(reader, route_count);
+    CHECK_ARGUMENT(route_count <= MAX_ROOT_ROUTE_GRAPH_COUNT,
+                   fmt::format("invalid root route graph count: {}", route_count));
     hierarchy.root_route_graphs.clear();
     hierarchy.root_route_graphs.reserve(route_count);
     for (uint64_t i = 0; i < route_count; ++i) {
