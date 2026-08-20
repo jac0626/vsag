@@ -79,7 +79,7 @@ get_suitable_ef_search(int64_t topk, int64_t data_num, uint64_t subindex_ef_sear
 }
 
 GraphInterfaceParamPtr
-Pyramid::make_root_route_graph_param(const GraphInterfaceParamPtr& bottom_graph_param) {
+Pyramid::make_route_graph_param(const GraphInterfaceParamPtr& bottom_graph_param) {
     auto bottom = std::dynamic_pointer_cast<SparseGraphDatacellParameter>(bottom_graph_param);
     CHECK_ARGUMENT(bottom != nullptr, "Pyramid multi-layer root requires sparse graph storage");
     auto route = std::make_shared<SparseGraphDatacellParameter>();
@@ -88,16 +88,9 @@ Pyramid::make_root_route_graph_param(const GraphInterfaceParamPtr& bottom_graph_
     return route;
 }
 
-GraphInterfacePtr
-Pyramid::make_root_route_graph(const Hierarchy& hierarchy) const {
-    return std::make_shared<SparseGraphDataCell>(
-        std::dynamic_pointer_cast<SparseGraphDatacellParameter>(hierarchy.route_graph_param),
-        allocator_);
-}
-
 int
-Pyramid::sample_root_route_level(const Hierarchy& hierarchy) {
-    const auto max_degree = hierarchy.root->graph_param_->max_degree_;
+Pyramid::sample_route_level(const IndexNode& node) {
+    const auto max_degree = node.graph_param_->max_degree_;
     CHECK_ARGUMENT(max_degree > 1, "multi-layer root requires max_degree greater than one");
     std::scoped_lock lock(entry_point_mutex_);
     std::uniform_real_distribution<double> distribution(0.0, 1.0);
@@ -108,20 +101,20 @@ Pyramid::sample_root_route_level(const Hierarchy& hierarchy) {
 }
 
 Vector<Vector<InnerIdType>>
-Pyramid::plan_root_route_ids(Hierarchy& hierarchy) {
+Pyramid::plan_route_ids(IndexNode& node) {
     Vector<Vector<InnerIdType>> route_ids(allocator_);
-    if (hierarchy.root->graph_ == nullptr) {
+    if (node.graph_ == nullptr) {
         return route_ids;
     }
-    const auto root_ids = hierarchy.root->graph_->GetIds();
-    for (const auto inner_id : root_ids) {
-        const int level = sample_root_route_level(hierarchy);
+    const auto node_ids = node.graph_->GetIds();
+    for (const auto inner_id : node_ids) {
+        const int level = sample_route_level(node);
         if (level < 0) {
             continue;
         }
         while (route_ids.size() <= static_cast<uint64_t>(level)) {
             route_ids.emplace_back(allocator_);
-            hierarchy.root->entry_point_ = inner_id;
+            node.entry_point_ = inner_id;
         }
         for (int route_level = 0; route_level <= level; ++route_level) {
             route_ids[route_level].push_back(inner_id);
@@ -131,17 +124,18 @@ Pyramid::plan_root_route_ids(Hierarchy& hierarchy) {
 }
 
 void
-Pyramid::build_root_routes_by_odescent(Hierarchy& hierarchy,
-                                       const FlattenInterfacePtr& codes,
-                                       bool use_thread_pool) {
-    if (not hierarchy.HasMultiLayerRoot() || hierarchy.root->status_ != IndexNode::Status::GRAPH) {
+Pyramid::build_routes_by_odescent(const Hierarchy& hierarchy,
+                                  IndexNode& node,
+                                  const FlattenInterfacePtr& codes,
+                                  bool use_thread_pool) {
+    if (not node.has_routing() || node.status_ != IndexNode::Status::GRAPH) {
         return;
     }
-    auto route_ids = plan_root_route_ids(hierarchy);
-    hierarchy.root_route_graphs.clear();
-    hierarchy.root_route_graphs.reserve(route_ids.size());
+    auto route_ids = plan_route_ids(node);
+    node.routing_->graphs.clear();
+    node.routing_->graphs.reserve(route_ids.size());
     for (auto& ids : route_ids) {
-        auto graph = make_root_route_graph(hierarchy);
+        auto graph = node.make_route_graph();
         auto route_param = std::make_shared<ODescentParameter>();
         if (odescent_param_ != nullptr) {
             route_param->FromJson(odescent_param_->ToJson());
@@ -152,7 +146,7 @@ Pyramid::build_root_routes_by_odescent(Hierarchy& hierarchy,
             route_param, codes, allocator_, use_thread_pool ? thread_pool_.get() : nullptr);
         builder.Build(ids);
         builder.SaveGraph(graph);
-        hierarchy.root_route_graphs.push_back(std::move(graph));
+        node.routing_->graphs.push_back(std::move(graph));
     }
 }
 
@@ -184,40 +178,40 @@ Pyramid::insert_route_graph_point(const Hierarchy& hierarchy,
 }
 
 void
-Pyramid::rebuild_root_routes_by_nsw(Hierarchy& hierarchy) {
-    if (not hierarchy.HasMultiLayerRoot() || hierarchy.root->status_ != IndexNode::Status::GRAPH) {
+Pyramid::rebuild_routes_by_nsw(const Hierarchy& hierarchy, IndexNode& node) {
+    if (not node.has_routing() || node.status_ != IndexNode::Status::GRAPH) {
         return;
     }
-    auto route_ids = plan_root_route_ids(hierarchy);
-    hierarchy.root_route_graphs.clear();
-    hierarchy.root_route_graphs.reserve(route_ids.size());
+    auto route_ids = plan_route_ids(node);
+    node.routing_->graphs.clear();
+    node.routing_->graphs.reserve(route_ids.size());
     for (const auto& ids : route_ids) {
-        auto graph = make_root_route_graph(hierarchy);
+        auto graph = node.make_route_graph();
         InnerIdType entry_point = ids.front();
         for (const auto inner_id : ids) {
             insert_route_graph_point(hierarchy, graph, entry_point, inner_id);
         }
-        hierarchy.root_route_graphs.push_back(std::move(graph));
+        node.routing_->graphs.push_back(std::move(graph));
     }
 }
 
 void
-Pyramid::add_to_root_routes(Hierarchy& hierarchy, InnerIdType inner_id) {
-    const int level = sample_root_route_level(hierarchy);
+Pyramid::add_to_routes(const Hierarchy& hierarchy, IndexNode& node, InnerIdType inner_id) {
+    const int level = sample_route_level(node);
     if (level < 0) {
         return;
     }
-    std::unique_lock lock(hierarchy.root_routing_mutex);
-    const int current_top = static_cast<int>(hierarchy.root_route_graphs.size()) - 1;
+    std::unique_lock lock(node.routing_->mutex);
+    const int current_top = static_cast<int>(node.routing_->graphs.size()) - 1;
     InnerIdType entry_point = 0;
     {
-        std::shared_lock root_lock(hierarchy.root->mutex_);
-        entry_point = hierarchy.root->entry_point_;
+        std::shared_lock node_lock(node.mutex_);
+        entry_point = node.entry_point_;
     }
     for (int route_level = current_top; route_level >= 0; --route_level) {
         if (route_level <= level) {
             insert_route_graph_point(
-                hierarchy, hierarchy.root_route_graphs[route_level], entry_point, inner_id);
+                hierarchy, node.routing_->graphs[route_level], entry_point, inner_id);
             continue;
         }
         InnerSearchParam param;
@@ -228,40 +222,36 @@ Pyramid::add_to_root_routes(Hierarchy& hierarchy, InnerIdType inner_id) {
         param.hops_limit = std::numeric_limits<uint32_t>::max();
         VisitedListGuard vl_guard(pool_.get());
         FlattenIdDistanceProvider provider(base_codes_, inner_id);
-        auto result = searcher_->Search(hierarchy.root_route_graphs[route_level],
-                                        provider,
-                                        vl_guard.get(),
-                                        param,
-                                        nullptr,
-                                        nullptr);
+        auto result = searcher_->Search(
+            node.routing_->graphs[route_level], provider, vl_guard.get(), param, nullptr, nullptr);
         if (not result->Empty()) {
             entry_point = result->Top().second;
         }
     }
     for (int route_level = current_top + 1; route_level <= level; ++route_level) {
-        auto graph = make_root_route_graph(hierarchy);
+        auto graph = node.make_route_graph();
         graph->InsertNeighborsById(inner_id, Vector<InnerIdType>(allocator_));
-        hierarchy.root_route_graphs.push_back(std::move(graph));
+        node.routing_->graphs.push_back(std::move(graph));
     }
     if (level > current_top) {
-        std::unique_lock root_lock(hierarchy.root->mutex_);
-        hierarchy.root->entry_point_ = inner_id;
+        std::unique_lock node_lock(node.mutex_);
+        node.entry_point_ = inner_id;
     }
 }
 
 InnerIdType
-Pyramid::search_root_routes(const Hierarchy& hierarchy,
-                            const VisitedListPtr& vl,
-                            const DatasetPtr& query,
-                            const FlattenInterfacePtr& codes,
-                            const ComputerInterfacePtr& computer,
-                            const InnerSearchParam& search_param,
-                            QueryContext& ctx) const {
-    std::shared_lock lock(hierarchy.root_routing_mutex);
+Pyramid::search_routes(const IndexNode& node,
+                       const VisitedListPtr& vl,
+                       const DatasetPtr& query,
+                       const FlattenInterfacePtr& codes,
+                       const ComputerInterfacePtr& computer,
+                       const InnerSearchParam& search_param,
+                       QueryContext& ctx) const {
+    std::shared_lock lock(node.routing_->mutex);
     InnerIdType entry_point = 0;
     {
-        std::shared_lock root_lock(hierarchy.root->mutex_);
-        entry_point = hierarchy.root->entry_point_;
+        std::shared_lock node_lock(node.mutex_);
+        entry_point = node.entry_point_;
     }
     InnerSearchParam route_param = search_param;
     route_param.ef = 1;
@@ -273,11 +263,11 @@ Pyramid::search_root_routes(const Hierarchy& hierarchy,
     ScopedDistancePhase route_phase(ctx, DistanceEvaluationPhase::ROUTING);
     auto route_computer =
         computer != nullptr ? computer : codes->FactoryComputer(query->GetFloat32Vectors());
-    for (int64_t level = static_cast<int64_t>(hierarchy.root_route_graphs.size()) - 1; level >= 0;
+    for (int64_t level = static_cast<int64_t>(node.routing_->graphs.size()) - 1; level >= 0;
          --level) {
         vl->Reset();
         route_param.ep = entry_point;
-        auto result = searcher_->SearchWithPresetComputer(hierarchy.root_route_graphs[level],
+        auto result = searcher_->SearchWithPresetComputer(node.routing_->graphs[level],
                                                           codes,
                                                           vl,
                                                           query->GetFloat32Vectors(),
@@ -301,6 +291,17 @@ IndexNode::IndexNode(Allocator* allocator,
       allocator_(allocator),
       graph_param_(std::move(graph_param)),
       index_min_size_(index_min_size) {
+}
+
+void
+IndexNode::enable_routing(GraphInterfaceParamPtr graph_param) {
+    routing_ = std::make_unique<RoutingOverlay>(allocator_, std::move(graph_param));
+}
+
+GraphInterfacePtr
+IndexNode::make_route_graph() const {
+    return std::make_shared<SparseGraphDataCell>(
+        std::dynamic_pointer_cast<SparseGraphDatacellParameter>(routing_->graph_param), allocator_);
 }
 
 void
@@ -392,20 +393,69 @@ IndexNode::Serialize(StreamWriter& writer) const {
     }
 }
 
+void
+IndexNode::serialize_routing(StreamWriter& writer) const {
+    if (not has_routing()) {
+        return;
+    }
+    std::shared_lock lock(routing_->mutex);
+    StreamWriter::WriteObj(writer, static_cast<uint64_t>(routing_->graphs.size()));
+    for (const auto& graph : routing_->graphs) {
+        graph->Serialize(writer);
+    }
+}
+
+void
+IndexNode::deserialize_routing(StreamReader& reader) {
+    if (not has_routing()) {
+        return;
+    }
+    uint64_t route_count = 0;
+    StreamReader::ReadObj(reader, route_count);
+    CHECK_ARGUMENT(route_count <= MAX_ROOT_ROUTE_GRAPH_COUNT,
+                   fmt::format("invalid root route graph count: {}", route_count));
+    routing_->graphs.clear();
+    routing_->graphs.reserve(route_count);
+    for (uint64_t i = 0; i < route_count; ++i) {
+        auto graph = make_route_graph();
+        graph->Deserialize(reader);
+        routing_->graphs.push_back(std::move(graph));
+    }
+    routing_->initialized = true;
+}
+
 uint64_t
 IndexNode::GetMemoryUsage() const {
+    return get_memory_usage_detail().first;
+}
+
+std::pair<uint64_t, uint64_t>
+IndexNode::get_memory_usage_detail() const {
+    uint64_t memory = sizeof(IndexNode);
+    uint64_t routing_memory = 0;
+    if (has_routing()) {
+        std::shared_lock routing_lock(routing_->mutex);
+        routing_memory +=
+            sizeof(RoutingOverlay) + routing_->graphs.capacity() * sizeof(GraphInterfacePtr);
+        for (const auto& graph : routing_->graphs) {
+            routing_memory += graph->GetMemoryUsage();
+        }
+        memory += routing_memory;
+    }
     std::shared_lock lock(mutex_);
-    uint64_t memory = sizeof(IndexNode) + ids_.capacity() * sizeof(InnerIdType);
+    memory += ids_.capacity() * sizeof(InnerIdType);
     memory +=
         children_.bucket_count() * (sizeof(decltype(children_)::value_type) + sizeof(uint32_t));
     for (const auto& [key, child] : children_) {
         memory += key.capacity() + 1;
-        memory += child->GetMemoryUsage();
+        const auto [child_memory, child_routing_memory] = child->get_memory_usage_detail();
+        memory += child_memory;
+        routing_memory += child_routing_memory;
     }
     if (graph_ != nullptr) {
         memory += graph_->GetMemoryUsage();
     }
-    return memory;
+    return {memory, routing_memory};
 }
 void
 IndexNode::Init() {
@@ -495,10 +545,12 @@ Pyramid::build_by_odescent(const DatasetPtr& base) {
                                  data_num,
                                  build_flatten);
                 hierarchy->root->Build(builder);
-                std::unique_lock route_lock(hierarchy->root_routing_mutex);
-                std::unique_lock root_lock(hierarchy->root->mutex_);
-                build_root_routes_by_odescent(*hierarchy, base_codes_);
-                hierarchy->root_routes_initialized = true;
+                if (hierarchy->root->has_routing()) {
+                    std::unique_lock route_lock(hierarchy->root->routing_->mutex);
+                    std::unique_lock root_lock(hierarchy->root->mutex_);
+                    build_routes_by_odescent(*hierarchy, *hierarchy->root, base_codes_);
+                    hierarchy->root->routing_->initialized = true;
+                }
             }));
         }
         for (auto& f : futures) {
@@ -514,10 +566,12 @@ Pyramid::build_by_odescent(const DatasetPtr& base) {
                                data_num);
         for (const auto& [hname, h_ptr] : hierarchies_) {
             h_ptr->root->Build(graph_builder);
-            std::unique_lock route_lock(h_ptr->root_routing_mutex);
-            std::unique_lock root_lock(h_ptr->root->mutex_);
-            build_root_routes_by_odescent(*h_ptr, base_codes_);
-            h_ptr->root_routes_initialized = true;
+            if (h_ptr->root->has_routing()) {
+                std::unique_lock route_lock(h_ptr->root->routing_->mutex);
+                std::unique_lock root_lock(h_ptr->root->mutex_);
+                build_routes_by_odescent(*h_ptr, *h_ptr->root, base_codes_);
+                h_ptr->root->routing_->initialized = true;
+            }
         }
     }
     cur_element_count_ = data_num;
@@ -751,9 +805,9 @@ Pyramid::search_impl(const DatasetPtr& query,
     const VisitedListPtr& vl = vl_guard.get();
     SearchFunc routed_search_func =
         [&](const IndexNode* node, const VisitedListPtr& search_vl, InnerIdType entry_point) {
-            if (node == h.root.get() && h.HasMultiLayerRoot()) {
-                entry_point = search_root_routes(
-                    h, search_vl, query, base_codes_, base_computer, search_param, ctx);
+            if (node->has_routing()) {
+                entry_point = search_routes(
+                    *node, search_vl, query, base_codes_, base_computer, search_param, ctx);
                 search_vl->Reset();
             }
             return search_func(node, search_vl, entry_point);
@@ -850,15 +904,12 @@ Pyramid::GetMemoryUsageDetail() const {
                                 (sizeof(decltype(hierarchies_)::value_type) + sizeof(uint32_t));
     uint64_t route_memory = 0;
     for (const auto& [name, hierarchy] : hierarchies_) {
-        std::shared_lock route_lock(hierarchy->root_routing_mutex);
         hierarchy_memory +=
             name.capacity() + 1 + sizeof(Hierarchy) + hierarchy->name.capacity() + 1;
         hierarchy_memory += hierarchy->no_build_levels.capacity() * sizeof(int32_t);
-        hierarchy_memory += hierarchy->root_route_graphs.capacity() * sizeof(GraphInterfacePtr);
-        hierarchy_memory += hierarchy->root->GetMemoryUsage();
-        for (const auto& graph : hierarchy->root_route_graphs) {
-            route_memory += graph->GetMemoryUsage();
-        }
+        const auto [node_memory, node_routing_memory] = hierarchy->root->get_memory_usage_detail();
+        hierarchy_memory += node_memory - node_routing_memory;
+        route_memory += node_routing_memory;
     }
     memory_usage["hierarchies"] = hierarchy_memory;
     memory_usage["root_route_graphs"] = route_memory;
@@ -895,12 +946,12 @@ Pyramid::Serialize(StreamWriter& writer) const {
         for (const auto& [hname, h_ptr] : hierarchies_) {
             StreamWriter::WriteString(writer, hname);
             h_ptr->root->Serialize(writer);
-            serialize_root_routes(writer, *h_ptr);
+            h_ptr->root->serialize_routing(writer);
         }
     } else {
         const auto& hierarchy = *hierarchies_.at("");
         hierarchy.root->Serialize(writer);
-        serialize_root_routes(writer, hierarchy);
+        hierarchy.root->serialize_routing(writer);
     }
 
     // serialize footer (introduced since v0.15)
@@ -924,18 +975,6 @@ Pyramid::serialize_source_id_table(StreamWriter& writer) const {
 }
 
 void
-Pyramid::serialize_root_routes(StreamWriter& writer, const Hierarchy& hierarchy) {
-    if (not hierarchy.HasMultiLayerRoot()) {
-        return;
-    }
-    std::shared_lock lock(hierarchy.root_routing_mutex);
-    StreamWriter::WriteObj(writer, static_cast<uint64_t>(hierarchy.root_route_graphs.size()));
-    for (const auto& graph : hierarchy.root_route_graphs) {
-        graph->Serialize(writer);
-    }
-}
-
-void
 Pyramid::deserialize_source_id_table(StreamReader& reader) {
     if (not persist_source_id_) {
         return;
@@ -955,25 +994,6 @@ Pyramid::deserialize_source_id_table(StreamReader& reader) {
         source_ids[i] = StreamReader::ReadString(reader);
     }
     label_table_->ReplaceSourceIdTable(std::move(source_ids));
-}
-
-void
-Pyramid::deserialize_root_routes(StreamReader& reader, Hierarchy& hierarchy) {
-    if (not hierarchy.HasMultiLayerRoot()) {
-        return;
-    }
-    uint64_t route_count = 0;
-    StreamReader::ReadObj(reader, route_count);
-    CHECK_ARGUMENT(route_count <= MAX_ROOT_ROUTE_GRAPH_COUNT,
-                   fmt::format("invalid root route graph count: {}", route_count));
-    hierarchy.root_route_graphs.clear();
-    hierarchy.root_route_graphs.reserve(route_count);
-    for (uint64_t i = 0; i < route_count; ++i) {
-        auto graph = make_root_route_graph(hierarchy);
-        graph->Deserialize(reader);
-        hierarchy.root_route_graphs.push_back(std::move(graph));
-    }
-    hierarchy.root_routes_initialized = true;
 }
 
 MetadataPtr
@@ -1035,12 +1055,12 @@ Pyramid::serialize_hierarchies(StreamWriter& writer) const {
         for (const auto& [hname, h_ptr] : hierarchies_) {
             StreamWriter::WriteString(writer, hname);
             h_ptr->root->Serialize(writer);
-            serialize_root_routes(writer, *h_ptr);
+            h_ptr->root->serialize_routing(writer);
         }
     } else {
         const auto& hierarchy = *hierarchies_.at("");
         hierarchy.root->Serialize(writer);
-        serialize_root_routes(writer, hierarchy);
+        hierarchy.root->serialize_routing(writer);
     }
 }
 
@@ -1094,7 +1114,7 @@ Pyramid::deserialize_hierarchies(StreamReader& reader, const JsonType& basic_inf
             CHECK_ARGUMENT(h_iter != hierarchies_.end(),
                            fmt::format("deserialized hierarchy '{}' not in config", hname));
             h_iter->second->root->Deserialize(reader);
-            deserialize_root_routes(reader, *h_iter->second);
+            h_iter->second->root->deserialize_routing(reader);
         }
     } else {
         auto h_iter = hierarchies_.find("");
@@ -1102,7 +1122,7 @@ Pyramid::deserialize_hierarchies(StreamReader& reader, const JsonType& basic_inf
             h_iter != hierarchies_.end(),
             "deserialized single-hierarchy index but current config has named hierarchies");
         h_iter->second->root->Deserialize(reader);
-        deserialize_root_routes(reader, *h_iter->second);
+        h_iter->second->root->deserialize_routing(reader);
     }
 }
 
@@ -1289,7 +1309,7 @@ Pyramid::Deserialize(StreamReader& reader) {
             CHECK_ARGUMENT(h_iter != hierarchies_.end(),
                            fmt::format("deserialized hierarchy '{}' not in config", hname));
             h_iter->second->root->Deserialize(buffer_reader);
-            deserialize_root_routes(buffer_reader, *h_iter->second);
+            h_iter->second->root->deserialize_routing(buffer_reader);
         }
     } else {
         auto h_iter = hierarchies_.find("");
@@ -1297,7 +1317,7 @@ Pyramid::Deserialize(StreamReader& reader) {
             h_iter != hierarchies_.end(),
             "deserialized single-hierarchy index but current config has named hierarchies");
         h_iter->second->root->Deserialize(buffer_reader);
-        deserialize_root_routes(buffer_reader, *h_iter->second);
+        h_iter->second->root->deserialize_routing(buffer_reader);
     }
 
     resize(max_capacity);
@@ -1466,14 +1486,14 @@ Pyramid::add_internal(const DatasetPtr& base, bool defer_root_routes) {
                 std::shared_lock root_lock(h_ptr->root->mutex_);
                 root_has_graph = h_ptr->root->status_ == IndexNode::Status::GRAPH;
             }
-            if (not defer_root_routes && h_ptr->HasMultiLayerRoot() && root_has_graph) {
+            if (not defer_root_routes && h_ptr->root->has_routing() && root_has_graph) {
                 bool rebuilt_routes = false;
                 {
-                    std::unique_lock route_lock(h_ptr->root_routing_mutex);
-                    if (not h_ptr->root_routes_initialized) {
+                    std::unique_lock route_lock(h_ptr->root->routing_->mutex);
+                    if (not h_ptr->root->routing_->initialized) {
                         std::unique_lock root_lock(h_ptr->root->mutex_);
-                        rebuild_root_routes_by_nsw(*h_ptr);
-                        h_ptr->root_routes_initialized = true;
+                        rebuild_routes_by_nsw(*h_ptr, *h_ptr->root);
+                        h_ptr->root->routing_->initialized = true;
                         rebuilt_routes = true;
                     }
                 }
@@ -1481,7 +1501,7 @@ Pyramid::add_internal(const DatasetPtr& base, bool defer_root_routes) {
                     for (uint64_t i = 0; i < data_biases.size(); ++i) {
                         const auto inner_id = static_cast<InnerIdType>(local_cur_element_count + i);
                         if (h_ptr->root->graph_->CheckIdExists(inner_id)) {
-                            add_to_root_routes(*h_ptr, inner_id);
+                            add_to_routes(*h_ptr, *h_ptr->root, inner_id);
                         }
                     }
                 }
@@ -1786,11 +1806,11 @@ Pyramid::Build(const DatasetPtr& base) {
         ret = this->add_internal(base, true);
         for (const auto& [name, hierarchy] : hierarchies_) {
             (void)name;
-            if (hierarchy->HasMultiLayerRoot()) {
-                std::unique_lock route_lock(hierarchy->root_routing_mutex);
+            if (hierarchy->root->has_routing()) {
+                std::unique_lock route_lock(hierarchy->root->routing_->mutex);
                 std::unique_lock root_lock(hierarchy->root->mutex_);
-                build_root_routes_by_odescent(*hierarchy, base_codes_, true);
-                hierarchy->root_routes_initialized = true;
+                build_routes_by_odescent(*hierarchy, *hierarchy->root, base_codes_, true);
+                hierarchy->root->routing_->initialized = true;
             }
         }
     } else {
@@ -1873,8 +1893,8 @@ Pyramid::add_one_point(const Hierarchy& h,
         bool update_entry_point;
         {
             std::scoped_lock<std::mutex> entry_point_lock(entry_point_mutex_);
-            update_entry_point = (not h.HasMultiLayerRoot() || node != h.root.get()) &&
-                                 is_update_entry_point(node->graph_->TotalCount());
+            update_entry_point =
+                not node->has_routing() && is_update_entry_point(node->graph_->TotalCount());
         }
         Vector<InnerIdType> cached_neighbors(allocator_);
         node->graph_->GetNeighbors(inner_id, cached_neighbors);
@@ -2256,7 +2276,10 @@ Pyramid::GetStats() const {
     }
     uint64_t total_route_graph_size = 0;
     for (const auto& [name, hierarchy] : hierarchies_) {
-        std::shared_lock route_lock(hierarchy->root_routing_mutex);
+        std::shared_lock<std::shared_mutex> route_lock;
+        if (hierarchy->root->has_routing()) {
+            route_lock = std::shared_lock<std::shared_mutex>(hierarchy->root->routing_->mutex);
+        }
         std::shared_lock root_lock(hierarchy->root->mutex_);
         JsonType root_stats;
         root_stats[PYRAMID_ROOT_GRAPH_TYPE].SetString(hierarchy->root_graph_type);
@@ -2265,13 +2288,17 @@ Pyramid::GetStats() const {
             bottom_graph == nullptr ? 0 : bottom_graph->TotalCount());
         root_stats["bottom_graph_size"].SetUint64(
             bottom_graph == nullptr ? 0 : bottom_graph->GetMemoryUsage());
-        root_stats["route_graph_count"].SetUint64(hierarchy->root_route_graphs.size());
+        const auto* routing = hierarchy->root->routing_.get();
+        const auto route_graph_count = routing == nullptr ? 0 : routing->graphs.size();
+        root_stats["route_graph_count"].SetUint64(route_graph_count);
         std::vector<int32_t> route_node_counts;
-        route_node_counts.reserve(hierarchy->root_route_graphs.size());
+        route_node_counts.reserve(route_graph_count);
         uint64_t route_graph_size = 0;
-        for (const auto& graph : hierarchy->root_route_graphs) {
-            route_node_counts.push_back(static_cast<int32_t>(graph->TotalCount()));
-            route_graph_size += graph->GetMemoryUsage();
+        if (routing != nullptr) {
+            for (const auto& graph : routing->graphs) {
+                route_node_counts.push_back(static_cast<int32_t>(graph->TotalCount()));
+                route_graph_size += graph->GetMemoryUsage();
+            }
         }
         root_stats["route_node_counts"].SetVector(route_node_counts);
         root_stats["route_graph_size"].SetUint64(route_graph_size);
@@ -2597,11 +2624,11 @@ Pyramid::build_with_cache(const DatasetPtr& base) {
             Vector<InnerIdType>(allocator_).swap(gnode->ids_);
         }
 
-        if (h_ptr->HasMultiLayerRoot()) {
-            std::unique_lock route_lock(h_ptr->root_routing_mutex);
+        if (h_ptr->root->has_routing()) {
+            std::unique_lock route_lock(h_ptr->root->routing_->mutex);
             std::unique_lock root_lock(h_ptr->root->mutex_);
-            build_root_routes_by_odescent(*h_ptr, base_codes_, true);
-            h_ptr->root_routes_initialized = true;
+            build_routes_by_odescent(*h_ptr, *h_ptr->root, base_codes_, true);
+            h_ptr->root->routing_->initialized = true;
         }
 
         for (InnerIdType id = 0; id < static_cast<InnerIdType>(data_num); ++id) {

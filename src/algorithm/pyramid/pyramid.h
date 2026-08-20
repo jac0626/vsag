@@ -111,9 +111,42 @@ public:
     Status status_{Status::NO_INDEX};  // current build state
 
 private:
+    class RoutingOverlay {
+    public:
+        RoutingOverlay(Allocator* allocator, GraphInterfaceParamPtr param)
+            : graphs(allocator), graph_param(std::move(param)) {
+        }
+
+        Vector<GraphInterfacePtr> graphs;
+        GraphInterfaceParamPtr graph_param{nullptr};
+        bool initialized{false};
+        mutable std::shared_mutex mutex;
+    };
+
+    void
+    enable_routing(GraphInterfaceParamPtr graph_param);
+
+    [[nodiscard]] bool
+    has_routing() const {
+        return routing_ != nullptr;
+    }
+
+    GraphInterfacePtr
+    make_route_graph() const;
+
+    void
+    serialize_routing(StreamWriter& writer) const;
+
+    void
+    deserialize_routing(StreamReader& reader);
+
+    std::pair<uint64_t, uint64_t>
+    get_memory_usage_detail() const;
+
     UnorderedMap<std::string, std::unique_ptr<IndexNode>> children_;  // keyed by path segment
     Allocator* allocator_{nullptr};
     GraphInterfaceParamPtr graph_param_{nullptr};
+    std::unique_ptr<RoutingOverlay> routing_{nullptr};
 };
 
 /**
@@ -160,8 +193,8 @@ public:
                 h->ef_construction = h_param.ef_construction;
                 h->alpha = h_param.alpha;
                 h->root_graph_type = h_param.root_graph_type;
-                if (h->HasMultiLayerRoot()) {
-                    h->route_graph_param = make_root_route_graph_param(graph_param);
+                if (h->root_graph_type == PYRAMID_ROOT_GRAPH_TYPE_MULTI_LAYER) {
+                    h->root->enable_routing(make_route_graph_param(graph_param));
                 }
                 hierarchies_.insert({h_param.name, std::move(h)});
             }
@@ -174,8 +207,8 @@ public:
             h->ef_construction = pyramid_param->ef_construction;
             h->alpha = pyramid_param->alpha;
             h->root_graph_type = pyramid_param->root_graph_type;
-            if (h->HasMultiLayerRoot()) {
-                h->route_graph_param = make_root_route_graph_param(pyramid_param->graph_param);
+            if (h->root_graph_type == PYRAMID_ROOT_GRAPH_TYPE_MULTI_LAYER) {
+                h->root->enable_routing(make_route_graph_param(pyramid_param->graph_param));
             }
             hierarchies_.insert({"", std::move(h)});
         }
@@ -360,21 +393,12 @@ private:
         std::string name;                          // hierarchy name (empty = default)
         std::unique_ptr<IndexNode> root{nullptr};  // root node of the tree
         Vector<int32_t> no_build_levels;           // depths where graph build is skipped
-        Vector<GraphInterfacePtr> root_route_graphs;
-        GraphInterfaceParamPtr route_graph_param{nullptr};
-        uint64_t ef_construction{400};  // expansion factor during graph build
-        float alpha{1.2F};              // Relative Neighborhood Graph pruning coefficient
+        uint64_t ef_construction{400};             // expansion factor during graph build
+        float alpha{1.2F};  // Relative Neighborhood Graph pruning coefficient
         std::string root_graph_type{PYRAMID_ROOT_GRAPH_TYPE_SINGLE_LAYER};
-        bool root_routes_initialized{false};
-        mutable std::shared_mutex root_routing_mutex;
 
         Hierarchy(const std::string& n, std::unique_ptr<IndexNode> r, Allocator* alloc)
-            : name(n), root(std::move(r)), no_build_levels(alloc), root_route_graphs(alloc) {
-        }
-
-        [[nodiscard]] bool
-        HasMultiLayerRoot() const {
-            return root_graph_type == PYRAMID_ROOT_GRAPH_TYPE_MULTI_LAYER;
+            : name(n), root(std::move(r)), no_build_levels(alloc) {
         }
     };
 
@@ -431,27 +455,25 @@ private:
     add_internal(const DatasetPtr& base, bool defer_root_routes);
 
     static GraphInterfaceParamPtr
-    make_root_route_graph_param(const GraphInterfaceParamPtr& bottom_graph_param);
-
-    GraphInterfacePtr
-    make_root_route_graph(const Hierarchy& hierarchy) const;
+    make_route_graph_param(const GraphInterfaceParamPtr& bottom_graph_param);
 
     int
-    sample_root_route_level(const Hierarchy& hierarchy);
+    sample_route_level(const IndexNode& node);
 
     Vector<Vector<InnerIdType>>
-    plan_root_route_ids(Hierarchy& hierarchy);
+    plan_route_ids(IndexNode& node);
 
     void
-    build_root_routes_by_odescent(Hierarchy& hierarchy,
-                                  const FlattenInterfacePtr& codes,
-                                  bool use_thread_pool = false);
+    build_routes_by_odescent(const Hierarchy& hierarchy,
+                             IndexNode& node,
+                             const FlattenInterfacePtr& codes,
+                             bool use_thread_pool = false);
 
     void
-    rebuild_root_routes_by_nsw(Hierarchy& hierarchy);
+    rebuild_routes_by_nsw(const Hierarchy& hierarchy, IndexNode& node);
 
     void
-    add_to_root_routes(Hierarchy& hierarchy, InnerIdType inner_id);
+    add_to_routes(const Hierarchy& hierarchy, IndexNode& node, InnerIdType inner_id);
 
     void
     insert_route_graph_point(const Hierarchy& hierarchy,
@@ -460,19 +482,13 @@ private:
                              InnerIdType inner_id);
 
     InnerIdType
-    search_root_routes(const Hierarchy& hierarchy,
-                       const VisitedListPtr& vl,
-                       const DatasetPtr& query,
-                       const FlattenInterfacePtr& codes,
-                       const ComputerInterfacePtr& computer,
-                       const InnerSearchParam& search_param,
-                       QueryContext& ctx) const;
-
-    static void
-    serialize_root_routes(StreamWriter& writer, const Hierarchy& hierarchy);
-
-    void
-    deserialize_root_routes(StreamReader& reader, Hierarchy& hierarchy);
+    search_routes(const IndexNode& node,
+                  const VisitedListPtr& vl,
+                  const DatasetPtr& query,
+                  const FlattenInterfacePtr& codes,
+                  const ComputerInterfacePtr& computer,
+                  const InnerSearchParam& search_param,
+                  QueryContext& ctx) const;
 
     /// Recursively insert a single vector into the hierarchy tree.
     void
