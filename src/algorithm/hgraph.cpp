@@ -583,21 +583,17 @@ HGraph::Tune(const std::string& parameters, bool disable_future_tuning) {
 
     FlattenInterfacePtr tune_source;
     if (is_tune_base_code or is_tune_precise_code) {
-        auto select_tune_source = [&](bool require_coverage) {
-            auto select = [&](const FlattenInterfacePtr& codes, bool require_fp32) {
-                if (tune_source != nullptr or codes == nullptr or
-                    (require_fp32 and codes->GetQuantizerName() != QUANTIZATION_TYPE_VALUE_FP32) or
-                    (require_coverage and not covers_active_ids(codes))) {
-                    return;
-                }
-                tune_source = codes;
-            };
-            select(raw_vector_, false);
-            select(high_precise_codes_, true);
-            select(basic_flatten_codes_, true);
-        };
-        select_tune_source(true);
-        select_tune_source(false);
+        tune_source = raw_vector_;
+        if ((tune_source == nullptr or tune_source->TotalCount() == 0) and
+            high_precise_codes_ != nullptr and
+            high_precise_codes_->GetQuantizerName() == QUANTIZATION_TYPE_VALUE_FP32) {
+            tune_source = high_precise_codes_;
+        }
+        if ((tune_source == nullptr or tune_source->TotalCount() == 0) and
+            basic_flatten_codes_ != nullptr and
+            basic_flatten_codes_->GetQuantizerName() == QUANTIZATION_TYPE_VALUE_FP32) {
+            tune_source = basic_flatten_codes_;
+        }
         if (tune_source == nullptr) {
             return false;
         }
