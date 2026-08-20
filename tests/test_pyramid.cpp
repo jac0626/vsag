@@ -2188,7 +2188,8 @@ TEST_CASE("Pyramid ExportCache + ImportCache + Build acceleration smoke test",
             "base_quantization_type": "fp32",
             "max_degree": 16,
             "ef_construction": 16,
-            "no_build_levels": [0, 1, 2],
+            "root_graph_type": "multi_layer",
+            "no_build_levels": [1, 2],
             "index_min_size": 28,
             "persist_source_id": true
         }
@@ -2205,9 +2206,8 @@ TEST_CASE("Pyramid ExportCache + ImportCache + Build acceleration smoke test",
     for (int64_t i = 0; i < TEST_COUNT; ++i) {
         ids[i] = i + 1;
     }
-    // All vectors share a deep path so they all land in the same leaf
-    // IndexNode (depth 3 with no_build_levels=[0,1,2]), making that leaf
-    // exceed index_min_size and become a GRAPH that fulfill_cache() walks.
+    // All vectors share a deep path. Levels 1 and 2 remain NO_INDEX, while the root and the
+    // depth-3 leaf exceed index_min_size and become GRAPH nodes that fulfill_cache() walks.
     std::vector<std::string> paths(TEST_COUNT, "a/b/c");
     std::vector<std::string> source_ids(TEST_COUNT);
     for (int64_t i = 0; i < TEST_COUNT; ++i) {
@@ -2246,6 +2246,7 @@ TEST_CASE("Pyramid ExportCache + ImportCache + Build acceleration smoke test",
     REQUIRE(warmed->GetNumElements() == TEST_COUNT);
     auto warm_stats = vsag::JsonType::Parse(warmed->GetStats());
     REQUIRE(warm_stats["build_cache_hit_nodes"].GetInt() > 0);
+    REQUIRE(warm_stats["root_graphs"]["default"]["route_graph_count"].GetInt() > 0);
     std::vector<float> query_vec(TEST_DIM);
     std::copy(vectors.begin(), vectors.begin() + TEST_DIM, query_vec.begin());
     // Pyramid navigates by path; the query must reference the same leaf.

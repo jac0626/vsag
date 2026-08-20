@@ -2586,6 +2586,13 @@ Pyramid::build_with_cache(const DatasetPtr& base) {
             Vector<InnerIdType>(allocator_).swap(gnode->ids_);
         }
 
+        if (h_ptr->HasMultiLayerRoot()) {
+            std::unique_lock route_lock(h_ptr->root_routing_mutex);
+            std::unique_lock root_lock(h_ptr->root->mutex_);
+            build_root_routes_by_odescent(*h_ptr, base_codes_, true);
+            h_ptr->root_routes_initialized = true;
+        }
+
         for (InnerIdType id = 0; id < static_cast<InnerIdType>(data_num); ++id) {
             if (hierarchy_hits[static_cast<size_t>(id)]) {
                 global_hits[static_cast<size_t>(id)] = true;
