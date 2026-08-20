@@ -893,6 +893,42 @@ TEST_CASE("Pyramid factor controls reorder candidates without changing final top
         query, 5, R"({"pyramid":{"ef_search":20,"factor":-1.0}})", nullptr));
 }
 
+TEST_CASE("Pyramid legacy deserialization rejects incompatible root graph type",
+          "[ut][pyramid][root_graph][serialization]") {
+    constexpr int64_t count = 32;
+    std::vector<float> vectors(count * PYRAMID_TEST_DIM);
+    FillRootVectors(vectors, count);
+    std::vector<int64_t> ids(count);
+    std::iota(ids.begin(), ids.end(), 0);
+    std::vector<std::string> paths(count, "");
+
+    const std::array<std::pair<std::string, std::string>, 2> cases = {
+        std::pair{std::string(vsag::PYRAMID_ROOT_GRAPH_TYPE_SINGLE_LAYER),
+                  std::string(vsag::PYRAMID_ROOT_GRAPH_TYPE_MULTI_LAYER)},
+        std::pair{std::string(vsag::PYRAMID_ROOT_GRAPH_TYPE_MULTI_LAYER),
+                  std::string(vsag::PYRAMID_ROOT_GRAPH_TYPE_SINGLE_LAYER)}};
+    for (const auto& [serialized_type, configured_type] : cases) {
+        auto source = MakeRootPyramidIndex(serialized_type);
+        REQUIRE(source.index
+                    ->Build(MakePyramidDataset(
+                        vectors.data(), ids.data(), paths.data(), static_cast<int64_t>(ids.size())))
+                    .empty());
+        std::stringstream stream;
+        vsag::IOStreamWriter writer(stream);
+        source.index->Serialize(writer);
+
+        auto target = MakeRootPyramidIndex(configured_type);
+        vsag::IOStreamReader reader(stream);
+        try {
+            target.index->Deserialize(reader);
+            FAIL("incompatible root graph type must be rejected");
+        } catch (const vsag::VsagException& error) {
+            REQUIRE(std::string(error.what()).find("Pyramid index parameter not match") !=
+                    std::string::npos);
+        }
+    }
+}
+
 TEST_CASE("Pyramid multi-layer root routes duplicate representatives",
           "[ut][pyramid][root_graph][duplicate]") {
     constexpr int64_t count = 512;
