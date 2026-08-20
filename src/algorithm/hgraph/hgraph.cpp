@@ -197,18 +197,21 @@ HGraph::Tune(const std::string& parameters, bool disable_future_tuning) {
 
     FlattenInterfacePtr tune_source;
     if (is_tune_base_code or is_tune_precise_code or is_tune_raw_code) {
-        auto select_larger_source = [&](const FlattenInterfacePtr& codes, bool require_fp32) {
-            if (codes == nullptr or
-                (require_fp32 and codes->GetQuantizerName() != QUANTIZATION_TYPE_VALUE_FP32)) {
-                return;
-            }
-            if (tune_source == nullptr or codes->TotalCount() > tune_source->TotalCount()) {
+        auto select_tune_source = [&](bool require_coverage) {
+            auto select = [&](const FlattenInterfacePtr& codes, bool require_fp32) {
+                if (tune_source != nullptr or codes == nullptr or
+                    (require_fp32 and codes->GetQuantizerName() != QUANTIZATION_TYPE_VALUE_FP32) or
+                    (require_coverage and not covers_active_ids(codes))) {
+                    return;
+                }
                 tune_source = codes;
-            }
+            };
+            select(raw_vector_, false);
+            select(high_precise_codes_, true);
+            select(basic_flatten_codes_, true);
         };
-        select_larger_source(raw_vector_, false);
-        select_larger_source(high_precise_codes_, true);
-        select_larger_source(basic_flatten_codes_, true);
+        select_tune_source(true);
+        select_tune_source(false);
         if (tune_source == nullptr) {
             return false;
         }
@@ -234,12 +237,7 @@ HGraph::Tune(const std::string& parameters, bool disable_future_tuning) {
         }
     };
 
-    // Add failures can leave the published HGraph count ahead of the available FP32 source.
-    // Rebuild the source's readable prefix and leave Add-state recovery to the Add path.
-    const auto source_count =
-        std::min(static_cast<int64_t>(tune_source == nullptr ? 0 : tune_source->TotalCount()),
-                 static_cast<int64_t>(current_count));
-    auto train_count = std::min(this->train_sample_count_, source_count);
+    auto train_count = std::min(this->train_sample_count_, this->GetNumElements());
     Vector<float> train_data(train_count * dim_, 0, allocator_);
     if (is_tune_base_code or is_tune_precise_code or is_tune_raw_code) {
         for (InnerIdType i = 0; i < train_count; i++) {
@@ -270,7 +268,7 @@ HGraph::Tune(const std::string& parameters, bool disable_future_tuning) {
             new_code->Train(train_data.data(), train_count);
 
             Vector<float> insert_buffer(dim_, 0, allocator_);
-            for (int64_t i = 0; i < source_count; ++i) {
+            for (int64_t i = 0; i < current_count; ++i) {
                 decode_tune_source(i, insert_buffer.data());
                 new_code->InsertVector(static_cast<const void*>(insert_buffer.data()), i);
             }
