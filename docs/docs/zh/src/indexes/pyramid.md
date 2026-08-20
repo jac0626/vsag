@@ -155,7 +155,7 @@ Pyramid 使用 split code 的 code-code 距离完成增量 FLAT→GRAPH 晋升�
 | 参数 | 类型 | 默认值 | 说明 |
 |------|------|--------|------|
 | `ef_search` | int | `100` | 叶子层子图检索的候选集大小 |
-| `factor` | float | 未设置 | 重排候选倍率。值 `<= 1` 时最多重排 `max(ef_search, topk)` 个候选；值大于 `1` 时最多重排 `min(max(ef_search, topk), floor(topk * factor))` 个候选。必须为有限正数；关闭重排时不生效。 |
+| `factor` | float | 未设置 | KNN 重排候选倍率。值 `<= 1` 时最多重排 `max(ef_search, topk)` 个候选；值大于 `1` 时最多重排 `min(max(ef_search, topk), floor(topk * factor))` 个候选。必须为有限正数；范围检索或关闭重排时不生效。 |
 | `hops_limit` | int | 不限 | 根节点底图及每个非根 GRAPH 的逐图 KNN 跳数上限；不大于 `ef_search` 时忽略。根节点的稀疏路由层不受限制，FLAT 扫描与范围检索不受影响。 |
 | `subindex_ef_search` | int | `50` | 沿路径向下遍历中间子图时的候选集大小 |
 | `hierarchies` | string[] | `[]` | 指定检索哪个层级。空数组表示使用默认（匿名）层级。 |

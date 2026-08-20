@@ -1070,6 +1070,11 @@ PyramidAnalyzer::search_single_node(const IndexNode* node,
         SearchStatistics stats;
         QueryContext ctx{.stats = &stats};
 
+        InnerIdType entry_point = 0;
+        {
+            std::shared_lock lock(node->mutex_);
+            entry_point = node->entry_point_;
+        }
         DistHeapPtr result;
         try {
             result = pyramid_->search_node(node,
@@ -1079,7 +1084,7 @@ PyramidAnalyzer::search_single_node(const IndexNode* node,
                                            pyramid_->base_codes_,
                                            ctx,
                                            ef_search,
-                                           node->entry_point_);
+                                           entry_point);
 
             if (pyramid_->use_reorder_ && result != nullptr && !result->Empty()) {
                 result = pyramid_->reorder_->Reorder(result, query, inner_param.topk, ctx);
