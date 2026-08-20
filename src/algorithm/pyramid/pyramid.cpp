@@ -1666,8 +1666,6 @@ static const std::string HGRAPH_PARAMS_TEMPLATE =
 ParamPtr
 Pyramid::CheckAndMappingExternalParam(const JsonType& external_param,
                                       const IndexCommonParam& common_param) {
-    validate_pyramid_external_root_graph_config(external_param);
-
     const ConstParamMap external_mapping = {
         {PYRAMID_EF_CONSTRUCTION, {EF_CONSTRUCTION_KEY}},
         {PYRAMID_USE_REORDER, {USE_REORDER_KEY}},

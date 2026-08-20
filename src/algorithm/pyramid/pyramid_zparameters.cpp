@@ -81,53 +81,6 @@ append_hierarchy_selector(PyramidSearchParameters& params,
 }  // namespace
 
 void
-validate_pyramid_external_root_graph_config(const JsonType& external_param) {
-    const bool root_graph_type_is_explicit = external_param.Contains(PYRAMID_ROOT_GRAPH_TYPE);
-    std::vector<int32_t> inherited_no_build_levels;
-    if (external_param.Contains(PYRAMID_NO_BUILD_LEVELS) &&
-        external_param[PYRAMID_NO_BUILD_LEVELS].IsArray()) {
-        inherited_no_build_levels = external_param[PYRAMID_NO_BUILD_LEVELS].GetVector();
-    }
-    const auto validate_explicit_root_graph_type = [](bool is_explicit,
-                                                      const std::vector<int32_t>& no_build_levels,
-                                                      const std::string& context) {
-        CHECK_ARGUMENT(
-            not is_explicit || std::find(no_build_levels.begin(), no_build_levels.end(), 0) ==
-                                   no_build_levels.end(),
-            fmt::format("{} root_graph_type cannot be specified when level 0 is not built",
-                        context));
-    };
-    if (external_param.Contains(PYRAMID_HIERARCHIES) &&
-        external_param[PYRAMID_HIERARCHIES].IsArray()) {
-        for (const auto& hierarchy_raw : *external_param[PYRAMID_HIERARCHIES].GetInnerJson()) {
-            JsonType hierarchy;
-            *hierarchy.GetInnerJson() = hierarchy_raw;
-            auto no_build_levels = inherited_no_build_levels;
-            bool hierarchy_root_graph_type_is_explicit = root_graph_type_is_explicit;
-            std::string context = "Pyramid hierarchy";
-            if (hierarchy.IsObject()) {
-                if (hierarchy.Contains(PYRAMID_NO_BUILD_LEVELS) &&
-                    hierarchy[PYRAMID_NO_BUILD_LEVELS].IsArray()) {
-                    no_build_levels = hierarchy[PYRAMID_NO_BUILD_LEVELS].GetVector();
-                }
-                hierarchy_root_graph_type_is_explicit = hierarchy_root_graph_type_is_explicit ||
-                                                        hierarchy.Contains(PYRAMID_ROOT_GRAPH_TYPE);
-                if (hierarchy.Contains("name") && hierarchy["name"].IsString()) {
-                    context = fmt::format("hierarchy {}", hierarchy["name"].GetString());
-                }
-            } else if (hierarchy.IsString()) {
-                context = fmt::format("hierarchy {}", hierarchy.GetString());
-            }
-            validate_explicit_root_graph_type(
-                hierarchy_root_graph_type_is_explicit, no_build_levels, context);
-        }
-    } else {
-        validate_explicit_root_graph_type(
-            root_graph_type_is_explicit, inherited_no_build_levels, "Pyramid");
-    }
-}
-
-void
 PyramidHierarchyParameters::FromJson(const JsonType& json) {
     if (json.IsString()) {
         name = json.GetString();
