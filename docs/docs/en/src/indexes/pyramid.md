@@ -161,7 +161,7 @@ Search-time parameters live under the `pyramid` sub-object:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `ef_search` | int | `100` | Candidate list size for the leaf-level graph search. |
-| `factor` | float | unset | Reorder candidate multiplier. When set to `<= 1`, reorder up to `max(ef_search, topk)` candidates; when greater than `1`, reorder up to `min(max(ef_search, topk), floor(topk * factor))`. It must be finite and positive. It has no effect when reorder is disabled. |
+| `factor` | float | unset | KNN reorder candidate multiplier. When set to `<= 1`, reorder up to `max(ef_search, topk)` candidates; when greater than `1`, reorder up to `min(max(ef_search, topk), floor(topk * factor))`. It must be finite and positive. It has no effect on range search or when reorder is disabled. |
 | `hops_limit` | int | unlimited | Per-graph KNN hop cap for the root bottom graph and every non-root graph; ignored when it is not greater than `ef_search`. Sparse root routing layers are never hop-limited. FLAT scans and range search are unaffected. |
 | `subindex_ef_search` | int | `50` | Candidate list size used when traversing intermediate sub-graphs on the path. |
 | `hierarchies` | string[] | `[]` | Select which hierarchy to search. Empty means use the default (unnamed) hierarchy. |

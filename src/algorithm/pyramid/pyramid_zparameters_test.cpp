@@ -717,6 +717,33 @@ TEST_CASE("Pyramid validates root graph type and hierarchy overrides", "[ut][Pyr
         "no_build_levels": [0]
     })");
     REQUIRE_THROWS(vsag::Pyramid::CheckAndMappingExternalParam(unbuilt_root, common_param));
+
+    unbuilt_root = vsag::JsonType::Parse(R"({
+        "base_quantization_type": "fp32",
+        "root_graph_type": "single_layer",
+        "no_build_levels": [0]
+    })");
+    REQUIRE_THROWS(vsag::Pyramid::CheckAndMappingExternalParam(unbuilt_root, common_param));
+
+    auto default_unbuilt_root = vsag::JsonType::Parse(R"({
+        "base_quantization_type": "fp32",
+        "no_build_levels": [0]
+    })");
+    REQUIRE_NOTHROW(
+        vsag::Pyramid::CheckAndMappingExternalParam(default_unbuilt_root, common_param));
+
+    auto explicit_hierarchy_root = vsag::JsonType::Parse(R"({
+        "base_quantization_type": "fp32",
+        "hierarchies": [
+            {
+                "name": "site",
+                "root_graph_type": "single_layer",
+                "no_build_levels": [0]
+            }
+        ]
+    })");
+    REQUIRE_THROWS(
+        vsag::Pyramid::CheckAndMappingExternalParam(explicit_hierarchy_root, common_param));
 }
 
 TEST_CASE("Pyramid validates explicit factor", "[ut][PyramidParameters]") {
