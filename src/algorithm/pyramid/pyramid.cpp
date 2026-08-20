@@ -773,7 +773,7 @@ Pyramid::search_impl(const DatasetPtr& query,
         }
         search_result = this->reorder_->Reorder(search_result,
                                                 query->GetFloat32Vectors(),
-                                                search_param.topk,
+                                                final_topk,
                                                 ctx,
                                                 nullptr,
                                                 rabitq_lower_bound_candidates);
@@ -1249,6 +1249,15 @@ Pyramid::Deserialize(StreamReader& reader) {
         throw VsagException(ErrorType::READ_ERROR, "failed to read index footer");
     }
     auto max_capacity = basic_info["max_capacity"].GetInt();
+    auto index_param = std::make_shared<PyramidParameters>();
+    index_param->FromString(basic_info[INDEX_PARAM].GetString());
+    if (not this->create_param_ptr_->CheckCompatibility(index_param)) {
+        auto message = fmt::format("Pyramid index parameter not match, current: {}, new: {}",
+                                   this->create_param_ptr_->ToString(),
+                                   index_param->ToString());
+        logger::error(message);
+        throw VsagException(ErrorType::INVALID_ARGUMENT, message);
+    }
 
     BufferStreamReader buffer_reader(
         &reader, std::numeric_limits<uint64_t>::max(), this->allocator_);
