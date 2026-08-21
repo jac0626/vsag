@@ -94,6 +94,7 @@ extern const char* const PYRAMID_BUILD_ALPHA;
 extern const char* const PYRAMID_GRAPH_TYPE;
 extern const char* const PYRAMID_GRAPH_STORAGE_TYPE;
 extern const char* const PYRAMID_BUILD_THREAD_COUNT;
+extern const char* const PYRAMID_BUILD_BY_BASE_QUANTIZATION;
 extern const char* const PYRAMID_PRECISE_QUANTIZATION_TYPE;
 extern const char* const PYRAMID_RABITQ_BITS_PER_DIM_BASE;
 extern const char* const PYRAMID_RABITQ_BITS_PER_DIM_QUERY;

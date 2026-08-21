@@ -82,6 +82,7 @@ public:
     std::string root_graph_type{PYRAMID_ROOT_GRAPH_TYPE_SINGLE_LAYER};
 
     bool support_duplicate{false};
+    bool build_by_base{false};
     bool has_hierarchies{false};
     bool persist_source_id{false};
 };

@@ -102,9 +102,13 @@ public:
 
 public:
     GraphInterfacePtr graph_{nullptr};  // graph over the ids in this node
-    InnerIdType entry_point_{0};        // entry point for graph search
-    uint32_t level_{0};                 // depth in the tree (root = 0)
-    mutable std::shared_mutex mutex_;   // per-node lock for concurrent add/search
+    // Bottom entry when no route exists; otherwise the highest route entry. A routed entry is also
+    // a physical member of the complete bottom graph.
+    InnerIdType entry_point_{0};
+    uint32_t level_{0};  // depth in the tree (root = 0)
+    // Guards node topology metadata: status, graph ownership, routing graph vector, and entry.
+    // Graph adjacency rows remain protected by Pyramid::points_mutex_.
+    mutable std::shared_mutex mutex_;
 
     Vector<InnerIdType> ids_;          // internal ids stored at this node
     uint32_t index_min_size_{0};       // threshold to trigger graph build
@@ -117,10 +121,10 @@ private:
             : graphs(allocator), graph_param(std::move(param)) {
         }
 
+        // The vector shape is guarded by the owning IndexNode::mutex_. Shared graph ownership lets
+        // readers search a snapshot after releasing the node lock.
         Vector<GraphInterfacePtr> graphs;
         GraphInterfaceParamPtr graph_param{nullptr};
-        bool initialized{false};
-        mutable std::shared_mutex mutex;
     };
 
     void
@@ -173,6 +177,7 @@ public:
                                          pyramid_param->base_codes_param->name ==
                                              RABITQ_SPLIT_DATA_CELL),
           support_duplicate_(pyramid_param->support_duplicate),
+          build_by_base_(pyramid_param->build_by_base),
           persist_source_id_(pyramid_param->persist_source_id),
           cache_(std::make_unique<PyramidBuildCache>(common_param.allocator_.get())) {
         base_codes_ = FlattenInterface::MakeInstance(pyramid_param->base_codes_param, common_param);
@@ -452,7 +457,7 @@ private:
     build_by_odescent(const DatasetPtr& base);
 
     std::vector<int64_t>
-    add_internal(const DatasetPtr& base, bool defer_root_routes);
+    add_internal(const DatasetPtr& base);
 
     static GraphInterfaceParamPtr
     make_route_graph_param(const GraphInterfaceParamPtr& bottom_graph_param);
@@ -470,16 +475,27 @@ private:
                              bool use_thread_pool = false);
 
     void
-    rebuild_routes_by_nsw(const Hierarchy& hierarchy, IndexNode& node);
-
-    void
-    add_to_routes(const Hierarchy& hierarchy, IndexNode& node, InnerIdType inner_id);
-
-    void
     insert_route_graph_point(const Hierarchy& hierarchy,
                              const GraphInterfacePtr& graph,
+                             const FlattenInterfacePtr& codes,
                              InnerIdType& entry_point,
-                             InnerIdType inner_id);
+                             InnerIdType inner_id,
+                             const float* vector);
+
+    DistHeapPtr
+    search_graph_for_add(const GraphInterfacePtr& graph,
+                         const FlattenInterfacePtr& codes,
+                         InnerIdType inner_id,
+                         const float* vector,
+                         InnerSearchParam& search_param);
+
+    void
+    add_routed_point(const Hierarchy& hierarchy,
+                     IndexNode& node,
+                     InnerIdType inner_id,
+                     const float* vector,
+                     uint64_t ef_construction,
+                     bool use_self_as_entry);
 
     InnerIdType
     search_routes(const IndexNode& node,
@@ -527,6 +543,11 @@ private:
     }
 
     [[nodiscard]] FlattenInterfacePtr
+    construction_codes() const {
+        return has_precise_reorder() and not build_by_base_ ? precise_codes_ : base_codes_;
+    }
+
+    [[nodiscard]] FlattenInterfacePtr
     decodable_codes() const {
         return raw_vector_ != nullptr ? raw_vector_
                                       : (has_precise_reorder() ? precise_codes_ : base_codes_);
@@ -554,9 +575,9 @@ private:
 private:
     ODescentParameterPtr odescent_param_{nullptr};  // ODescent build parameters
     UnorderedMap<std::string, std::unique_ptr<Hierarchy>> hierarchies_;  // named hierarchies
-    FlattenInterfacePtr base_codes_{nullptr};          // coarse codes for graph build/search
-    FlattenInterfacePtr precise_codes_{nullptr};       // precise codes for reorder (if enabled)
-    FlattenInterfacePtr raw_vector_{nullptr};          // original vectors for decode-only paths
+    FlattenInterfacePtr base_codes_{nullptr};     // coarse codes for online graph traversal
+    FlattenInterfacePtr precise_codes_{nullptr};  // default construction/reorder codes when present
+    FlattenInterfacePtr raw_vector_{nullptr};     // original vectors for decode-only paths
     std::unique_ptr<VisitedListPool> pool_ = nullptr;  // pool of visited-lists for search
 
     MutexArrayPtr points_mutex_{nullptr};                // per-point locks for concurrent access
@@ -565,6 +586,7 @@ private:
     int64_t cur_element_count_{0};                       // number of vectors currently stored
     std::atomic<int64_t> delete_count_{0};               // number of deleted vectors
     bool support_duplicate_{false};                      // whether to allow duplicate ids
+    bool build_by_base_{false};  // build bottom and route topology with base codes
 
     mutable std::shared_mutex resize_mutex_;        // guards resize operations
     std::mutex cur_element_count_mutex_;            // guards cur_element_count_ updates

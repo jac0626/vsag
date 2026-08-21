@@ -95,6 +95,7 @@ Build-time parameters live under `index_param`.
 | `neighbor_sample_rate` | float | — | ODescent neighbor sampling rate. |
 | `no_build_levels` | int[] | `[]` | Tree levels that skip graph construction (0-indexed from the root). |
 | `use_reorder` | bool | `false` | Keep a high-precision copy for rescoring. |
+| `build_by_base` | bool | `false` | Build both bottom and routing graph topology with base codes. By default, both use the precise codes when an independent precise store exists; online traversal still uses base codes. |
 | `precise_quantization_type` | string | `"fp32"` | Quantizer for reordering. Use `"rabitq"` with `rabitq_bits_per_dim_precise` to enable RaBitQ x+y split reorder from base storage. |
 | `rabitq_bits_per_dim_base` | int | `1` | RaBitQ stored-code bits. In x+y split mode, this is `x`, the filter bits used during graph traversal; allowed range is `[1, 8]`. |
 | `rabitq_bits_per_dim_precise` | int | unset | RaBitQ split `y` bits. When set with `base_quantization_type: "rabitq"` and `precise_quantization_type: "rabitq"`, Pyramid uses split storage; `rabitq_bits_per_dim_base` remains `x`, and `x + y <= 8`. |
@@ -199,7 +200,10 @@ Overridable per-hierarchy parameters: `max_degree`, `ef_construction`, `alpha`,
 
 `root_graph_type: "multi_layer"` changes only the selected hierarchy's root. The complete root
 bottom graph is retained, while sparse routing graphs choose a better entry point before the bottom
-search. Non-root Pyramid nodes remain single-layer graphs.
+search. Non-root Pyramid nodes remain single-layer graphs. With `graph_type: "nsw"`, bulk Build and
+incremental Add use the same route-to-bottom insertion protocol. Bottom and routing edges always use
+the same construction-code source selected by `build_by_base`; query traversal continues to use the
+base codes, and final reordering uses the configured reorder source.
 
 ```json
 {

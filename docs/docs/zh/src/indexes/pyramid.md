@@ -90,6 +90,7 @@ auto result = index->KnnSearch(
 | `neighbor_sample_rate` | float | — | ODescent 的邻居采样比率 |
 | `no_build_levels` | int[] | `[]` | 跳过构图的层级（从根节点开始的 0-based 下标） |
 | `use_reorder` | bool | `false` | 是否保留高精度副本用于精排 |
+| `build_by_base` | bool | `false` | 是否统一使用 base codes 构建底图和路由图拓扑。默认在存在独立 precise storage 时统一使用 precise codes；在线遍历仍使用 base codes。 |
 | `precise_quantization_type` | string | `"fp32"` | 精排使用的量化类型。与 `rabitq_bits_per_dim_precise` 配合设为 `"rabitq"` 时，可启用从 base storage 重排的 RaBitQ x+y split。 |
 | `rabitq_bits_per_dim_base` | int | `1` | RaBitQ 底库存储码的每维位数。在 x+y split 模式下表示 `x`，即图遍历使用的 filter bits；范围为 `[1, 8]`。 |
 | `rabitq_bits_per_dim_precise` | int | 未设置 | RaBitQ split 的 `y` bits。和 `base_quantization_type: "rabitq"`、`precise_quantization_type: "rabitq"` 一起设置时，Pyramid 使用 split storage；`rabitq_bits_per_dim_base` 仍表示 `x`，且 `x + y <= 8`。 |
@@ -190,6 +191,9 @@ auto result = index->KnnSearch(
 
 `root_graph_type: "multi_layer"` 只改变所选层级的根节点：完整根节点底图仍然保留，
 稀疏路由图先选择更好的入口点，再进入底图检索。Pyramid 的非根节点仍然使用单层图。
+当 `graph_type: "nsw"` 时，批量 Build 与增量 Add 复用同一套从 route 到 bottom 的插入协议。
+底图和路由图的边始终使用 `build_by_base` 选定的同一构建来源；查询遍历继续使用 base
+codes，最终精排使用配置的 reorder source。
 
 ```json
 {
