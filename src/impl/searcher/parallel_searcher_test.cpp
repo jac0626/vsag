@@ -18,6 +18,7 @@
 #include <set>
 #include <vector>
 
+#include "datacell/flatten_datacell_parameter.h"
 #include "searcher_test.h"
 #include "unittest.h"
 
@@ -150,9 +151,10 @@ TEST_CASE("ParallelSearcher honors hops limit", "[ut][ParallelSearcher][hops_lim
         JsonType::Parse(fmt::format(param_temp, "fp32")));
     auto io_param =
         IOParameter::GetIOParameterByJson(JsonType::Parse(fmt::format(param_temp, "memory_io")));
-    auto flatten =
-        std::make_shared<FlattenDataCell<FP32Quantizer<MetricType::METRIC_TYPE_L2SQR>, MemoryIO>>(
-            quantizer_param, io_param, common);
+    auto flatten_param = std::make_shared<FlattenDataCellParameter>();
+    flatten_param->quantizer_parameter = quantizer_param;
+    flatten_param->io_parameter = io_param;
+    auto flatten = FlattenInterface::MakeInstance(flatten_param, common);
     std::vector<float> vectors = {10.0F, 8.0F, 6.0F, 4.0F, 2.0F, 0.0F};
     std::vector<InnerIdType> ids = {0, 1, 2, 3, 4, 5};
     flatten->Train(vectors.data(), ids.size());
