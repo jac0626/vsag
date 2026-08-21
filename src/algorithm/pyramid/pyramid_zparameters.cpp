@@ -209,6 +209,9 @@ PyramidParameters::FromJson(const JsonType& json) {
     }
 
     this->use_reorder = json[USE_REORDER_KEY].GetBool();
+    if (json.Contains(HGRAPH_BUILD_BY_BASE_QUANTIZATION_KEY)) {
+        this->build_by_base = json[HGRAPH_BUILD_BY_BASE_QUANTIZATION_KEY].GetBool();
+    }
     if (this->use_reorder && not use_split_codes) {
         this->precise_codes_param = CreateFlattenParam(json[PRECISE_CODES_KEY]);
     } else {
@@ -277,6 +280,7 @@ PyramidParameters::ToJson() const {
     }
     json[GRAPH_KEY].SetJson(graph_json);
     json[USE_REORDER_KEY].SetBool(this->use_reorder);
+    json[HGRAPH_BUILD_BY_BASE_QUANTIZATION_KEY].SetBool(this->build_by_base);
     json[INDEX_MIN_SIZE].SetInt(index_min_size);
     json[PYRAMID_ROOT_GRAPH_TYPE].SetString(root_graph_type);
     json[SUPPORT_DUPLICATE].SetBool(support_duplicate);
@@ -340,6 +344,7 @@ PyramidParameters::CheckCompatibility(const ParamPtr& other) const {
         return false;
     }
     CHECK_FIELD_EQ(*this, *p, use_reorder);
+    CHECK_FIELD_EQ(*this, *p, build_by_base);
     CHECK_FIELD_EQ(*this, *p, reorder_source);
     if (this->use_reorder && this->reorder_source != HGRAPH_REORDER_SOURCE_BASE) {
         CHECK_SUB_PARAM(*this, *p, precise_codes_param);
