@@ -2188,10 +2188,12 @@ TEST_CASE("Pyramid ExportCache + ImportCache + Build acceleration smoke test",
             "base_quantization_type": "fp32",
             "max_degree": 16,
             "ef_construction": 16,
+            "build_thread_count": 8,
             "root_graph_type": "multi_layer",
             "no_build_levels": [1, 2],
             "index_min_size": 28,
-            "persist_source_id": true
+            "persist_source_id": true,
+            "store_raw_vector": true
         }
     }
     )";
@@ -2247,6 +2249,10 @@ TEST_CASE("Pyramid ExportCache + ImportCache + Build acceleration smoke test",
     auto warm_stats = vsag::JsonType::Parse(warmed->GetStats());
     REQUIRE(warm_stats["build_cache_hit_nodes"].GetInt() > 0);
     REQUIRE(warm_stats["root_graphs"]["default"]["route_graph_count"].GetInt() > 0);
+    auto restored_vectors = warmed->GetRawVectorByIds(ids.data(), TEST_COUNT);
+    REQUIRE(restored_vectors.has_value());
+    REQUIRE(
+        std::equal(vectors.begin(), vectors.end(), restored_vectors.value()->GetFloat32Vectors()));
     std::vector<float> query_vec(TEST_DIM);
     std::copy(vectors.begin(), vectors.begin() + TEST_DIM, query_vec.begin());
     // Pyramid navigates by path; the query must reference the same leaf.

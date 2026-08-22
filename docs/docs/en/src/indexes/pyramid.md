@@ -105,7 +105,7 @@ Build-time parameters live under `index_param`.
 | `base_file_path` / `precise_file_path` | string | — | Required for disk-backed storage such as `buffer_io`, `async_io`, `uring_io`, or `mmap_io`. |
 | `store_raw_vector` | bool | `false` | Preserve an FP32 copy for `GetRawVectorByIds` and precise distance-by-id calculations. |
 | `index_min_size` | int | `0` | Minimum sub-index size; smaller groups fall back to scan. |
-| `root_graph_type` | string | `"single_layer"` | Root graph layout: `single_layer` keeps only the complete bottom graph; `multi_layer` adds HGraph-style sparse routing layers above it. A multi-layer root requires level 0 to be built. |
+| `root_graph_type` | string | `"single_layer"` | Root graph layout: `single_layer` preserves the original sparse bottom graph; `multi_layer` uses a preallocated dense Flat bottom graph with HGraph-style sparse routing layers and joint construction. A multi-layer root requires level 0 to be built. |
 | `support_duplicate` | bool | `false` | Allow duplicate ids. |
 | `build_thread_count` | int | `1` | Threads used for parallel build. |
 | `hierarchies` | array | `[]` | Named hierarchy definitions. Each element is either a string (inherits all top-level params) or an object with `name` and optional overrides (`max_degree`, `ef_construction`, `alpha`, `no_build_levels`, `index_min_size`, `root_graph_type`). When present, multi-hierarchy mode is activated and each hierarchy maintains its own independent path tree. |
@@ -162,7 +162,7 @@ Search-time parameters live under the `pyramid` sub-object:
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `ef_search` | int | `100` | Candidate list size for the leaf-level graph search. |
-| `factor` | float | unset | KNN reorder candidate multiplier. When set to `<= 1`, reorder up to `max(ef_search, topk)` candidates; when greater than `1`, reorder up to `min(max(ef_search, topk), floor(topk * factor))`. It must be finite and positive. It has no effect on range search or when reorder is disabled. |
+| `factor` | float | unset | KNN main-graph reorder candidate multiplier. When set to `<= 1`, the main-graph budget is `max(ef_search, topk)` candidates; when greater than `1`, it is `min(max(ef_search, topk), floor(topk * factor))`. RaBitQ lower-bound safety candidates may be merged after this budget, matching HGraph; `reorder_candidate_count` reports the actual merged count. The value must be finite and positive. It has no effect on range search or when reorder is disabled. |
 | `hops_limit` | int | unlimited | Per-graph KNN hop cap for the root bottom graph and every non-root graph; ignored when it is not greater than `ef_search`. Sparse root routing layers are never hop-limited. FLAT scans and range search are unaffected. |
 | `subindex_ef_search` | int | `50` | Candidate list size used when traversing intermediate sub-graphs on the path. |
 | `hierarchies` | string[] | `[]` | Select which hierarchy to search. Empty means use the default (unnamed) hierarchy. |
@@ -198,12 +198,13 @@ Add a `hierarchies` array inside `index_param`. Each element is either:
 Overridable per-hierarchy parameters: `max_degree`, `ef_construction`, `alpha`,
 `no_build_levels`, `index_min_size`, `root_graph_type`.
 
-`root_graph_type: "multi_layer"` changes only the selected hierarchy's root. The complete root
-bottom graph is retained, while sparse routing graphs choose a better entry point before the bottom
-search. Non-root Pyramid nodes remain single-layer graphs. With `graph_type: "nsw"`, bulk Build and
-incremental Add use the same route-to-bottom insertion protocol. Bottom and routing edges always use
-the same construction-code source selected by `build_by_base`; query traversal continues to use the
-base codes, and final reordering uses the configured reorder source.
+`root_graph_type: "multi_layer"` changes only the selected hierarchy's root. It uses a preallocated
+dense Flat bottom graph, while sparse routing graphs choose a better entry point before the bottom
+search. Bulk Build and incremental Add jointly construct the route and bottom layers with the same
+HGraph-style insertion protocol. This root fast path is also used when `graph_type: "odescent"`;
+`graph_type` continues to select construction for non-root Pyramid nodes. Bottom and routing edges
+always use the same construction-code source selected by `build_by_base`; query traversal continues
+to use the base codes, and final reordering uses the configured reorder source.
 
 ```json
 {
@@ -318,8 +319,9 @@ faster.
 
 Use [Index Analysis](../resources/analyze_index.md) to inspect Pyramid tree structure,
 per-subindex quality, sampled base recall, and duplicate ratios reported by `GetStats()`.
-For each hierarchy, `root_graphs` reports `root_graph_type`, `bottom_graph_node_count`,
-`bottom_graph_size`, `route_graph_count`, `route_node_counts`, and `route_graph_size`.
+For each hierarchy, `root_graphs` reports `root_graph_type`, `bottom_graph_storage_type`,
+`bottom_graph_node_count`, `bottom_graph_size`, `route_graph_count`, `route_node_counts`, and
+`route_graph_size`.
 `AnalyzeIndexBySearch` also reports path-scoped query recall, distance, latency, and, when reorder
 is enabled, quantization metrics. Its query dataset must carry the same default or named-hierarchy
 paths required by `KnnSearch`; when paths are required or supplied for a batched dataset, provide

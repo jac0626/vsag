@@ -784,4 +784,6 @@ TEST_CASE("Pyramid validates explicit factor", "[ut][PyramidParameters]") {
         vsag::PyramidSearchParameters::FromJson(R"({"pyramid":{"ef_search":20,"factor":0}})"));
     REQUIRE_THROWS(
         vsag::PyramidSearchParameters::FromJson(R"({"pyramid":{"ef_search":20,"factor":-1}})"));
+    REQUIRE_THROWS(
+        vsag::PyramidSearchParameters::FromJson(R"({"pyramid":{"ef_search":20,"factor":1e100}})"));
 }

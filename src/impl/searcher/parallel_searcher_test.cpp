@@ -175,6 +175,7 @@ TEST_CASE("ParallelSearcher honors hops limit", "[ut][ParallelSearcher][hops_lim
     auto result = ParallelSearcher(common, SafeThreadPool::FactoryDefaultThreadPool())
                       .Search(graph, flatten, vl, &query, param, nullptr, &context);
     pool->ReturnOne(vl);
-    REQUIRE(stats.hops.load() <= param.hops_limit);
+    REQUIRE(stats.hops.load() == param.hops_limit);
+    REQUIRE(stats.dist_cmp.load() == 2);
     REQUIRE(result->Top().second != 5);
 }

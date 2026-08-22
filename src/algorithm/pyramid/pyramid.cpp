@@ -24,10 +24,12 @@
 #include "algorithm/inner_index_interface.h"
 #include "analyzer/analyzer.h"
 #include "datacell/flatten_interface.h"
+#include "datacell/graph_datacell_parameter.h"
 #include "impl/distance_provider_for_graph.h"
 #include "impl/heap/standard_heap.h"
 #include "impl/odescent/odescent_graph_builder.h"
 #include "impl/pruning_strategy.h"
+#include "io/memory_block_io/memory_block_io_parameter.h"
 #include "query_context.h"
 #include "storage/empty_index_binary_set.h"
 #include "storage/serialization.h"
@@ -37,6 +39,14 @@
 #include "utils/slow_task_timer.h"
 #include "utils/util_functions.h"
 namespace vsag {
+
+namespace {
+
+constexpr const char* PYRAMID_ROOT_STORAGE_FORMAT_VERSION_KEY =
+    "pyramid_root_storage_format_version";
+constexpr int64_t PYRAMID_ROOT_STORAGE_FORMAT_VERSION = 2;
+
+}  // namespace
 
 const static float RADIUS_EPSILON = 1.1F;
 static constexpr uint64_t SOURCE_ID_TABLE_MAGIC = 0x534F555243454944ULL;  // SOURCEID
@@ -88,6 +98,20 @@ Pyramid::make_route_graph_param(const GraphInterfaceParamPtr& bottom_graph_param
     return route;
 }
 
+GraphInterfaceParamPtr
+Pyramid::make_root_graph_param(const GraphInterfaceParamPtr& child_graph_param) {
+    auto child = std::dynamic_pointer_cast<SparseGraphDatacellParameter>(child_graph_param);
+    CHECK_ARGUMENT(child != nullptr, "Pyramid multi-layer root requires sparse child graphs");
+    auto root = std::make_shared<GraphDataCellParameter>();
+    root->max_degree_ = child->max_degree_;
+    root->support_remove_ = child->support_delete_;
+    root->remove_flag_bit_ = child->remove_flag_bit_;
+    root->support_duplicate_ = child->support_duplicate_;
+    root->use_reverse_edges_ = child->use_reverse_edges_;
+    root->io_parameter_ = std::make_shared<MemoryBlockIOParameter>();
+    return root;
+}
+
 int
 Pyramid::sample_route_level(const IndexNode& node) {
     const auto max_degree = node.graph_param_->max_degree_;
@@ -100,54 +124,20 @@ Pyramid::sample_route_level(const IndexNode& node) {
     return static_cast<int>(-std::log(sample) * level_mult) - 1;
 }
 
-Vector<Vector<InnerIdType>>
-Pyramid::plan_route_ids(IndexNode& node) {
-    Vector<Vector<InnerIdType>> route_ids(allocator_);
-    if (node.graph_ == nullptr) {
-        return route_ids;
+Vector<int>
+Pyramid::sample_route_levels(const IndexNode& node, uint64_t count) {
+    const auto max_degree = node.graph_param_->max_degree_;
+    CHECK_ARGUMENT(max_degree > 1, "multi-layer root requires max_degree greater than one");
+    Vector<int> levels(count, -1, allocator_);
+    std::scoped_lock lock(entry_point_mutex_);
+    std::uniform_real_distribution<double> distribution(0.0, 1.0);
+    const double level_mult = 1.0 / std::log(static_cast<double>(max_degree));
+    for (uint64_t i = 0; i < count; ++i) {
+        const auto sample =
+            std::max(distribution(level_generator_), std::numeric_limits<double>::min());
+        levels[i] = static_cast<int>(-std::log(sample) * level_mult) - 1;
     }
-    const auto node_ids = node.graph_->GetIds();
-    for (const auto inner_id : node_ids) {
-        const int level = sample_route_level(node);
-        if (level < 0) {
-            continue;
-        }
-        while (route_ids.size() <= static_cast<uint64_t>(level)) {
-            route_ids.emplace_back(allocator_);
-            node.entry_point_ = inner_id;
-        }
-        for (int route_level = 0; route_level <= level; ++route_level) {
-            route_ids[route_level].push_back(inner_id);
-        }
-    }
-    return route_ids;
-}
-
-void
-Pyramid::build_routes_by_odescent(const Hierarchy& hierarchy,
-                                  IndexNode& node,
-                                  const FlattenInterfacePtr& codes,
-                                  bool use_thread_pool) {
-    if (not node.has_routing() || node.status_ != IndexNode::Status::GRAPH) {
-        return;
-    }
-    auto route_ids = plan_route_ids(node);
-    node.routing_->graphs.clear();
-    node.routing_->graphs.reserve(route_ids.size());
-    for (auto& ids : route_ids) {
-        auto graph = node.make_route_graph();
-        auto route_param = std::make_shared<ODescentParameter>();
-        if (odescent_param_ != nullptr) {
-            route_param->FromJson(odescent_param_->ToJson());
-        }
-        route_param->max_degree = static_cast<int32_t>(graph->MaximumDegree());
-        route_param->alpha = hierarchy.alpha;
-        ODescent builder(
-            route_param, codes, allocator_, use_thread_pool ? thread_pool_.get() : nullptr);
-        builder.Build(ids);
-        builder.SaveGraph(graph);
-        node.routing_->graphs.push_back(std::move(graph));
-    }
+    return levels;
 }
 
 void
@@ -160,6 +150,7 @@ Pyramid::insert_route_graph_point(const Hierarchy& hierarchy,
     if (graph->CheckIdExists(inner_id)) {
         return;
     }
+    LockGuard point_lock(points_mutex_, inner_id);
     if (graph->TotalCount() == 0) {
         graph->InsertNeighborsById(inner_id, Vector<InnerIdType>(allocator_));
         entry_point = inner_id;
@@ -215,13 +206,102 @@ Pyramid::search_graph_for_add(const GraphInterfacePtr& graph,
 }
 
 void
+Pyramid::connect_cached_graph_point(InnerIdType inner_id,
+                                    const DistHeapPtr& candidates,
+                                    const GraphInterfacePtr& graph,
+                                    const FlattenInterfacePtr& codes,
+                                    float alpha) {
+    const auto max_degree = graph->MaximumDegree();
+    if (candidates != nullptr && not candidates->Empty()) {
+        select_edges_by_heuristic(candidates, max_degree, codes, allocator_, alpha);
+    }
+
+    Vector<InnerIdType> selected_neighbors(allocator_);
+    if (candidates != nullptr) {
+        selected_neighbors.reserve(candidates->Size());
+        while (not candidates->Empty()) {
+            const auto neighbor = candidates->Top().second;
+            candidates->Pop();
+            CHECK_ARGUMENT(neighbor != inner_id, "cannot connect a graph point to itself");
+            selected_neighbors.push_back(neighbor);
+        }
+    }
+
+    // Cache rows are all visible before parallel refinement starts. Never hold the current-row
+    // lock while acquiring a neighbor lock: two mutually selected rows would otherwise deadlock.
+    Vector<InnerIdType> forward_neighbors(allocator_);
+    {
+        LockGuard current_lock(points_mutex_, inner_id);
+        Vector<InnerIdType> existing_neighbors(allocator_);
+        graph->GetNeighbors(inner_id, existing_neighbors);
+
+        auto merged = std::make_shared<StandardHeap<true, false>>(allocator_, -1);
+        UnorderedSet<InnerIdType> seen(allocator_);
+        seen.reserve(existing_neighbors.size() + selected_neighbors.size());
+        for (const auto neighbor : existing_neighbors) {
+            if (neighbor != inner_id && seen.emplace(neighbor).second) {
+                merged->Push(codes->ComputePairVectors(inner_id, neighbor), neighbor);
+            }
+        }
+        for (const auto neighbor : selected_neighbors) {
+            if (seen.emplace(neighbor).second) {
+                merged->Push(codes->ComputePairVectors(inner_id, neighbor), neighbor);
+            }
+        }
+        if (not merged->Empty()) {
+            select_edges_by_heuristic(merged, max_degree, codes, allocator_, alpha);
+            forward_neighbors.reserve(merged->Size());
+            while (not merged->Empty()) {
+                forward_neighbors.push_back(merged->Top().second);
+                merged->Pop();
+            }
+        }
+        graph->InsertNeighborsById(inner_id, forward_neighbors);
+    }
+
+    Vector<InnerIdType> reverse_neighbors(allocator_);
+    for (const auto neighbor : forward_neighbors) {
+        LockGuard neighbor_lock(points_mutex_, neighbor);
+        reverse_neighbors.clear();
+        graph->GetNeighbors(neighbor, reverse_neighbors);
+        if (std::find(reverse_neighbors.begin(), reverse_neighbors.end(), inner_id) !=
+            reverse_neighbors.end()) {
+            continue;
+        }
+        if (reverse_neighbors.size() < max_degree) {
+            reverse_neighbors.push_back(inner_id);
+            graph->InsertNeighborsById(neighbor, reverse_neighbors);
+            continue;
+        }
+
+        auto reverse_candidates = std::make_shared<StandardHeap<true, false>>(allocator_, -1);
+        reverse_candidates->Push(codes->ComputePairVectors(neighbor, inner_id), inner_id);
+        for (const auto existing_neighbor : reverse_neighbors) {
+            reverse_candidates->Push(codes->ComputePairVectors(neighbor, existing_neighbor),
+                                     existing_neighbor);
+        }
+        select_edges_by_heuristic(reverse_candidates, max_degree, codes, allocator_, alpha);
+        reverse_neighbors.clear();
+        reverse_neighbors.reserve(reverse_candidates->Size());
+        while (not reverse_candidates->Empty()) {
+            reverse_neighbors.push_back(reverse_candidates->Top().second);
+            reverse_candidates->Pop();
+        }
+        graph->InsertNeighborsById(neighbor, reverse_neighbors);
+    }
+}
+
+void
 Pyramid::add_routed_point(const Hierarchy& hierarchy,
                           IndexNode& node,
                           InnerIdType inner_id,
                           const float* vector,
                           uint64_t ef_construction,
-                          bool use_self_as_entry) {
-    const int sampled_level = sample_route_level(node);
+                          bool use_self_as_entry,
+                          int sampled_level) {
+    if (sampled_level == std::numeric_limits<int>::min()) {
+        sampled_level = sample_route_level(node);
+    }
     const auto codes = construction_codes();
 
     const auto insert_locked = [&]() {
@@ -255,7 +335,10 @@ Pyramid::add_routed_point(const Hierarchy& hierarchy,
         }
 
         Vector<InnerIdType> cached_neighbors(allocator_);
-        node.graph_->GetNeighbors(inner_id, cached_neighbors);
+        {
+            SharedLock point_lock(points_mutex_, inner_id);
+            node.graph_->GetNeighbors(inner_id, cached_neighbors);
+        }
         bottom_param.ep =
             use_self_as_entry && not cached_neighbors.empty() ? inner_id : entry_point;
         if (not bottom_was_empty) {
@@ -288,12 +371,21 @@ Pyramid::add_routed_point(const Hierarchy& hierarchy,
             return;
         }
 
-        if (results == nullptr || results->Empty()) {
-            LockGuard point_lock(points_mutex_, inner_id);
-            node.graph_->InsertNeighborsById(inner_id, Vector<InnerIdType>(allocator_));
+        if (use_self_as_entry) {
+            connect_cached_graph_point(inner_id, results, node.graph_, codes, hierarchy.alpha);
         } else {
-            mutually_connect_new_element(
-                inner_id, results, node.graph_, codes, points_mutex_, allocator_, hierarchy.alpha);
+            LockGuard point_lock(points_mutex_, inner_id);
+            if (results == nullptr || results->Empty()) {
+                node.graph_->InsertNeighborsById(inner_id, Vector<InnerIdType>(allocator_));
+            } else {
+                mutually_connect_new_element(inner_id,
+                                             results,
+                                             node.graph_,
+                                             codes,
+                                             points_mutex_,
+                                             allocator_,
+                                             hierarchy.alpha);
+            }
         }
 
         for (int route_level = current_top + 1; route_level <= sampled_level; ++route_level) {
@@ -322,6 +414,15 @@ Pyramid::add_routed_point(const Hierarchy& hierarchy,
     }
     read_lock.unlock();
     std::unique_lock write_lock(node.mutex_);
+    const int updated_top = static_cast<int>(node.routing_->graphs.size()) - 1;
+    const bool still_needs_structure_update =
+        node.graph_->TotalCount() == 0 || sampled_level > updated_top;
+    if (still_needs_structure_update) {
+        insert_locked();
+        return;
+    }
+    write_lock.unlock();
+    read_lock.lock();
     insert_locked();
 }
 
@@ -371,12 +472,17 @@ Pyramid::search_routes(const IndexNode& node,
 
 IndexNode::IndexNode(Allocator* allocator,
                      GraphInterfaceParamPtr graph_param,
-                     uint32_t index_min_size)
+                     uint32_t index_min_size,
+                     const IndexCommonParam* common_param,
+                     GraphInterfaceParamPtr child_graph_param)
     : ids_(allocator),
+      index_min_size_(index_min_size),
       children_(allocator),
       allocator_(allocator),
+      common_param_(common_param),
       graph_param_(std::move(graph_param)),
-      index_min_size_(index_min_size) {
+      child_graph_param_(child_graph_param == nullptr ? graph_param_
+                                                      : std::move(child_graph_param)) {
 }
 
 void
@@ -410,9 +516,18 @@ IndexNode::Build(ODescent& odescent) {
 }
 
 void
+IndexNode::BuildChildren(ODescent& odescent) {
+    std::shared_lock lock(mutex_);
+    for (const auto& item : children_) {
+        item.second->Build(odescent);
+    }
+}
+
+void
 IndexNode::AddChild(const std::string& key) {
     // AddChild is not thread-safe; ensure thread safety in calls to it.
-    children_[key] = std::make_unique<IndexNode>(allocator_, graph_param_, index_min_size_);
+    children_[key] = std::make_unique<IndexNode>(
+        allocator_, child_graph_param_, index_min_size_, common_param_, child_graph_param_);
     children_[key]->level_ = level_ + 1;
 }
 
@@ -439,8 +554,9 @@ IndexNode::Deserialize(StreamReader& reader) {
     // deserialize `status_`
     StreamReader::ReadObj(reader, status_);
     if (status_ == Status::GRAPH) {
-        graph_ = std::make_shared<SparseGraphDataCell>(
-            std::dynamic_pointer_cast<SparseGraphDatacellParameter>(graph_param_), allocator_);
+        CHECK_ARGUMENT(common_param_ != nullptr, "missing Pyramid graph factory context");
+        graph_ = GraphInterface::MakeInstance(graph_param_, *common_param_);
+        CHECK_ARGUMENT(graph_ != nullptr, "failed to create Pyramid graph storage");
         graph_->Deserialize(reader);
     } else if (status_ == Status::FLAT) {
         StreamReader::ReadVector(reader, ids_);
@@ -453,11 +569,12 @@ IndexNode::Deserialize(StreamReader& reader) {
         AddChild(key);
         children_[key]->Deserialize(reader);
     }
+    deserialize_routing_unlocked(reader);
 }
 
 void
 IndexNode::Serialize(StreamWriter& writer) const {
-    std::shared_lock lock(mutex_);
+    std::unique_lock lock(mutex_);
     // serialize `entry_point_`
     StreamWriter::WriteObj(writer, entry_point_);
     // serialize `level_`
@@ -478,14 +595,14 @@ IndexNode::Serialize(StreamWriter& writer) const {
         // calculate size of `content`
         item.second->Serialize(writer);
     }
+    serialize_routing_unlocked(writer);
 }
 
 void
-IndexNode::serialize_routing(StreamWriter& writer) const {
+IndexNode::serialize_routing_unlocked(StreamWriter& writer) const {
     if (not has_routing()) {
         return;
     }
-    std::shared_lock lock(mutex_);
     StreamWriter::WriteObj(writer, static_cast<uint64_t>(routing_->graphs.size()));
     for (const auto& graph : routing_->graphs) {
         graph->Serialize(writer);
@@ -493,7 +610,7 @@ IndexNode::serialize_routing(StreamWriter& writer) const {
 }
 
 void
-IndexNode::deserialize_routing(StreamReader& reader) {
+IndexNode::deserialize_routing_unlocked(StreamReader& reader) {
     if (not has_routing()) {
         return;
     }
@@ -545,7 +662,7 @@ IndexNode::get_memory_usage_detail() const {
 void
 IndexNode::Init() {
     if (status_ == Status::NO_INDEX) {
-        if (ids_.size() >= index_min_size_) {
+        if (has_routing() || ids_.size() >= index_min_size_) {
             if (not ids_.empty() and level_ != 0) {
                 auto new_max_degree = get_suitable_max_degree(static_cast<int64_t>(ids_.size()));
                 if (new_max_degree < graph_param_->max_degree_) {
@@ -556,8 +673,16 @@ IndexNode::Init() {
                     graph_param_ = new_graph_param;
                 }
             }
-            graph_ = std::make_shared<SparseGraphDataCell>(
-                std::dynamic_pointer_cast<SparseGraphDatacellParameter>(graph_param_), allocator_);
+            CHECK_ARGUMENT(common_param_ != nullptr, "missing Pyramid graph factory context");
+            graph_ = GraphInterface::MakeInstance(graph_param_, *common_param_);
+            CHECK_ARGUMENT(graph_ != nullptr, "failed to create Pyramid graph storage");
+            if (graph_param_->graph_storage_type_ ==
+                GraphStorageTypes::GRAPH_STORAGE_TYPE_VALUE_FLAT) {
+                const auto flat_param =
+                    std::dynamic_pointer_cast<GraphDataCellParameter>(graph_param_);
+                CHECK_ARGUMENT(flat_param != nullptr, "missing Pyramid flat graph parameters");
+                graph_->Resize(static_cast<InnerIdType>(flat_param->init_max_capacity_));
+            }
             status_ = Status::GRAPH;
         } else {
             status_ = Status::FLAT;
@@ -589,6 +714,112 @@ IndexNode::Search(const SearchFunc& search_func,
     for (const auto& [key, node] : children_) {
         node->Search(search_func, vl, search_result, ef_search);
     }
+}
+
+void
+Pyramid::run_parallel_blocks(uint64_t count,
+                             const std::function<void(uint64_t begin, uint64_t end)>& task) {
+    if (count == 0) {
+        return;
+    }
+
+    constexpr uint64_t block_size = 64;
+    const uint64_t block_count = (count - 1) / block_size + 1;
+    const uint64_t worker_count = std::min<uint64_t>(build_thread_count_, block_count);
+    if (thread_pool_ == nullptr || worker_count <= 1) {
+        for (uint64_t begin = 0; begin < count; begin += block_size) {
+            task(begin, std::min<uint64_t>(begin + block_size, count));
+        }
+        return;
+    }
+
+    std::atomic<uint64_t> next_offset{0};
+    std::atomic<bool> cancelled{false};
+    Vector<std::future<void>> futures(allocator_);
+    futures.reserve(worker_count);
+    const auto wait_futures = [&futures]() {
+        std::exception_ptr first_exception = nullptr;
+        for (auto& future : futures) {
+            try {
+                future.get();
+            } catch (...) {
+                if (first_exception == nullptr) {
+                    first_exception = std::current_exception();
+                }
+            }
+        }
+        return first_exception;
+    };
+
+    std::exception_ptr enqueue_exception = nullptr;
+    try {
+        for (uint64_t worker = 0; worker < worker_count; ++worker) {
+            futures.push_back(thread_pool_->GeneralEnqueue([&]() {
+                try {
+                    while (not cancelled.load(std::memory_order_relaxed)) {
+                        const uint64_t begin =
+                            next_offset.fetch_add(block_size, std::memory_order_relaxed);
+                        if (begin >= count) {
+                            return;
+                        }
+                        task(begin, std::min<uint64_t>(begin + block_size, count));
+                    }
+                } catch (...) {
+                    cancelled.store(true, std::memory_order_relaxed);
+                    throw;
+                }
+            }));
+        }
+    } catch (...) {
+        cancelled.store(true, std::memory_order_relaxed);
+        enqueue_exception = std::current_exception();
+    }
+
+    const auto worker_exception = wait_futures();
+    if (enqueue_exception != nullptr) {
+        std::rethrow_exception(enqueue_exception);
+    }
+    if (worker_exception != nullptr) {
+        std::rethrow_exception(worker_exception);
+    }
+}
+
+void
+Pyramid::build_routed_root(const Hierarchy& hierarchy, const float* data_vectors) {
+    auto& node = *hierarchy.root;
+    Vector<InnerIdType> ids(allocator_);
+    {
+        std::unique_lock node_lock(node.mutex_);
+        if (not node.ids_.empty()) {
+            node.Init();
+        }
+        if (node.status_ != IndexNode::Status::GRAPH) {
+            return;
+        }
+        ids.swap(node.ids_);
+    }
+
+    const auto levels = sample_route_levels(node, ids.size());
+    uint64_t seed_index = 0;
+    if (not ids.empty()) {
+        seed_index = static_cast<uint64_t>(
+            std::distance(levels.begin(), std::max_element(levels.begin(), levels.end())));
+        const auto inner_id = ids[seed_index];
+        const auto* vector = base_codes_->SupportSplitCodeStorage() && raw_vector_ == nullptr
+                                 ? nullptr
+                                 : data_vectors + dim_ * inner_id;
+        add_routed_point(hierarchy, node, inner_id, vector, 0, false, levels[seed_index]);
+    }
+    run_parallel_blocks(ids.empty() ? 0 : ids.size() - 1, [&](uint64_t begin, uint64_t end) {
+        for (uint64_t offset = begin; offset < end; ++offset) {
+            const auto index = offset < seed_index ? offset : offset + 1;
+            const auto inner_id = ids[index];
+            const auto* vector = base_codes_->SupportSplitCodeStorage() && raw_vector_ == nullptr
+                                     ? nullptr
+                                     : data_vectors + dim_ * inner_id;
+            add_routed_point(hierarchy, node, inner_id, vector, 0, false, levels[index]);
+        }
+    });
 }
 
 std::vector<int64_t>
@@ -629,10 +860,10 @@ Pyramid::build_by_odescent(const DatasetPtr& base) {
                                  data_vectors,
                                  data_num,
                                  build_flatten);
-                hierarchy->root->Build(builder);
                 if (hierarchy->root->has_routing()) {
-                    std::unique_lock root_lock(hierarchy->root->mutex_);
-                    build_routes_by_odescent(*hierarchy, *hierarchy->root, codes);
+                    hierarchy->root->BuildChildren(builder);
+                } else {
+                    hierarchy->root->Build(builder);
                 }
             }));
         }
@@ -648,11 +879,16 @@ Pyramid::build_by_odescent(const DatasetPtr& base) {
                                data_vectors,
                                data_num);
         for (const auto& [hname, h_ptr] : hierarchies_) {
-            h_ptr->root->Build(graph_builder);
             if (h_ptr->root->has_routing()) {
-                std::unique_lock root_lock(h_ptr->root->mutex_);
-                build_routes_by_odescent(*h_ptr, *h_ptr->root, codes);
+                h_ptr->root->BuildChildren(graph_builder);
+            } else {
+                h_ptr->root->Build(graph_builder);
             }
+        }
+    }
+    for (const auto& [hname, h_ptr] : hierarchies_) {
+        if (h_ptr->root->has_routing()) {
+            build_routed_root(*h_ptr, data_vectors);
         }
     }
     cur_element_count_ = data_num;
@@ -687,9 +923,11 @@ Pyramid::KnnSearch(const DatasetPtr& query,
         if (parsed_param.topk_factor <= 1.0F) {
             search_param.topk = static_cast<int64_t>(search_param.ef);
         } else {
-            const auto amplified_topk = static_cast<uint64_t>(
-                std::floor(static_cast<double>(k) * parsed_param.topk_factor));
-            search_param.topk = static_cast<int64_t>(std::min(search_param.ef, amplified_topk));
+            const auto amplified_topk =
+                std::floor(static_cast<double>(k) * parsed_param.topk_factor);
+            search_param.topk = amplified_topk >= static_cast<double>(search_param.ef)
+                                    ? static_cast<int64_t>(search_param.ef)
+                                    : static_cast<int64_t>(amplified_topk);
         }
     }
     search_param.distance_threshold = threshold;
@@ -761,8 +999,9 @@ Pyramid::KnnSearch(const DatasetPtr& query,
         this->search_impl(query,
                           search_func,
                           search_param,
+                          use_reorder_ and parsed_param.has_topk_factor ? k : search_param.topk,
                           k,
-                          parsed_param.has_topk_factor ? search_param.topk : -1,
+                          use_reorder_ and parsed_param.has_topk_factor ? search_param.topk : -1,
                           base_computer,
                           ctx,
                           hierarchy_name,
@@ -846,6 +1085,7 @@ Pyramid::RangeSearch(const DatasetPtr& query,
                           search_func,
                           search_param,
                           search_param.topk,
+                          search_param.topk,
                           -1,
                           base_computer,
                           ctx,
@@ -859,6 +1099,7 @@ DatasetPtr
 Pyramid::search_impl(const DatasetPtr& query,
                      const SearchFunc& search_func,
                      InnerSearchParam& search_param,
+                     int64_t reorder_topk,
                      int64_t final_topk,
                      int64_t reorder_candidate_limit,
                      const ComputerInterfacePtr& base_computer,
@@ -908,7 +1149,7 @@ Pyramid::search_impl(const DatasetPtr& query,
         }
         search_result = this->reorder_->Reorder(search_result,
                                                 query->GetFloat32Vectors(),
-                                                final_topk,
+                                                reorder_topk,
                                                 ctx,
                                                 nullptr,
                                                 rabitq_lower_bound_candidates);
@@ -1027,18 +1268,17 @@ Pyramid::Serialize(StreamWriter& writer) const {
         for (const auto& [hname, h_ptr] : hierarchies_) {
             StreamWriter::WriteString(writer, hname);
             h_ptr->root->Serialize(writer);
-            h_ptr->root->serialize_routing(writer);
         }
     } else {
         const auto& hierarchy = *hierarchies_.at("");
         hierarchy.root->Serialize(writer);
-        hierarchy.root->serialize_routing(writer);
     }
 
     // serialize footer (introduced since v0.15)
     JsonType basic_info;
     basic_info["max_capacity"].SetInt(max_capacity_);
     basic_info[INDEX_PARAM].SetString(this->create_param_ptr_->ToString());
+    basic_info[PYRAMID_ROOT_STORAGE_FORMAT_VERSION_KEY].SetInt(PYRAMID_ROOT_STORAGE_FORMAT_VERSION);
     write_index_footer(writer, basic_info);
 }
 
@@ -1090,6 +1330,7 @@ Pyramid::collect_streaming_header() const {
     basic_info["data_type"].SetInt(static_cast<int64_t>(data_type_));
     basic_info["extra_info_size"].SetInt(static_cast<int64_t>(extra_info_size_));
     basic_info[INDEX_PARAM].SetString(this->create_param_ptr_->ToString());
+    basic_info[PYRAMID_ROOT_STORAGE_FORMAT_VERSION_KEY].SetInt(PYRAMID_ROOT_STORAGE_FORMAT_VERSION);
     metadata->Set(BASIC_INFO, basic_info);
 
     JsonType manifest;
@@ -1136,12 +1377,10 @@ Pyramid::serialize_hierarchies(StreamWriter& writer) const {
         for (const auto& [hname, h_ptr] : hierarchies_) {
             StreamWriter::WriteString(writer, hname);
             h_ptr->root->Serialize(writer);
-            h_ptr->root->serialize_routing(writer);
         }
     } else {
         const auto& hierarchy = *hierarchies_.at("");
         hierarchy.root->Serialize(writer);
-        hierarchy.root->serialize_routing(writer);
     }
 }
 
@@ -1195,7 +1434,6 @@ Pyramid::deserialize_hierarchies(StreamReader& reader, const JsonType& basic_inf
             CHECK_ARGUMENT(h_iter != hierarchies_.end(),
                            fmt::format("deserialized hierarchy '{}' not in config", hname));
             h_iter->second->root->Deserialize(reader);
-            h_iter->second->root->deserialize_routing(reader);
         }
     } else {
         auto h_iter = hierarchies_.find("");
@@ -1203,7 +1441,30 @@ Pyramid::deserialize_hierarchies(StreamReader& reader, const JsonType& basic_inf
             h_iter != hierarchies_.end(),
             "deserialized single-hierarchy index but current config has named hierarchies");
         h_iter->second->root->Deserialize(reader);
-        h_iter->second->root->deserialize_routing(reader);
+    }
+}
+
+void
+Pyramid::validate_root_storage_format(const JsonType& basic_info) const {
+    const bool has_multi_layer_root =
+        std::any_of(hierarchies_.begin(), hierarchies_.end(), [](const auto& hierarchy) {
+            return hierarchy.second->root_graph_type == PYRAMID_ROOT_GRAPH_TYPE_MULTI_LAYER;
+        });
+    if (not basic_info.Contains(PYRAMID_ROOT_STORAGE_FORMAT_VERSION_KEY)) {
+        if (has_multi_layer_root) {
+            throw VsagException(
+                ErrorType::UNSUPPORTED_INDEX_OPERATION,
+                "unsupported Pyramid root storage format: legacy sparse multi-layer root");
+        }
+        return;
+    }
+
+    const auto version_json = basic_info[PYRAMID_ROOT_STORAGE_FORMAT_VERSION_KEY];
+    if (not version_json.IsNumberInteger() ||
+        version_json.GetInt() != PYRAMID_ROOT_STORAGE_FORMAT_VERSION) {
+        throw VsagException(ErrorType::UNSUPPORTED_INDEX_OPERATION,
+                            fmt::format("unsupported Pyramid root storage format version: {}",
+                                        version_json.Dump()));
     }
 }
 
@@ -1235,6 +1496,7 @@ Pyramid::read_streaming_body(StreamReader& reader, const MetadataPtr& metadata) 
             throw VsagException(ErrorType::INVALID_ARGUMENT, message);
         }
     }
+    validate_root_storage_format(basic_info);
 
     bool loaded_label_table = false;
     bool loaded_base_codes = false;
@@ -1359,6 +1621,7 @@ Pyramid::Deserialize(StreamReader& reader) {
         logger::error(message);
         throw VsagException(ErrorType::INVALID_ARGUMENT, message);
     }
+    validate_root_storage_format(basic_info);
 
     BufferStreamReader buffer_reader(
         &reader, std::numeric_limits<uint64_t>::max(), this->allocator_);
@@ -1390,7 +1653,6 @@ Pyramid::Deserialize(StreamReader& reader) {
             CHECK_ARGUMENT(h_iter != hierarchies_.end(),
                            fmt::format("deserialized hierarchy '{}' not in config", hname));
             h_iter->second->root->Deserialize(buffer_reader);
-            h_iter->second->root->deserialize_routing(buffer_reader);
         }
     } else {
         auto h_iter = hierarchies_.find("");
@@ -1398,7 +1660,6 @@ Pyramid::Deserialize(StreamReader& reader) {
             h_iter != hierarchies_.end(),
             "deserialized single-hierarchy index but current config has named hierarchies");
         h_iter->second->root->Deserialize(buffer_reader);
-        h_iter->second->root->deserialize_routing(buffer_reader);
     }
 
     resize(max_capacity);
@@ -1504,10 +1765,8 @@ Pyramid::add_internal(const DatasetPtr& base) {
             }
         };
         const auto supports_parallel_encode = [](const FlattenInterfacePtr& codes) {
-            const auto name = codes->GetQuantizerName();
-            return codes->InMemory() &&
-                   (name == QUANTIZATION_TYPE_VALUE_FP32 ||
-                    name == QUANTIZATION_TYPE_VALUE_RABITQ || name == QUANTIZATION_TYPE_VALUE_SQ8);
+            return codes != nullptr && codes->SupportConcurrentInsertAfterResize() &&
+                   not codes->SupportSplitCodeStorage();
         };
         const bool use_parallel_encode =
             local_cur_element_count == 0 && thread_pool_ != nullptr && build_thread_count_ > 1 &&
@@ -1583,6 +1842,18 @@ Pyramid::resize(int64_t new_max_capacity) {
         raw_vector_->Resize(new_max_capacity);
     }
     points_mutex_->Resize(new_max_capacity);
+    for (const auto& [name, hierarchy] : hierarchies_) {
+        auto& root = *hierarchy->root;
+        auto flat_param = std::dynamic_pointer_cast<GraphDataCellParameter>(root.graph_param_);
+        if (flat_param == nullptr) {
+            continue;
+        }
+        std::unique_lock root_lock(root.mutex_);
+        flat_param->init_max_capacity_ = static_cast<uint64_t>(new_max_capacity);
+        if (root.graph_ != nullptr) {
+            root.graph_->Resize(static_cast<InnerIdType>(new_max_capacity));
+        }
+    }
     max_capacity_ = new_max_capacity;
 }
 
@@ -1871,7 +2142,23 @@ Pyramid::add_one_point(const Hierarchy& h,
                        InnerIdType inner_id,
                        const float* vector,
                        uint64_t ef_construction,
-                       bool use_self_as_entry) {
+                       bool use_self_as_entry,
+                       int sampled_route_level) {
+    if (node->has_routing()) {
+        std::shared_lock read_lock(node->mutex_);
+        if (node->status_ == IndexNode::Status::GRAPH) {
+            read_lock.unlock();
+            add_routed_point(h,
+                             *node,
+                             inner_id,
+                             vector,
+                             ef_construction,
+                             use_self_as_entry,
+                             sampled_route_level);
+            return;
+        }
+    }
+
     std::unique_lock graph_lock(node->mutex_);
 
     if (node->status_ == IndexNode::Status::NO_INDEX) {
@@ -1886,7 +2173,11 @@ Pyramid::add_one_point(const Hierarchy& h,
         }
 
         // Keep the FLAT node intact until the replacement graph is complete.
-        IndexNode graph_node(allocator_, node->graph_param_, node->index_min_size_);
+        IndexNode graph_node(allocator_,
+                             node->graph_param_,
+                             node->index_min_size_,
+                             node->common_param_,
+                             node->child_graph_param_);
         graph_node.level_ = node->level_;
         graph_node.ids_ = node->ids_;
         if (node->has_routing()) {
@@ -1929,7 +2220,8 @@ Pyramid::add_one_point(const Hierarchy& h,
 
     if (node->has_routing()) {
         graph_lock.unlock();
-        add_routed_point(h, *node, inner_id, vector, ef_construction, use_self_as_entry);
+        add_routed_point(
+            h, *node, inner_id, vector, ef_construction, use_self_as_entry, sampled_route_level);
         return;
     }
 
@@ -1954,7 +2246,10 @@ Pyramid::add_one_point(const Hierarchy& h,
             update_entry_point = is_update_entry_point(node->graph_->TotalCount());
         }
         Vector<InnerIdType> cached_neighbors(allocator_);
-        node->graph_->GetNeighbors(inner_id, cached_neighbors);
+        {
+            SharedLock point_lock(points_mutex_, inner_id);
+            node->graph_->GetNeighbors(inner_id, cached_neighbors);
+        }
         search_param.ep =
             (use_self_as_entry && not cached_neighbors.empty()) ? inner_id : node->entry_point_;
         if (not update_entry_point) {
@@ -2019,8 +2314,12 @@ Pyramid::add_one_point(const Hierarchy& h,
                                          inner_id);
             return;
         }
-        mutually_connect_new_element(
-            inner_id, results, node->graph_, codes, points_mutex_, allocator_, h.alpha);
+        if (use_self_as_entry) {
+            connect_cached_graph_point(inner_id, results, node->graph_, codes, h.alpha);
+        } else {
+            mutually_connect_new_element(
+                inner_id, results, node->graph_, codes, points_mutex_, allocator_, h.alpha);
+        }
         if (update_entry_point) {
             node->entry_point_ = inner_id;
         }
@@ -2053,6 +2352,10 @@ Pyramid::add_to_hierarchy(Hierarchy& h,
                           const std::string* paths,
                           const Vector<int64_t>& data_biases,
                           int64_t local_cur_element_count) {
+    Vector<int> root_levels(allocator_);
+    if (h.root->has_routing()) {
+        root_levels = sample_route_levels(*h.root, data_biases.size());
+    }
     auto add_func = [&](int64_t i, int64_t data_bias) {
         std::string current_path = paths[data_bias];
         auto path_slices = split(current_path, PART_SLASH);
@@ -2073,25 +2376,28 @@ Pyramid::add_to_hierarchy(Hierarchy& h,
                 no_build_level_index++;
                 continue;
             }
-            add_one_point(h, node, inner_id, vector);
+            const int sampled_route_level =
+                node->has_routing() ? root_levels[i] : std::numeric_limits<int>::min();
+            add_one_point(h, node, inner_id, vector, 0, false, sampled_route_level);
             node = new_node;
         }
     };
 
-    Vector<std::future<void>> futures(allocator_);
-    for (int64_t i = 0; i < static_cast<int64_t>(data_biases.size()); ++i) {
-        auto data_bias = data_biases[i];
-        if (this->thread_pool_ != nullptr) {
-            futures.push_back(this->thread_pool_->GeneralEnqueue(add_func, i, data_bias));
-        } else {
-            add_func(i, data_bias);
-        }
+    uint64_t seed_index = 0;
+    if (h.root->has_routing() and not data_biases.empty()) {
+        seed_index = static_cast<uint64_t>(std::distance(
+            root_levels.begin(), std::max_element(root_levels.begin(), root_levels.end())));
+        add_func(static_cast<int64_t>(seed_index), data_biases[seed_index]);
     }
-    if (this->thread_pool_ != nullptr) {
-        for (auto& future : futures) {
-            future.get();
+    const uint64_t parallel_count = h.root->has_routing() and not data_biases.empty()
+                                        ? data_biases.size() - 1
+                                        : data_biases.size();
+    run_parallel_blocks(parallel_count, [&](uint64_t begin, uint64_t end) {
+        for (uint64_t i = begin; i < end; ++i) {
+            const auto index = h.root->has_routing() and i >= seed_index ? i + 1 : i;
+            add_func(static_cast<int64_t>(index), data_biases[index]);
         }
-    }
+    });
 }
 
 void
@@ -2336,6 +2642,11 @@ Pyramid::GetStats() const {
         std::shared_lock root_lock(hierarchy->root->mutex_);
         JsonType root_stats;
         root_stats[PYRAMID_ROOT_GRAPH_TYPE].SetString(hierarchy->root_graph_type);
+        root_stats["bottom_graph_storage_type"].SetString(
+            hierarchy->root->graph_param_->graph_storage_type_ ==
+                    GraphStorageTypes::GRAPH_STORAGE_TYPE_VALUE_FLAT
+                ? GRAPH_STORAGE_TYPE_VALUE_FLAT
+                : "sparse");
         const auto& bottom_graph = hierarchy->root->graph_;
         root_stats["bottom_graph_node_count"].SetUint64(
             bottom_graph == nullptr ? 0 : bottom_graph->TotalCount());
@@ -2424,7 +2735,17 @@ Pyramid::fulfill_cache(PyramidBuildCache& cache_snapshot) const {
         collect_graph_nodes(h_ptr->root.get(), std::string{}, graph_nodes);
         for (const auto& [node_path, gnode] : graph_nodes) {
             std::shared_lock lock(gnode->mutex_);
-            auto graph_ids = gnode->graph_->GetIds();
+            Vector<InnerIdType> graph_ids(allocator_);
+            if (gnode->graph_param_->graph_storage_type_ ==
+                GraphStorageTypes::GRAPH_STORAGE_TYPE_VALUE_FLAT) {
+                const auto total_count = gnode->graph_->TotalCount();
+                graph_ids.reserve(total_count);
+                for (InnerIdType id = 0; id < total_count; ++id) {
+                    graph_ids.push_back(id);
+                }
+            } else {
+                graph_ids = gnode->graph_->GetIds();
+            }
             if (graph_ids.empty()) {
                 continue;
             }
@@ -2519,6 +2840,9 @@ Pyramid::build_with_cache(const DatasetPtr& base) {
     base_codes_->BatchInsertVector(data_vectors, data_num);
     if (has_precise_reorder()) {
         precise_codes_->BatchInsertVector(data_vectors, data_num);
+    }
+    if (raw_vector_ != nullptr) {
+        raw_vector_->BatchInsertVector(data_vectors, data_num);
     }
     cur_element_count_ = data_num;
 
@@ -2630,44 +2954,26 @@ Pyramid::build_with_cache(const DatasetPtr& base) {
                                     const Vector<InnerIdType>& ids,
                                     uint64_t ef_construction,
                                     bool use_self_as_entry) {
-                auto refine_one =
-                    [this, &h, graph_node, data_vectors, ef_construction, use_self_as_entry](
-                        InnerIdType inner_id) {
+                Vector<int> route_levels(allocator_);
+                if (graph_node->has_routing()) {
+                    route_levels = sample_route_levels(*graph_node, ids.size());
+                }
+
+                run_parallel_blocks(ids.size(), [&](uint64_t begin, uint64_t end) {
+                    for (uint64_t offset = begin; offset < end; ++offset) {
+                        const auto inner_id = ids[offset];
+                        const int sampled_route_level = graph_node->has_routing()
+                                                            ? route_levels[offset]
+                                                            : std::numeric_limits<int>::min();
                         add_one_point(h,
                                       graph_node,
                                       inner_id,
                                       data_vectors + dim_ * inner_id,
                                       ef_construction,
-                                      use_self_as_entry);
-                    };
-
-                Vector<std::future<void>> futures(allocator_);
-                // All futures are joined below before graph_node or data_vectors can go out of scope.
-                std::exception_ptr first_error;
-                for (const auto inner_id : ids) {
-                    try {
-                        if (thread_pool_ != nullptr) {
-                            futures.push_back(thread_pool_->GeneralEnqueue(refine_one, inner_id));
-                        } else {
-                            refine_one(inner_id);
-                        }
-                    } catch (...) {
-                        first_error = std::current_exception();
-                        break;
+                                      use_self_as_entry,
+                                      sampled_route_level);
                     }
-                }
-                for (auto& future : futures) {
-                    try {
-                        future.get();
-                    } catch (...) {
-                        if (first_error == nullptr) {
-                            first_error = std::current_exception();
-                        }
-                    }
-                }
-                if (first_error != nullptr) {
-                    std::rethrow_exception(first_error);
-                }
+                });
             };
 
             refine_nodes(node_missed_ids, h_ptr->ef_construction, false);

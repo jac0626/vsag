@@ -644,7 +644,17 @@ PyramidAnalyzer::collect_searchable_node_ids(const IndexNode* node,
         if (node->status_ == IndexNode::Status::FLAT) {
             node_ids = node->ids_;
         } else if (node->graph_ != nullptr) {
-            node_ids = node->graph_->GetIds();
+            try {
+                node_ids = node->graph_->GetIds();
+            } catch (const std::exception&) {
+                const auto total_count = node->graph_->TotalCount();
+                node_ids.reserve(total_count);
+                for (InnerIdType id = 0; id < total_count; ++id) {
+                    if (node->graph_->CheckIdExists(id)) {
+                        node_ids.push_back(id);
+                    }
+                }
+            }
         }
         for (const auto id : node_ids) {
             if (deleted_ids.find(id) == deleted_ids.end() && seen_ids.insert(id).second) {
