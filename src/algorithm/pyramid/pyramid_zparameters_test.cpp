@@ -727,7 +727,7 @@ TEST_CASE("Pyramid validates root graph type and hierarchy overrides", "[ut][Pyr
         "root_graph_type": "single_layer",
         "no_build_levels": [0]
     })");
-    REQUIRE_NOTHROW(vsag::Pyramid::CheckAndMappingExternalParam(unbuilt_root, common_param));
+    REQUIRE_THROWS(vsag::Pyramid::CheckAndMappingExternalParam(unbuilt_root, common_param));
 
     auto default_unbuilt_root = vsag::JsonType::Parse(R"({
         "base_quantization_type": "fp32",
@@ -746,8 +746,17 @@ TEST_CASE("Pyramid validates root graph type and hierarchy overrides", "[ut][Pyr
             }
         ]
     })");
-    REQUIRE_NOTHROW(
+    REQUIRE_THROWS(
         vsag::Pyramid::CheckAndMappingExternalParam(explicit_hierarchy_root, common_param));
+
+    auto inherited_explicit_root = vsag::JsonType::Parse(R"({
+        "base_quantization_type": "fp32",
+        "root_graph_type": "single_layer",
+        "no_build_levels": [0],
+        "hierarchies": ["site"]
+    })");
+    REQUIRE_THROWS(
+        vsag::Pyramid::CheckAndMappingExternalParam(inherited_explicit_root, common_param));
 
     auto odescent_multi_layer = vsag::JsonType::Parse(R"({
         "base_quantization_type": "fp32",

@@ -115,4 +115,7 @@ private:
     PyramidSearchParameters() = default;
 };
 
+void
+validate_pyramid_external_root_graph_config(const JsonType& external_param);
+
 }  // namespace vsag

@@ -690,10 +690,17 @@ IndexNode::Search(const SearchFunc& search_func,
                   uint64_t ef_search) const {
     bool has_index = false;
     InnerIdType entry_point = 0;
+    Vector<const IndexNode*> children(allocator_);
     {
         std::shared_lock lock(mutex_);
         has_index = status_ != IndexNode::Status::NO_INDEX;
         entry_point = entry_point_;
+        if (not has_index) {
+            children.reserve(children_.size());
+            for (const auto& [key, child] : children_) {
+                children.push_back(child.get());
+            }
+        }
     }
     if (has_index) {
         auto self_search_result = search_func(this, vl, entry_point);
@@ -704,7 +711,7 @@ IndexNode::Search(const SearchFunc& search_func,
         return;
     }
 
-    for (const auto& [key, node] : children_) {
+    for (const auto* node : children) {
         node->Search(search_func, vl, search_result, ef_search);
     }
 }
@@ -1986,6 +1993,8 @@ static const std::string HGRAPH_PARAMS_TEMPLATE =
 ParamPtr
 Pyramid::CheckAndMappingExternalParam(const JsonType& external_param,
                                       const IndexCommonParam& common_param) {
+    validate_pyramid_external_root_graph_config(external_param);
+
     const ConstParamMap external_mapping = {
         {PYRAMID_EF_CONSTRUCTION, {EF_CONSTRUCTION_KEY}},
         {PYRAMID_USE_REORDER, {USE_REORDER_KEY}},
