@@ -1750,6 +1750,9 @@ Pyramid::add_internal(const DatasetPtr& base) {
             this->Train(base);
         }
 
+        // A contiguous MemoryIO may reallocate while codes are inserted. Searches hold this lock
+        // in shared mode, so keep their direct code pointers valid until encoding finishes.
+        std::unique_lock<std::shared_mutex> storage_lock(resize_mutex_);
         const auto encode_range = [this, data_vectors, local_cur_element_count, &data_biases](
                                       uint64_t begin, uint64_t end) {
             for (uint64_t offset = begin; offset < end; ++offset) {

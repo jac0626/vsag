@@ -626,7 +626,7 @@ private:
     bool support_duplicate_{false};                      // whether to allow duplicate ids
     bool build_by_base_{false};  // build bottom and route topology with base codes
 
-    mutable std::shared_mutex resize_mutex_;        // guards resize operations
+    mutable std::shared_mutex resize_mutex_;        // guards flatten storage resize/write/read
     std::mutex cur_element_count_mutex_;            // guards cur_element_count_ updates
     std::string graph_type_{GRAPH_TYPE_VALUE_NSW};  // graph algorithm type
     bool default_rabitq_one_bit_search_{false};     // default split lower-bound search

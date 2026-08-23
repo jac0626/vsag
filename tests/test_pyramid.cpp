@@ -24,6 +24,7 @@
 #include <cstring>
 #include <memory>
 #include <nlohmann/json.hpp>
+#include <optional>
 #include <set>
 #include <sstream>
 
@@ -42,7 +43,7 @@ struct PyramidParam {
     bool support_duplicate = false;
     uint64_t rabitq_bits_per_dim_base = 1;
     bool fast_encode_rabitq = true;
-    std::string root_graph_type = "single_layer";
+    std::optional<std::string> root_graph_type;
 };
 
 namespace fixtures {
@@ -100,12 +101,15 @@ PyramidTestIndex::GeneratePyramidBuildParametersString(const std::string& metric
             "fast_encode_rabitq_rounds": 6,
             "precise_quantization_type": "{}",
             "use_reorder": {},
-            "index_min_size": 28,
-            "root_graph_type": "{}",
+            "index_min_size": 28{},
             "support_duplicate": {}
         }}
     }}
     )";
+    const auto root_graph_parameter =
+        param.root_graph_type.has_value()
+            ? fmt::format(",\n            \"root_graph_type\": \"{}\"", *param.root_graph_type)
+            : "";
     auto build_parameters_str = fmt::format(parameter_temp,
                                             metric_type,
                                             dim,
@@ -116,7 +120,7 @@ PyramidTestIndex::GeneratePyramidBuildParametersString(const std::string& metric
                                             param.fast_encode_rabitq,
                                             param.precise_quantization_type,
                                             param.use_reorder,
-                                            param.root_graph_type,
+                                            root_graph_parameter,
                                             param.support_duplicate);
     return build_parameters_str;
 }
