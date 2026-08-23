@@ -126,16 +126,9 @@ Pyramid::sample_route_level(const IndexNode& node) {
 
 Vector<int>
 Pyramid::sample_route_levels(const IndexNode& node, uint64_t count) {
-    const auto max_degree = node.graph_param_->max_degree_;
-    CHECK_ARGUMENT(max_degree > 1, "multi-layer root requires max_degree greater than one");
     Vector<int> levels(count, -1, allocator_);
-    std::scoped_lock lock(entry_point_mutex_);
-    std::uniform_real_distribution<double> distribution(0.0, 1.0);
-    const double level_mult = 1.0 / std::log(static_cast<double>(max_degree));
     for (uint64_t i = 0; i < count; ++i) {
-        const auto sample =
-            std::max(distribution(level_generator_), std::numeric_limits<double>::min());
-        levels[i] = static_cast<int>(-std::log(sample) * level_mult) - 1;
+        levels[i] = sample_route_level(node);
     }
     return levels;
 }

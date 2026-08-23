@@ -48,12 +48,16 @@ validate_root_graph_type(const std::string& root_graph_type, const std::string& 
 void
 validate_root_graph_config(const std::string& root_graph_type,
                            const std::vector<int32_t>& no_build_levels,
+                           int64_t max_degree,
                            const std::string& context) {
     validate_root_graph_type(root_graph_type, context);
     CHECK_ARGUMENT(
         root_graph_type != PYRAMID_ROOT_GRAPH_TYPE_MULTI_LAYER ||
             std::find(no_build_levels.begin(), no_build_levels.end(), 0) == no_build_levels.end(),
         fmt::format("{} multi-layer root graph requires level 0 to be built", context));
+    CHECK_ARGUMENT(
+        root_graph_type != PYRAMID_ROOT_GRAPH_TYPE_MULTI_LAYER || max_degree > 1,
+        fmt::format("{} multi-layer root graph requires max_degree greater than 1", context));
 }
 
 PyramidSearchParameters::HierarchyOp
@@ -85,6 +89,8 @@ PyramidHierarchyParameters::FromJson(const JsonType& json) {
     if (json.IsString()) {
         name = json.GetString();
         CHECK_ARGUMENT(not name.empty(), "hierarchy name must not be empty");
+        validate_root_graph_config(
+            root_graph_type, no_build_levels, max_degree, fmt::format("hierarchy {}", name));
         return;
     }
 
@@ -134,7 +140,8 @@ PyramidHierarchyParameters::FromJson(const JsonType& json) {
             level >= 0,
             fmt::format("hierarchy {} no_build_levels values must be non-negative", name));
     }
-    validate_root_graph_config(root_graph_type, no_build_levels, fmt::format("hierarchy {}", name));
+    validate_root_graph_config(
+        root_graph_type, no_build_levels, max_degree, fmt::format("hierarchy {}", name));
 }
 
 JsonType
@@ -188,11 +195,10 @@ PyramidParameters::FromJson(const JsonType& json) {
     if (this->graph_type == GRAPH_TYPE_ODESCENT) {
         this->odescent_param = std::make_shared<ODescentParameter>();
         this->odescent_param->FromJson(graph_json);
-    } else {
-        if (json.Contains(EF_CONSTRUCTION_KEY)) {
-            this->ef_construction = json[EF_CONSTRUCTION_KEY].GetUint64();
-            CHECK_ARGUMENT(this->ef_construction > 0, "ef_construction must be positive");
-        }
+    }
+    if (json.Contains(EF_CONSTRUCTION_KEY)) {
+        this->ef_construction = json[EF_CONSTRUCTION_KEY].GetUint64();
+        CHECK_ARGUMENT(this->ef_construction > 0, "ef_construction must be positive");
     }
 
     this->base_codes_param = CreateFlattenParam(json[BASE_CODES_KEY]);
@@ -226,7 +232,8 @@ PyramidParameters::FromJson(const JsonType& json) {
                        "root_graph_type must be a string");
         this->root_graph_type = json[PYRAMID_ROOT_GRAPH_TYPE].GetString();
     }
-    validate_root_graph_config(this->root_graph_type, this->no_build_levels, "Pyramid");
+    validate_root_graph_config(
+        this->root_graph_type, this->no_build_levels, this->max_degree, "Pyramid");
 
     if (json.Contains(PYRAMID_PERSIST_SOURCE_ID_KEY)) {
         this->persist_source_id = json[PYRAMID_PERSIST_SOURCE_ID_KEY].GetBool();
@@ -275,9 +282,8 @@ PyramidParameters::ToJson() const {
     graph_json[GRAPH_TYPE_KEY].SetString(this->graph_type);
     if (this->graph_type == GRAPH_TYPE_ODESCENT) {
         graph_json.UpdateJson(odescent_param->ToJson());
-    } else {
-        json[EF_CONSTRUCTION_KEY].SetUint64(this->ef_construction);
     }
+    json[EF_CONSTRUCTION_KEY].SetUint64(this->ef_construction);
     json[GRAPH_KEY].SetJson(graph_json);
     json[USE_REORDER_KEY].SetBool(this->use_reorder);
     json[HGRAPH_BUILD_BY_BASE_QUANTIZATION_KEY].SetBool(this->build_by_base);

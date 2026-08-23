@@ -118,7 +118,7 @@ MakePyramidIndex(uint32_t index_min_size,
         external_param[vsag::PYRAMID_PRECISE_QUANTIZATION_TYPE].SetString("sq8");
         external_param[vsag::PYRAMID_BASE_IO_TYPE].SetString("block_memory_io");
         external_param[vsag::PYRAMID_PRECISE_IO_TYPE].SetString("block_memory_io");
-        external_param[vsag::PYRAMID_RABITQ_BITS_PER_DIM_BASE].SetUint64(1);
+        external_param[vsag::PYRAMID_RABITQ_BITS_PER_DIM_BASE].SetUint64(3);
     } else if (use_reorder) {
         external_param[vsag::PYRAMID_PRECISE_QUANTIZATION_TYPE].SetString(
             vsag::QUANTIZATION_TYPE_VALUE_FP32);
