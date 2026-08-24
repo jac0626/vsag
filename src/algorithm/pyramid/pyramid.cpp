@@ -80,6 +80,14 @@ get_suitable_ef_search(int64_t topk, int64_t data_num, uint64_t subindex_ef_sear
     return std::max(static_cast<uint64_t>(4.0F * topk_float), subindex_ef_search * 8);
 }
 
+static inline bool
+supports_parallel_encode(const FlattenInterfacePtr& codes) {
+    const auto name = codes->GetQuantizerName();
+    return codes->InMemory() &&
+           (name == QUANTIZATION_TYPE_VALUE_FP32 || name == QUANTIZATION_TYPE_VALUE_RABITQ ||
+            name == QUANTIZATION_TYPE_VALUE_SQ8);
+}
+
 GraphInterfaceParamPtr
 Pyramid::make_route_graph_param(const GraphInterfaceParamPtr& bottom_graph_param) {
     auto bottom = std::dynamic_pointer_cast<SparseGraphDatacellParameter>(bottom_graph_param);
@@ -1717,8 +1725,12 @@ Pyramid::encode_add_batch(const DatasetPtr& base, const AddBatch& batch) {
             }
         }
     };
-    if (batch.storage_preallocated and thread_pool_ != nullptr and build_thread_count_ > 1 and
-        batch.input_indices.size() > 1) {
+    const bool stores_support_parallel_encode =
+        supports_parallel_encode(base_codes_) &&
+        (not has_precise_reorder() || supports_parallel_encode(precise_codes_)) &&
+        (raw_vector_ == nullptr || supports_parallel_encode(raw_vector_));
+    if (batch.storage_preallocated and stores_support_parallel_encode and thread_pool_ != nullptr &&
+        build_thread_count_ > 1 and batch.input_indices.size() > 1) {
         run_parallel_blocks(batch.input_indices.size(), encode_range);
     } else {
         encode_range(0, batch.input_indices.size());
