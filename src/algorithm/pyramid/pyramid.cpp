@@ -1629,23 +1629,22 @@ Pyramid::Add(const DatasetPtr& base) {
         local_cur_element_count = cur_element_count_;
         auto new_capacity = max_capacity_;
         if (max_capacity_ == 0) {
-            uint64_t reported_storage_capacity = base_codes_->max_capacity_;
-            if (has_precise_reorder()) {
-                reported_storage_capacity =
-                    std::max<uint64_t>(reported_storage_capacity, precise_codes_->max_capacity_);
-            }
-            if (raw_vector_ != nullptr) {
-                reported_storage_capacity =
-                    std::max<uint64_t>(reported_storage_capacity, raw_vector_->max_capacity_);
-            }
-            new_capacity = std::max<int64_t>(
-                {INIT_CAPACITY, data_num, static_cast<int64_t>(reported_storage_capacity) + 1});
+            new_capacity = std::max(INIT_CAPACITY, data_num);
         } else if (max_capacity_ < data_num + cur_element_count_) {
             new_capacity = std::min(MAX_CAPACITY_EXTEND, max_capacity_);
             new_capacity = std::max(data_num + cur_element_count_ - max_capacity_, new_capacity) +
                            max_capacity_;
         }
+        bool base_storage_resized = false;
+        bool precise_storage_resized = false;
+        bool raw_storage_resized = false;
         if (new_capacity > max_capacity_) {
+            base_storage_resized = new_capacity > static_cast<int64_t>(base_codes_->max_capacity_);
+            precise_storage_resized =
+                not has_precise_reorder() ||
+                new_capacity > static_cast<int64_t>(precise_codes_->max_capacity_);
+            raw_storage_resized = raw_vector_ == nullptr ||
+                                  new_capacity > static_cast<int64_t>(raw_vector_->max_capacity_);
             resize(new_capacity);
         }
 
@@ -1698,7 +1697,23 @@ Pyramid::Add(const DatasetPtr& base) {
                 }
             }
         };
-        run_parallel_blocks(data_biases.size(), encode_range);
+        const auto supports_parallel_encode = [](const FlattenInterfacePtr& codes) {
+            const auto name = codes->GetQuantizerName();
+            return codes->InMemory() &&
+                   (name == QUANTIZATION_TYPE_VALUE_FP32 ||
+                    name == QUANTIZATION_TYPE_VALUE_RABITQ || name == QUANTIZATION_TYPE_VALUE_SQ8);
+        };
+        const bool use_parallel_encode =
+            local_cur_element_count == 0 && thread_pool_ != nullptr && build_thread_count_ > 1 &&
+            data_biases.size() > 1 && supports_parallel_encode(base_codes_) &&
+            (not has_precise_reorder() || supports_parallel_encode(precise_codes_)) &&
+            (raw_vector_ == nullptr || supports_parallel_encode(raw_vector_)) &&
+            base_storage_resized && precise_storage_resized && raw_storage_resized;
+        if (use_parallel_encode) {
+            run_parallel_blocks(data_biases.size(), encode_range);
+        } else {
+            encode_range(0, data_biases.size());
+        }
         cur_element_count_ += static_cast<int64_t>(data_biases.size());
     }
     std::shared_lock<std::shared_mutex> lock(resize_mutex_);

@@ -530,7 +530,6 @@ TEST_CASE("Pyramid promotes flat node at index minimum size", "[ut][pyramid]") {
     const bool split_rabitq = GENERATE(false, true);
     const bool build_all_at_once = GENERATE(false, true);
     CAPTURE(split_rabitq, build_all_at_once);
-    // Multiple build workers exercise the same pre-sized encoding path for both code layouts.
     auto test_index = MakePyramidIndex(3, 4, false, split_rabitq);
     const auto& index = test_index.index;
     std::vector<float> vectors = {
