@@ -86,57 +86,44 @@ append_hierarchy_selector(PyramidSearchParameters& params,
 
 void
 validate_pyramid_external_root_graph_config(const JsonType& external_param) {
-    const bool root_graph_type_is_explicit = external_param.Contains(PYRAMID_ROOT_GRAPH_TYPE);
     std::vector<int32_t> inherited_no_build_levels;
     if (external_param.Contains(PYRAMID_NO_BUILD_LEVELS) &&
         external_param[PYRAMID_NO_BUILD_LEVELS].IsArray()) {
         inherited_no_build_levels = external_param[PYRAMID_NO_BUILD_LEVELS].GetVector();
     }
-    const auto validate_explicit_root_graph_type = [](bool is_explicit,
-                                                      const std::vector<int32_t>& no_build_levels,
-                                                      const std::string& context) {
-        CHECK_ARGUMENT(
-            not is_explicit || std::find(no_build_levels.begin(), no_build_levels.end(), 0) ==
-                                   no_build_levels.end(),
-            fmt::format("{} root_graph_type cannot be specified when level 0 is not built",
-                        context));
-    };
-
-    if (external_param.Contains(PYRAMID_HIERARCHIES) &&
-        external_param[PYRAMID_HIERARCHIES].IsArray()) {
-        const auto& hierarchy_values = *external_param[PYRAMID_HIERARCHIES].GetInnerJson();
-        if (hierarchy_values.empty()) {
-            validate_explicit_root_graph_type(
-                root_graph_type_is_explicit, inherited_no_build_levels, "Pyramid");
-            return;
-        }
-        for (const auto& hierarchy_raw : hierarchy_values) {
-            JsonType hierarchy;
-            *hierarchy.GetInnerJson() = hierarchy_raw;
-            auto no_build_levels = inherited_no_build_levels;
-            bool hierarchy_root_graph_type_is_explicit = root_graph_type_is_explicit;
-            std::string context = "Pyramid hierarchy";
-            if (hierarchy.IsObject()) {
-                if (hierarchy.Contains(PYRAMID_NO_BUILD_LEVELS) &&
-                    hierarchy[PYRAMID_NO_BUILD_LEVELS].IsArray()) {
-                    no_build_levels = hierarchy[PYRAMID_NO_BUILD_LEVELS].GetVector();
-                }
-                hierarchy_root_graph_type_is_explicit = hierarchy_root_graph_type_is_explicit ||
-                                                        hierarchy.Contains(PYRAMID_ROOT_GRAPH_TYPE);
-                if (hierarchy.Contains("name") && hierarchy["name"].IsString()) {
-                    context = fmt::format("hierarchy {}", hierarchy["name"].GetString());
-                }
-            } else if (hierarchy.IsString()) {
-                context = fmt::format("hierarchy {}", hierarchy.GetString());
-            }
-            validate_explicit_root_graph_type(
-                hierarchy_root_graph_type_is_explicit, no_build_levels, context);
-        }
-        return;
-    }
-
+    const auto validate_explicit_root_graph_type =
+        [](const bool is_explicit, const std::vector<int32_t>& levels, const std::string& context) {
+            CHECK_ARGUMENT(
+                not is_explicit || std::find(levels.begin(), levels.end(), 0) == levels.end(),
+                fmt::format("{} root_graph_type cannot be specified when level 0 is not built",
+                            context));
+        };
+    const bool root_graph_type_is_explicit = external_param.Contains(PYRAMID_ROOT_GRAPH_TYPE);
     validate_explicit_root_graph_type(
         root_graph_type_is_explicit, inherited_no_build_levels, "Pyramid");
+
+    if (not external_param.Contains(PYRAMID_HIERARCHIES) ||
+        not external_param[PYRAMID_HIERARCHIES].IsArray()) {
+        return;
+    }
+    for (const auto& hierarchy_raw : *external_param[PYRAMID_HIERARCHIES].GetInnerJson()) {
+        JsonType hierarchy;
+        *hierarchy.GetInnerJson() = hierarchy_raw;
+        if (not hierarchy.IsObject()) {
+            continue;
+        }
+        auto no_build_levels = inherited_no_build_levels;
+        if (hierarchy.Contains(PYRAMID_NO_BUILD_LEVELS) &&
+            hierarchy[PYRAMID_NO_BUILD_LEVELS].IsArray()) {
+            no_build_levels = hierarchy[PYRAMID_NO_BUILD_LEVELS].GetVector();
+        }
+        const bool is_explicit =
+            root_graph_type_is_explicit || hierarchy.Contains(PYRAMID_ROOT_GRAPH_TYPE);
+        const auto context = hierarchy.Contains("name") && hierarchy["name"].IsString()
+                                 ? fmt::format("hierarchy {}", hierarchy["name"].GetString())
+                                 : "Pyramid hierarchy";
+        validate_explicit_root_graph_type(is_explicit, no_build_levels, context);
+    }
 }
 
 void
@@ -270,9 +257,6 @@ PyramidParameters::FromJson(const JsonType& json) {
     }
 
     this->use_reorder = json[USE_REORDER_KEY].GetBool();
-    if (json.Contains(HGRAPH_BUILD_BY_BASE_QUANTIZATION_KEY)) {
-        this->build_by_base = json[HGRAPH_BUILD_BY_BASE_QUANTIZATION_KEY].GetBool();
-    }
     if (this->use_reorder && not use_split_codes) {
         this->precise_codes_param = CreateFlattenParam(json[PRECISE_CODES_KEY]);
     } else {
@@ -341,7 +325,6 @@ PyramidParameters::ToJson() const {
     json[EF_CONSTRUCTION_KEY].SetUint64(this->ef_construction);
     json[GRAPH_KEY].SetJson(graph_json);
     json[USE_REORDER_KEY].SetBool(this->use_reorder);
-    json[HGRAPH_BUILD_BY_BASE_QUANTIZATION_KEY].SetBool(this->build_by_base);
     json[INDEX_MIN_SIZE].SetInt(index_min_size);
     json[PYRAMID_ROOT_GRAPH_TYPE].SetString(root_graph_type);
     json[SUPPORT_DUPLICATE].SetBool(support_duplicate);
@@ -405,7 +388,6 @@ PyramidParameters::CheckCompatibility(const ParamPtr& other) const {
         return false;
     }
     CHECK_FIELD_EQ(*this, *p, use_reorder);
-    CHECK_FIELD_EQ(*this, *p, build_by_base);
     CHECK_FIELD_EQ(*this, *p, reorder_source);
     if (this->use_reorder && this->reorder_source != HGRAPH_REORDER_SOURCE_BASE) {
         CHECK_SUB_PARAM(*this, *p, precise_codes_param);
@@ -430,6 +412,7 @@ PyramidSearchParameters::FromJson(const std::string& json_string) {
     CHECK_ARGUMENT(params.Contains(INDEX_PYRAMID),
                    fmt::format("parameters must contains {}", INDEX_PYRAMID));
     obj.IndexSearchParameter::FromJson(params[INDEX_PYRAMID]);
+    obj.has_topk_factor = params[INDEX_PYRAMID].Contains(SEARCH_PARAM_FACTOR);
     if (obj.has_topk_factor) {
         CHECK_ARGUMENT(std::isfinite(obj.topk_factor) && obj.topk_factor > 0.0F,
                        fmt::format("factor({}) must be finite and positive", obj.topk_factor));

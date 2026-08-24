@@ -21,7 +21,6 @@
 #include <cmath>
 #include <future>
 #include <numeric>
-#include <optional>
 #include <set>
 #include <sstream>
 #include <thread>
@@ -30,7 +29,6 @@
 #include "impl/allocator/safe_allocator.h"
 #include "index/index_impl.h"
 #include "index_common_param.h"
-#include "storage/serialization.h"
 #include "unittest.h"
 #include "vsag/options.h"
 
@@ -135,7 +133,6 @@ MakeRootPyramidIndex(const std::string& root_graph_type,
                      bool use_reorder = false,
                      const std::string& graph_type = vsag::GRAPH_TYPE_VALUE_NSW,
                      bool support_duplicate = false,
-                     bool build_by_base = false,
                      uint64_t build_thread_count = 1,
                      bool use_rabitq_with_sq8 = false) {
     PyramidTestIndex result;
@@ -161,7 +158,6 @@ MakeRootPyramidIndex(const std::string& root_graph_type,
     external[vsag::PYRAMID_GRAPH_TYPE].SetString(graph_type);
     external[vsag::PYRAMID_USE_REORDER].SetBool(use_reorder || use_rabitq_with_sq8);
     external[vsag::PYRAMID_SUPPORT_DUPLICATE].SetBool(support_duplicate);
-    external[vsag::PYRAMID_BUILD_BY_BASE_QUANTIZATION].SetBool(build_by_base);
     external[vsag::PYRAMID_BUILD_THREAD_COUNT].SetUint64(build_thread_count);
     if (use_rabitq_with_sq8) {
         external[vsag::PYRAMID_BASE_QUANTIZATION_TYPE].SetString("rabitq");
@@ -220,58 +216,6 @@ RequirePyramidSearchStatistics(const vsag::DatasetPtr& result, uint64_t approxim
     REQUIRE(statistics["distance_evaluations_by_backend"]["fp32"].GetUint64() ==
             statistics["distance_evaluations"].GetUint64());
     REQUIRE(statistics["complete"].GetBool());
-}
-
-std::string
-RewritePyramidFooterRootStorageVersion(const std::string& serialized,
-                                       const std::optional<int64_t>& version) {
-    std::stringstream input(serialized);
-    vsag::IOStreamReader reader(input);
-    auto footer = vsag::Footer::Parse(reader);
-    REQUIRE(footer != nullptr);
-    auto basic_info = footer->GetMetadata()->Get(vsag::BASIC_INFO);
-    constexpr const char* version_key = "pyramid_root_storage_format_version";
-    if (version.has_value()) {
-        basic_info[version_key].SetInt(version.value());
-    } else {
-        basic_info.Erase(version_key);
-    }
-
-    auto replacement_metadata = std::make_shared<vsag::Metadata>();
-    replacement_metadata->Set(vsag::BASIC_INFO, basic_info);
-    std::stringstream output;
-    vsag::IOStreamWriter writer(output);
-    const uint64_t body_size = serialized.size() - footer->Length();
-    writer.Write(serialized.data(), body_size);
-    vsag::Footer(replacement_metadata).Write(writer);
-    return output.str();
-}
-
-std::string
-RewritePyramidStreamingRootStorageVersion(const std::string& serialized,
-                                          const std::optional<int64_t>& version) {
-    std::stringstream input(serialized);
-    vsag::IOStreamReader reader(input);
-    auto header = vsag::StreamHeader::ReadRaw(reader);
-    auto metadata_json = vsag::JsonType::Parse(header.metadata_string);
-    auto basic_info = metadata_json[vsag::BASIC_INFO];
-    constexpr const char* version_key = "pyramid_root_storage_format_version";
-    if (version.has_value()) {
-        basic_info[version_key].SetInt(version.value());
-    } else {
-        basic_info.Erase(version_key);
-    }
-    metadata_json[vsag::BASIC_INFO].SetJson(basic_info);
-
-    auto replacement_metadata = std::make_shared<vsag::Metadata>(metadata_json);
-    std::stringstream output;
-    vsag::IOStreamWriter writer(output);
-    vsag::StreamHeader::Write(writer, replacement_metadata);
-    constexpr uint64_t fixed_header_size =
-        8 + sizeof(uint16_t) * 2 + sizeof(uint64_t) + sizeof(uint32_t);
-    const uint64_t body_offset = fixed_header_size + header.metadata_string.size();
-    writer.Write(serialized.data() + body_offset, serialized.size() - body_offset);
-    return output.str();
 }
 
 }  // namespace
@@ -586,8 +530,7 @@ TEST_CASE("Pyramid promotes flat node at index minimum size", "[ut][pyramid]") {
     const bool split_rabitq = GENERATE(false, true);
     const bool build_all_at_once = GENERATE(false, true);
     CAPTURE(split_rabitq, build_all_at_once);
-    // Split RaBitQ does not opt in to concurrent InsertVector. Multiple build workers exercise
-    // the serial encoding fallback while graph construction may still run in parallel.
+    // Multiple build workers exercise the same pre-sized encoding path for both code layouts.
     auto test_index = MakePyramidIndex(3, 4, false, split_rabitq);
     const auto& index = test_index.index;
     std::vector<float> vectors = {
@@ -937,73 +880,8 @@ TEST_CASE("Pyramid multi-layer root builds routes and survives serialization",
         result->GetIds(), result->GetIds() + result->GetDim(), restored_result->GetIds()));
 }
 
-TEST_CASE("Pyramid rejects ambiguous legacy multi-layer root storage",
-          "[ut][pyramid][root_graph][serialization]") {
-    constexpr int64_t count = 32;
-    std::vector<float> vectors(count * PYRAMID_TEST_DIM);
-    FillRootVectors(vectors, count);
-    std::vector<int64_t> ids(count);
-    std::iota(ids.begin(), ids.end(), 0);
-    std::vector<std::string> paths(count, "");
-
-    const auto serialize = [&](const std::string& root_graph_type, bool streaming) {
-        auto source = MakeRootPyramidIndex(root_graph_type);
-        REQUIRE(
-            source.index->Build(MakePyramidDataset(vectors.data(), ids.data(), paths.data(), count))
-                .empty());
-        std::stringstream output;
-        if (streaming) {
-            source.index->SerializeStreaming(output);
-        } else {
-            vsag::IOStreamWriter writer(output);
-            source.index->Serialize(writer);
-        }
-        return output.str();
-    };
-
-    for (const bool streaming : {false, true}) {
-        const auto multi_layer = serialize(vsag::PYRAMID_ROOT_GRAPH_TYPE_MULTI_LAYER, streaming);
-        const auto rewrite = [&](const std::optional<int64_t>& version) {
-            return streaming ? RewritePyramidStreamingRootStorageVersion(multi_layer, version)
-                             : RewritePyramidFooterRootStorageVersion(multi_layer, version);
-        };
-        for (const auto version : {std::optional<int64_t>{}, std::optional<int64_t>{99}}) {
-            CAPTURE(streaming, version.has_value(), version.value_or(0));
-            auto target = MakeRootPyramidIndex(vsag::PYRAMID_ROOT_GRAPH_TYPE_MULTI_LAYER);
-            std::stringstream input(rewrite(version));
-            try {
-                if (streaming) {
-                    target.index->DeserializeStreaming(input);
-                } else {
-                    vsag::IOStreamReader reader(input);
-                    target.index->Deserialize(reader);
-                }
-                FAIL("ambiguous multi-layer root storage must be rejected");
-            } catch (const vsag::VsagException& error) {
-                REQUIRE(std::string(error.what()).find("root storage format") != std::string::npos);
-            }
-        }
-
-        const auto single_layer = serialize(vsag::PYRAMID_ROOT_GRAPH_TYPE_SINGLE_LAYER, streaming);
-        const auto legacy_single = streaming
-                                       ? RewritePyramidStreamingRootStorageVersion(single_layer, {})
-                                       : RewritePyramidFooterRootStorageVersion(single_layer, {});
-        auto target = MakeRootPyramidIndex(vsag::PYRAMID_ROOT_GRAPH_TYPE_SINGLE_LAYER);
-        std::stringstream input(legacy_single);
-        if (streaming) {
-            target.index->DeserializeStreaming(input);
-        } else {
-            vsag::IOStreamReader reader(input);
-            target.index->Deserialize(reader);
-        }
-        REQUIRE(target.index->GetNumElements() == count);
-    }
-}
-
 TEST_CASE("Pyramid NSW Build and empty Add share routed construction",
           "[ut][pyramid][root_graph][build]") {
-    const bool build_by_base = GENERATE(false, true);
-    const bool use_rabitq_with_sq8 = not build_by_base;
     constexpr int64_t count = 512;
     std::vector<float> vectors(count * PYRAMID_TEST_DIM);
     FillRootVectors(vectors, count);
@@ -1015,16 +893,14 @@ TEST_CASE("Pyramid NSW Build and empty Add share routed construction",
                                       true,
                                       vsag::GRAPH_TYPE_VALUE_NSW,
                                       false,
-                                      build_by_base,
                                       1,
-                                      use_rabitq_with_sq8);
+                                      true);
     auto added = MakeRootPyramidIndex(vsag::PYRAMID_ROOT_GRAPH_TYPE_MULTI_LAYER,
                                       true,
                                       vsag::GRAPH_TYPE_VALUE_NSW,
                                       false,
-                                      build_by_base,
                                       1,
-                                      use_rabitq_with_sq8);
+                                      true);
     auto dataset = MakePyramidDataset(vectors.data(), ids.data(), paths.data(), count);
     REQUIRE(built.index->Build(dataset).empty());
     REQUIRE(added.index->Add(dataset).empty());
@@ -1063,12 +939,8 @@ TEST_CASE("Pyramid flat routed root crosses memory blocks and resizes",
     std::iota(ids.begin(), ids.end(), 0);
     std::vector<std::string> paths(total_count, "");
 
-    auto test_index = MakeRootPyramidIndex(vsag::PYRAMID_ROOT_GRAPH_TYPE_MULTI_LAYER,
-                                           false,
-                                           vsag::GRAPH_TYPE_VALUE_NSW,
-                                           false,
-                                           false,
-                                           8);
+    auto test_index = MakeRootPyramidIndex(
+        vsag::PYRAMID_ROOT_GRAPH_TYPE_MULTI_LAYER, false, vsag::GRAPH_TYPE_VALUE_NSW, false, 8);
     REQUIRE(test_index.index
                 ->Build(MakePyramidDataset(vectors.data(), ids.data(), paths.data(), initial_count))
                 .empty());

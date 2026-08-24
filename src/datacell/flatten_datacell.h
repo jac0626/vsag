@@ -33,8 +33,7 @@
 
 namespace vsag {
 /*
- * Most mutations are thread unsafe. Concurrent InsertVector is supported only for pre-resized
- * in-memory layouts when callers write distinct IDs.
+* thread unsafe
 */
 template <typename QuantTmpl, typename LayoutTmpl>
 class FlattenDataCell : public FlattenInterface {
@@ -142,17 +141,6 @@ public:
 
     [[nodiscard]] bool
     InMemory() const override;
-
-    [[nodiscard]] bool
-    SupportConcurrentInsertAfterResize() const override {
-        if constexpr (not LayoutTmpl::InMemory) {
-            return false;
-        }
-        const auto quantizer_name = this->quantizer_->Name();
-        return quantizer_name == QUANTIZATION_TYPE_VALUE_FP32 or
-               quantizer_name == QUANTIZATION_TYPE_VALUE_RABITQ or
-               quantizer_name == QUANTIZATION_TYPE_VALUE_SQ8;
-    }
 
     bool
     HoldMolds() const override;

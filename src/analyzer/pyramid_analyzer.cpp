@@ -644,9 +644,8 @@ PyramidAnalyzer::collect_searchable_node_ids(const IndexNode* node,
         if (node->status_ == IndexNode::Status::FLAT) {
             node_ids = node->ids_;
         } else if (node->graph_ != nullptr) {
-            try {
-                node_ids = node->graph_->GetIds();
-            } catch (const std::exception&) {
+            if (node->graph_param_->graph_storage_type_ ==
+                GraphStorageTypes::GRAPH_STORAGE_TYPE_VALUE_FLAT) {
                 const auto total_count = node->graph_->TotalCount();
                 node_ids.reserve(total_count);
                 for (InnerIdType id = 0; id < total_count; ++id) {
@@ -654,6 +653,8 @@ PyramidAnalyzer::collect_searchable_node_ids(const IndexNode* node,
                         node_ids.push_back(id);
                     }
                 }
+            } else {
+                node_ids = node->graph_->GetIds();
             }
         }
         for (const auto id : node_ids) {

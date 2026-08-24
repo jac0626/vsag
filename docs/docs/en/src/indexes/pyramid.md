@@ -95,7 +95,6 @@ Build-time parameters live under `index_param`.
 | `neighbor_sample_rate` | float | — | ODescent neighbor sampling rate. |
 | `no_build_levels` | int[] | `[]` | Tree levels that skip graph construction (0-indexed from the root). |
 | `use_reorder` | bool | `false` | Keep a high-precision copy for rescoring. |
-| `build_by_base` | bool | `false` | Build both bottom and routing graph topology with base codes. By default, both use the precise codes when an independent precise store exists; online traversal still uses base codes. |
 | `precise_quantization_type` | string | `"fp32"` | Quantizer for reordering. Use `"rabitq"` with `rabitq_bits_per_dim_precise` to enable RaBitQ x+y split reorder from base storage. |
 | `rabitq_bits_per_dim_base` | int | `1` | RaBitQ stored-code bits. In x+y split mode, this is `x`, the filter bits used during graph traversal; allowed range is `[1, 8]`. |
 | `rabitq_bits_per_dim_precise` | int | unset | RaBitQ split `y` bits. When set with `base_quantization_type: "rabitq"` and `precise_quantization_type: "rabitq"`, Pyramid uses split storage; `rabitq_bits_per_dim_base` remains `x`, and `x + y <= 8`. |
@@ -203,8 +202,9 @@ dense Flat bottom graph, while sparse routing graphs choose a better entry point
 search. Bulk Build and incremental Add jointly construct the route and bottom layers with the same
 HGraph-style insertion protocol. This root fast path is also used when `graph_type: "odescent"`;
 `graph_type` continues to select construction for non-root Pyramid nodes. Bottom and routing edges
-always use the same construction-code source selected by `build_by_base`; query traversal continues
-to use the base codes, and final reordering uses the configured reorder source.
+use the precise codes when an independent precise store exists, otherwise they use the base codes.
+Query traversal continues to use the base codes, and final reordering uses the configured reorder
+source.
 
 ```json
 {

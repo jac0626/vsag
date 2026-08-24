@@ -102,9 +102,6 @@ public:
     void
     Serialize(StreamWriter& writer) const;
 
-    uint64_t
-    GetMemoryUsage() const;
-
     void
     Deserialize(StreamReader& reader);
 
@@ -132,8 +129,7 @@ private:
             : graphs(allocator), graph_param(std::move(param)) {
         }
 
-        // The vector shape is guarded by the owning IndexNode::mutex_. Shared graph ownership lets
-        // readers search a snapshot after releasing the node lock.
+        // The vector shape is guarded by the owning IndexNode::mutex_.
         Vector<GraphInterfacePtr> graphs;
         GraphInterfaceParamPtr graph_param{nullptr};
     };
@@ -191,7 +187,6 @@ public:
                                          pyramid_param->base_codes_param->name ==
                                              RABITQ_SPLIT_DATA_CELL),
           support_duplicate_(pyramid_param->support_duplicate),
-          build_by_base_(pyramid_param->build_by_base),
           persist_source_id_(pyramid_param->persist_source_id),
           cache_(std::make_unique<PyramidBuildCache>(common_param.allocator_.get())) {
         base_codes_ = FlattenInterface::MakeInstance(pyramid_param->base_codes_param, common_param);
@@ -223,7 +218,6 @@ public:
                                           h_param.no_build_levels.end());
                 h->ef_construction = h_param.ef_construction;
                 h->alpha = h_param.alpha;
-                h->root_graph_type = h_param.root_graph_type;
                 hierarchies_.insert({h_param.name, std::move(h)});
             }
         } else {
@@ -234,7 +228,6 @@ public:
                                       pyramid_param->no_build_levels.end());
             h->ef_construction = pyramid_param->ef_construction;
             h->alpha = pyramid_param->alpha;
-            h->root_graph_type = pyramid_param->root_graph_type;
             hierarchies_.insert({"", std::move(h)});
         }
         points_mutex_ = std::make_shared<PointsMutex>(max_capacity_, allocator_);
@@ -384,9 +377,6 @@ private:
     void
     deserialize_hierarchies(StreamReader& reader, const JsonType& basic_info);
 
-    void
-    validate_root_storage_format(const JsonType& basic_info) const;
-
     // RAII guard that returns the VisitedList to the pool on scope exit,
     // ensuring no leak if the search throws.
     class VisitedListGuard {
@@ -423,7 +413,6 @@ private:
         Vector<int32_t> no_build_levels;           // depths where graph build is skipped
         uint64_t ef_construction{400};             // expansion factor during graph build
         float alpha{1.2F};  // Relative Neighborhood Graph pruning coefficient
-        std::string root_graph_type{PYRAMID_ROOT_GRAPH_TYPE_SINGLE_LAYER};
 
         Hierarchy(const std::string& n, std::unique_ptr<IndexNode> r, Allocator* alloc)
             : name(n), root(std::move(r)), no_build_levels(alloc) {
@@ -479,9 +468,6 @@ private:
     /// Build all hierarchy graphs via ODescent in batch mode.
     std::vector<int64_t>
     build_by_odescent(const DatasetPtr& base);
-
-    std::vector<int64_t>
-    add_internal(const DatasetPtr& base);
 
     static GraphInterfaceParamPtr
     make_route_graph_param(const GraphInterfaceParamPtr& bottom_graph_param);
@@ -581,7 +567,7 @@ private:
 
     [[nodiscard]] FlattenInterfacePtr
     construction_codes() const {
-        return has_precise_reorder() and not build_by_base_ ? precise_codes_ : base_codes_;
+        return has_precise_reorder() ? precise_codes_ : base_codes_;
     }
 
     [[nodiscard]] FlattenInterfacePtr
@@ -624,12 +610,10 @@ private:
     int64_t cur_element_count_{0};                       // number of vectors currently stored
     std::atomic<int64_t> delete_count_{0};               // number of deleted vectors
     bool support_duplicate_{false};                      // whether to allow duplicate ids
-    bool build_by_base_{false};  // build bottom and route topology with base codes
-
-    mutable std::shared_mutex resize_mutex_;        // guards flatten storage resize/write/read
-    std::mutex cur_element_count_mutex_;            // guards cur_element_count_ updates
-    std::string graph_type_{GRAPH_TYPE_VALUE_NSW};  // graph algorithm type
-    bool default_rabitq_one_bit_search_{false};     // default split lower-bound search
+    mutable std::shared_mutex resize_mutex_;             // guards flatten storage resize/write/read
+    std::mutex cur_element_count_mutex_;                 // guards cur_element_count_ updates
+    std::string graph_type_{GRAPH_TYPE_VALUE_NSW};       // graph algorithm type
+    bool default_rabitq_one_bit_search_{false};          // default split lower-bound search
 
     std::mutex entry_point_mutex_;  // guards entry-point selection
     std::default_random_engine level_generator_{
