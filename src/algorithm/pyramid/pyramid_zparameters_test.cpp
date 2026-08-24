@@ -723,14 +723,7 @@ TEST_CASE("Pyramid validates root graph type and hierarchy overrides", "[ut][Pyr
         "root_graph_type": "single_layer",
         "no_build_levels": [0]
     })");
-    REQUIRE_THROWS(vsag::Pyramid::CheckAndMappingExternalParam(unbuilt_root, common_param));
-
-    auto default_unbuilt_root = vsag::JsonType::Parse(R"({
-        "base_quantization_type": "fp32",
-        "no_build_levels": [0]
-    })");
-    REQUIRE_NOTHROW(
-        vsag::Pyramid::CheckAndMappingExternalParam(default_unbuilt_root, common_param));
+    REQUIRE_NOTHROW(vsag::Pyramid::CheckAndMappingExternalParam(unbuilt_root, common_param));
 
     auto explicit_hierarchy_root = vsag::JsonType::Parse(R"({
         "base_quantization_type": "fp32",
@@ -742,17 +735,8 @@ TEST_CASE("Pyramid validates root graph type and hierarchy overrides", "[ut][Pyr
             }
         ]
     })");
-    REQUIRE_THROWS(
+    REQUIRE_NOTHROW(
         vsag::Pyramid::CheckAndMappingExternalParam(explicit_hierarchy_root, common_param));
-
-    auto inherited_explicit_root = vsag::JsonType::Parse(R"({
-        "base_quantization_type": "fp32",
-        "root_graph_type": "single_layer",
-        "no_build_levels": [0],
-        "hierarchies": ["site"]
-    })");
-    REQUIRE_THROWS(
-        vsag::Pyramid::CheckAndMappingExternalParam(inherited_explicit_root, common_param));
 
     auto odescent_multi_layer = vsag::JsonType::Parse(R"({
         "base_quantization_type": "fp32",
@@ -761,18 +745,23 @@ TEST_CASE("Pyramid validates root graph type and hierarchy overrides", "[ut][Pyr
         "max_degree": 8,
         "ef_construction": 17
     })");
-    auto odescent_mapped = std::dynamic_pointer_cast<vsag::PyramidParameters>(
-        vsag::Pyramid::CheckAndMappingExternalParam(odescent_multi_layer, common_param));
-    REQUIRE(odescent_mapped->ef_construction == 17);
-    REQUIRE(odescent_mapped->ToJson()[vsag::EF_CONSTRUCTION_KEY].GetUint64() == 17);
-
-    odescent_multi_layer[vsag::PYRAMID_GRAPH_MAX_DEGREE].SetInt(1);
     REQUIRE_THROWS(vsag::Pyramid::CheckAndMappingExternalParam(odescent_multi_layer, common_param));
 
     odescent_multi_layer[vsag::PYRAMID_ROOT_GRAPH_TYPE].SetString(
         vsag::PYRAMID_ROOT_GRAPH_TYPE_SINGLE_LAYER);
     REQUIRE_NOTHROW(
         vsag::Pyramid::CheckAndMappingExternalParam(odescent_multi_layer, common_param));
+
+    auto odescent_hierarchy_multi_layer = vsag::JsonType::Parse(R"({
+        "base_quantization_type": "fp32",
+        "graph_type": "odescent",
+        "root_graph_type": "single_layer",
+        "hierarchies": [
+            {"name": "site", "root_graph_type": "multi_layer"}
+        ]
+    })");
+    REQUIRE_THROWS(
+        vsag::Pyramid::CheckAndMappingExternalParam(odescent_hierarchy_multi_layer, common_param));
 
     auto invalid_hierarchy_degree = vsag::JsonType::Parse(R"({
         "base_quantization_type": "fp32",

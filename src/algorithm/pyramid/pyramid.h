@@ -62,16 +62,12 @@ public:
     IndexNode(Allocator* allocator,
               GraphInterfaceParamPtr graph_param,
               uint32_t index_min_size,
-              const IndexCommonParam* common_param,
-              GraphInterfaceParamPtr child_graph_param = nullptr);
+              const IndexCommonParam& common_param,
+              GraphInterfaceParamPtr child_graph_param);
 
     /// Build the internal graph using ODescent over the stored ids.
     void
     Build(ODescent& odescent);
-
-    /// Build all descendants while leaving this node untouched.
-    void
-    BuildChildren(ODescent& odescent);
 
     /// Allocate the graph storage if not yet done.
     void
@@ -153,9 +149,18 @@ private:
     std::pair<uint64_t, uint64_t>
     get_memory_usage_detail() const;
 
+    JsonType
+    get_graph_stats() const;
+
+    Vector<InnerIdType>
+    get_ids_unlocked() const;
+
+    void
+    resize_graph(InnerIdType new_capacity);
+
     UnorderedMap<std::string, std::unique_ptr<IndexNode>> children_;  // keyed by path segment
     Allocator* allocator_{nullptr};
-    const IndexCommonParam* common_param_{nullptr};
+    const IndexCommonParam& common_param_;
     GraphInterfaceParamPtr graph_param_{nullptr};
     GraphInterfaceParamPtr child_graph_param_{nullptr};
     std::unique_ptr<RoutingOverlay> routing_{nullptr};
@@ -189,19 +194,6 @@ public:
           persist_source_id_(pyramid_param->persist_source_id),
           cache_(std::make_unique<PyramidBuildCache>(common_param.allocator_.get())) {
         base_codes_ = FlattenInterface::MakeInstance(pyramid_param->base_codes_param, common_param);
-        auto make_root = [&](const GraphInterfaceParamPtr& child_graph_param,
-                             uint32_t index_min_size,
-                             const std::string& root_graph_type) {
-            const bool multi_layer = root_graph_type == PYRAMID_ROOT_GRAPH_TYPE_MULTI_LAYER;
-            auto root_graph_param =
-                multi_layer ? make_root_graph_param(child_graph_param) : child_graph_param;
-            auto root = std::make_unique<IndexNode>(
-                allocator_, root_graph_param, index_min_size, &common_param_, child_graph_param);
-            if (multi_layer) {
-                root->enable_routing(make_route_graph_param(child_graph_param));
-            }
-            return root;
-        };
         if (pyramid_param->has_hierarchies) {
             for (const auto& h_param : pyramid_param->hierarchies) {
                 auto graph_param = pyramid_param->graph_param;
@@ -211,7 +203,8 @@ public:
                     new_gp->max_degree_ = h_param.max_degree;
                     graph_param = new_gp;
                 }
-                auto root = make_root(graph_param, h_param.index_min_size, h_param.root_graph_type);
+                auto root =
+                    create_root_node(graph_param, h_param.index_min_size, h_param.root_graph_type);
                 auto h = std::make_unique<Hierarchy>(h_param.name, std::move(root), allocator_);
                 h->no_build_levels.assign(h_param.no_build_levels.begin(),
                                           h_param.no_build_levels.end());
@@ -220,7 +213,7 @@ public:
                 hierarchies_.insert({h_param.name, std::move(h)});
             }
         } else {
-            auto root = make_root(
+            auto root = create_root_node(
                 pyramid_param->graph_param, index_min_size_, pyramid_param->root_graph_type);
             auto h = std::make_unique<Hierarchy>("", std::move(root), allocator_);
             h->no_build_levels.assign(pyramid_param->no_build_levels.begin(),
@@ -418,17 +411,49 @@ private:
         }
     };
 
+    struct AddBatch {
+        explicit AddBatch(Allocator* allocator) : input_indices(allocator) {
+        }
+
+        int64_t first_inner_id{0};
+        Vector<int64_t> input_indices;
+        std::vector<int64_t> failed_ids;
+        bool storage_preallocated{false};
+    };
+
+    AddBatch
+    prepare_add_batch(const DatasetPtr& base);
+
+    void
+    encode_add_batch(const DatasetPtr& base, const AddBatch& batch);
+
+    void
+    insert_add_batch(const DatasetPtr& base, const AddBatch& batch);
+
     /// Pre-create the IndexNode tree structure from the path labels.
     static void
     populate_path_tree(Hierarchy& h, const std::string* paths, int64_t count);
+
+    void
+    populate_hierarchy_trees(const DatasetPtr& base);
+
+    [[nodiscard]] bool
+    can_use_build_cache(const DatasetPtr& base) const;
 
     /// Insert vectors and their path labels into the hierarchy tree.
     void
     add_to_hierarchy(Hierarchy& h,
                      const float* data_vectors,
                      const std::string* paths,
-                     const Vector<int64_t>& data_biases,
-                     int64_t local_cur_element_count);
+                     const Vector<int64_t>& input_indices,
+                     int64_t first_inner_id);
+
+    void
+    add_to_path(Hierarchy& hierarchy,
+                const std::string& path,
+                InnerIdType inner_id,
+                const float* vector,
+                int sampled_root_level);
 
     /// Search a single hierarchy along a path prefix, accumulating candidates.
     void
@@ -448,9 +473,8 @@ private:
     search_impl(const DatasetPtr& query,
                 const SearchFunc& search_func,
                 InnerSearchParam& search_param,
-                int64_t reorder_topk,
                 int64_t final_topk,
-                int64_t reorder_candidate_limit,
+                bool limit_reorder_candidates,
                 QueryContext& ctx,
                 const std::string& hierarchy_name,
                 const DistanceRecordVector* rabitq_lower_bound_candidates = nullptr) const;
@@ -473,8 +497,16 @@ private:
     static GraphInterfaceParamPtr
     make_root_graph_param(const GraphInterfaceParamPtr& child_graph_param);
 
+    std::unique_ptr<IndexNode>
+    create_root_node(const GraphInterfaceParamPtr& child_graph_param,
+                     uint32_t index_min_size,
+                     const std::string& root_graph_type);
+
     int
     sample_route_level(const IndexNode& node);
+
+    int
+    draw_route_level(uint64_t max_degree);
 
     Vector<int>
     sample_route_levels(const IndexNode& node, uint64_t count);
@@ -511,17 +543,36 @@ private:
                      int sampled_level = std::numeric_limits<int>::min());
 
     void
-    build_routed_root(const Hierarchy& hierarchy, const float* data_vectors);
+    add_graph_point(const Hierarchy& hierarchy,
+                    IndexNode& node,
+                    InnerIdType inner_id,
+                    const float* vector,
+                    uint64_t ef_construction,
+                    bool use_self_as_entry,
+                    int sampled_route_level);
+
+    void
+    add_bottom_graph_point(const Hierarchy& hierarchy,
+                           IndexNode& node,
+                           InnerIdType inner_id,
+                           const float* vector,
+                           uint64_t ef_construction,
+                           bool use_self_as_entry);
 
     void
     run_parallel_blocks(uint64_t count,
                         const std::function<void(uint64_t begin, uint64_t end)>& task);
 
+    void
+    run_parallel_insertions(const IndexNode& node,
+                            uint64_t count,
+                            const std::function<void(uint64_t index, int sampled_level)>& task);
+
     /// Resolve the bottom-graph entry for a node. The caller holds node.mutex_.
     InnerIdType
     resolve_entry_point(const IndexNode& node,
                         const VisitedListPtr& vl,
-                        const DatasetPtr& query,
+                        const void* query,
                         const FlattenInterfacePtr& codes,
                         const ComputerInterfacePtr& computer,
                         const InnerSearchParam& search_param,
@@ -550,8 +601,7 @@ private:
                 const FlattenInterfacePtr& codes,
                 QueryContext& ctx,
                 uint64_t subindex_ef_search,
-                DistanceRecordVector* rabitq_lower_bound_candidates = nullptr,
-                const ComputerInterfacePtr& preset_computer = nullptr) const;
+                DistanceRecordVector* rabitq_lower_bound_candidates = nullptr) const;
 
     [[nodiscard]] bool
     has_precise_reorder() const {
@@ -613,7 +663,7 @@ private:
     std::string graph_type_{GRAPH_TYPE_VALUE_NSW};       // graph algorithm type
     bool default_rabitq_one_bit_search_{false};          // default split lower-bound search
 
-    std::mutex entry_point_mutex_;  // guards entry-point selection
+    std::mutex random_generator_mutex_;
     std::default_random_engine level_generator_{
         2021};                              // random number generator for level promotion
     ReorderInterfacePtr reorder_{nullptr};  // reorder helper (if use_reorder_)

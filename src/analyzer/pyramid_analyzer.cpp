@@ -640,23 +640,7 @@ PyramidAnalyzer::collect_searchable_node_ids(const IndexNode* node,
 
     std::shared_lock lock(node->mutex_);
     if (node->status_ != IndexNode::Status::NO_INDEX) {
-        Vector<InnerIdType> node_ids(allocator_);
-        if (node->status_ == IndexNode::Status::FLAT) {
-            node_ids = node->ids_;
-        } else if (node->graph_ != nullptr) {
-            if (node->graph_param_->graph_storage_type_ ==
-                GraphStorageTypes::GRAPH_STORAGE_TYPE_VALUE_FLAT) {
-                const auto total_count = node->graph_->TotalCount();
-                node_ids.reserve(total_count);
-                for (InnerIdType id = 0; id < total_count; ++id) {
-                    if (node->graph_->CheckIdExists(id)) {
-                        node_ids.push_back(id);
-                    }
-                }
-            } else {
-                node_ids = node->graph_->GetIds();
-            }
-        }
+        auto node_ids = node->get_ids_unlocked();
         for (const auto id : node_ids) {
             if (deleted_ids.find(id) == deleted_ids.end() && seen_ids.insert(id).second) {
                 ids.push_back(id);

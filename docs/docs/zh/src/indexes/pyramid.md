@@ -99,7 +99,7 @@ auto result = index->KnnSearch(
 | `base_file_path` / `precise_file_path` | string | — | `buffer_io`、`async_io`、`uring_io`、`mmap_io` 等磁盘存储必须设置 |
 | `store_raw_vector` | bool | `false` | 保留 FP32 原始向量，用于 `GetRawVectorByIds` 和精确的按 ID 距离计算 |
 | `index_min_size` | int | `0` | 子索引的最小规模；小于该值的分区会退化为线性扫描 |
-| `root_graph_type` | string | `"single_layer"` | 根图结构：`single_layer` 保留原有稀疏底图；`multi_layer` 使用预分配的稠密 Flat 底图、类似 HGraph 的稀疏路由层以及联合构图流程。`no_build_levels` 禁用第 0 层时不要指定此选项。 |
+| `root_graph_type` | string | `"single_layer"` | 根图结构：`single_layer` 保留原有稀疏底图；`multi_layer` 使用预分配的稠密 Flat 底图、类似 HGraph 的稀疏路由层以及联合构图流程。`multi_layer` 要求 `graph_type: "nsw"` 且第 0 层参与构建。 |
 | `support_duplicate` | bool | `false` | 是否允许重复 ID |
 | `build_thread_count` | int | `1` | 构建阶段并发线程数 |
 | `hierarchies` | array | `[]` | 命名层级定义。每个元素可以是字符串（继承全部顶层参数）或对象（含 `name` 及可选覆盖参数：`max_degree`、`ef_construction`、`alpha`、`no_build_levels`、`index_min_size`、`root_graph_type`）。设置后激活多层级模式，每个层级维护独立的路径树。 |
@@ -190,10 +190,10 @@ auto result = index->KnnSearch(
 
 `root_graph_type: "multi_layer"` 只改变所选层级的根节点：根节点使用预分配的稠密 Flat
 底图，稀疏路由图先选择更好的入口点，再进入底图检索。批量 Build 与增量 Add 都使用类似
-HGraph 的 route 与 bottom 联合插入流程。即使配置 `graph_type: "odescent"`，根节点也使用这条
-快速路径；`graph_type` 继续控制 Pyramid 非根节点的构图方式。存在独立 precise storage 时，
-底图和路由图的边统一使用 precise codes 构建，否则使用 base codes；查询遍历继续使用 base
-codes，最终精排使用配置的 reorder source。
+HGraph 的 route 与 bottom 联合插入流程。该结构要求 `graph_type: "nsw"`；参数校验会拒绝
+`multi_layer` 与 `odescent` 的组合。存在独立 precise storage 时，底图和路由图的边统一使用
+precise codes 构建，否则使用 base codes；查询遍历继续使用 base codes，最终精排使用配置的
+reorder source。
 
 ```json
 {

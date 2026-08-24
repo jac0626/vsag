@@ -104,7 +104,7 @@ Build-time parameters live under `index_param`.
 | `base_file_path` / `precise_file_path` | string | — | Required for disk-backed storage such as `buffer_io`, `async_io`, `uring_io`, or `mmap_io`. |
 | `store_raw_vector` | bool | `false` | Preserve an FP32 copy for `GetRawVectorByIds` and precise distance-by-id calculations. |
 | `index_min_size` | int | `0` | Minimum sub-index size; smaller groups fall back to scan. |
-| `root_graph_type` | string | `"single_layer"` | Root graph layout: `single_layer` preserves the original sparse bottom graph; `multi_layer` uses a preallocated dense Flat bottom graph with HGraph-style sparse routing layers and joint construction. Do not specify this option when `no_build_levels` disables level 0. |
+| `root_graph_type` | string | `"single_layer"` | Root graph layout: `single_layer` preserves the original sparse bottom graph; `multi_layer` uses a preallocated dense Flat bottom graph with HGraph-style sparse routing layers and joint construction. `multi_layer` requires `graph_type: "nsw"` and a built level 0. |
 | `support_duplicate` | bool | `false` | Allow duplicate ids. |
 | `build_thread_count` | int | `1` | Threads used for parallel build. |
 | `hierarchies` | array | `[]` | Named hierarchy definitions. Each element is either a string (inherits all top-level params) or an object with `name` and optional overrides (`max_degree`, `ef_construction`, `alpha`, `no_build_levels`, `index_min_size`, `root_graph_type`). When present, multi-hierarchy mode is activated and each hierarchy maintains its own independent path tree. |
@@ -200,11 +200,10 @@ Overridable per-hierarchy parameters: `max_degree`, `ef_construction`, `alpha`,
 `root_graph_type: "multi_layer"` changes only the selected hierarchy's root. It uses a preallocated
 dense Flat bottom graph, while sparse routing graphs choose a better entry point before the bottom
 search. Bulk Build and incremental Add jointly construct the route and bottom layers with the same
-HGraph-style insertion protocol. This root fast path is also used when `graph_type: "odescent"`;
-`graph_type` continues to select construction for non-root Pyramid nodes. Bottom and routing edges
-use the precise codes when an independent precise store exists, otherwise they use the base codes.
-Query traversal continues to use the base codes, and final reordering uses the configured reorder
-source.
+HGraph-style insertion protocol. This layout requires `graph_type: "nsw"`; combining `multi_layer`
+with `odescent` is rejected during parameter validation. Bottom and routing edges use the precise
+codes when an independent precise store exists, otherwise they use the base codes. Query traversal
+continues to use the base codes, and final reordering uses the configured reorder source.
 
 ```json
 {

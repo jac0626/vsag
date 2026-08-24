@@ -60,6 +60,15 @@ validate_root_graph_config(const std::string& root_graph_type,
         fmt::format("{} multi-layer root graph requires max_degree greater than 1", context));
 }
 
+void
+validate_root_graph_algorithm(const std::string& root_graph_type,
+                              const std::string& graph_type,
+                              const std::string& context) {
+    CHECK_ARGUMENT(
+        root_graph_type != PYRAMID_ROOT_GRAPH_TYPE_MULTI_LAYER || graph_type != GRAPH_TYPE_ODESCENT,
+        fmt::format("{} multi-layer root graph does not support odescent", context));
+}
+
 PyramidSearchParameters::HierarchyOp
 parse_hierarchy_op(const std::string& op) {
     if (op == "union") {
@@ -83,48 +92,6 @@ append_hierarchy_selector(PyramidSearchParameters& params,
 }
 
 }  // namespace
-
-void
-validate_pyramid_external_root_graph_config(const JsonType& external_param) {
-    std::vector<int32_t> inherited_no_build_levels;
-    if (external_param.Contains(PYRAMID_NO_BUILD_LEVELS) &&
-        external_param[PYRAMID_NO_BUILD_LEVELS].IsArray()) {
-        inherited_no_build_levels = external_param[PYRAMID_NO_BUILD_LEVELS].GetVector();
-    }
-    const auto validate_explicit_root_graph_type =
-        [](const bool is_explicit, const std::vector<int32_t>& levels, const std::string& context) {
-            CHECK_ARGUMENT(
-                not is_explicit || std::find(levels.begin(), levels.end(), 0) == levels.end(),
-                fmt::format("{} root_graph_type cannot be specified when level 0 is not built",
-                            context));
-        };
-    const bool root_graph_type_is_explicit = external_param.Contains(PYRAMID_ROOT_GRAPH_TYPE);
-    validate_explicit_root_graph_type(
-        root_graph_type_is_explicit, inherited_no_build_levels, "Pyramid");
-
-    if (not external_param.Contains(PYRAMID_HIERARCHIES) ||
-        not external_param[PYRAMID_HIERARCHIES].IsArray()) {
-        return;
-    }
-    for (const auto& hierarchy_raw : *external_param[PYRAMID_HIERARCHIES].GetInnerJson()) {
-        JsonType hierarchy;
-        *hierarchy.GetInnerJson() = hierarchy_raw;
-        if (not hierarchy.IsObject()) {
-            continue;
-        }
-        auto no_build_levels = inherited_no_build_levels;
-        if (hierarchy.Contains(PYRAMID_NO_BUILD_LEVELS) &&
-            hierarchy[PYRAMID_NO_BUILD_LEVELS].IsArray()) {
-            no_build_levels = hierarchy[PYRAMID_NO_BUILD_LEVELS].GetVector();
-        }
-        const bool is_explicit =
-            root_graph_type_is_explicit || hierarchy.Contains(PYRAMID_ROOT_GRAPH_TYPE);
-        const auto context = hierarchy.Contains("name") && hierarchy["name"].IsString()
-                                 ? fmt::format("hierarchy {}", hierarchy["name"].GetString())
-                                 : "Pyramid hierarchy";
-        validate_explicit_root_graph_type(is_explicit, no_build_levels, context);
-    }
-}
 
 void
 PyramidHierarchyParameters::FromJson(const JsonType& json) {
@@ -237,8 +204,7 @@ PyramidParameters::FromJson(const JsonType& json) {
     if (this->graph_type == GRAPH_TYPE_ODESCENT) {
         this->odescent_param = std::make_shared<ODescentParameter>();
         this->odescent_param->FromJson(graph_json);
-    }
-    if (json.Contains(EF_CONSTRUCTION_KEY)) {
+    } else if (json.Contains(EF_CONSTRUCTION_KEY)) {
         this->ef_construction = json[EF_CONSTRUCTION_KEY].GetUint64();
         CHECK_ARGUMENT(this->ef_construction > 0, "ef_construction must be positive");
     }
@@ -273,6 +239,7 @@ PyramidParameters::FromJson(const JsonType& json) {
     }
     validate_root_graph_config(
         this->root_graph_type, this->no_build_levels, this->max_degree, "Pyramid");
+    validate_root_graph_algorithm(this->root_graph_type, this->graph_type, "Pyramid");
 
     if (json.Contains(PYRAMID_PERSIST_SOURCE_ID_KEY)) {
         this->persist_source_id = json[PYRAMID_PERSIST_SOURCE_ID_KEY].GetBool();
@@ -304,6 +271,9 @@ PyramidParameters::FromJson(const JsonType& json) {
             hierarchy.index_min_size = this->index_min_size;
             hierarchy.root_graph_type = this->root_graph_type;
             hierarchy.FromJson(hierarchy_json);
+            validate_root_graph_algorithm(hierarchy.root_graph_type,
+                                          this->graph_type,
+                                          fmt::format("hierarchy {}", hierarchy.name));
             CHECK_ARGUMENT(seen_names.insert(hierarchy.name).second,
                            fmt::format("duplicate hierarchy name {}", hierarchy.name));
             this->hierarchies.emplace_back(std::move(hierarchy));
@@ -321,8 +291,9 @@ PyramidParameters::ToJson() const {
     graph_json[GRAPH_TYPE_KEY].SetString(this->graph_type);
     if (this->graph_type == GRAPH_TYPE_ODESCENT) {
         graph_json.UpdateJson(odescent_param->ToJson());
+    } else {
+        json[EF_CONSTRUCTION_KEY].SetUint64(this->ef_construction);
     }
-    json[EF_CONSTRUCTION_KEY].SetUint64(this->ef_construction);
     json[GRAPH_KEY].SetJson(graph_json);
     json[USE_REORDER_KEY].SetBool(this->use_reorder);
     json[INDEX_MIN_SIZE].SetInt(index_min_size);
