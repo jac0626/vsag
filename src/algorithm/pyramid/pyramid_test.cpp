@@ -853,6 +853,7 @@ TEST_CASE("Pyramid multi-layer root builds routes and survives serialization",
                            ->Float32Vectors(added_vectors.data())
                            ->Owner(false);
     REQUIRE(source.index->KnnSearch(added_query, 10, search_params, nullptr)->GetDim() == 10);
+    const auto source_result = source.index->KnnSearch(query, 10, search_params, nullptr);
 
     std::stringstream stream;
     vsag::IOStreamWriter writer(stream);
@@ -870,9 +871,14 @@ TEST_CASE("Pyramid multi-layer root builds routes and survives serialization",
             source_root_stats["route_graph_count"].GetUint64());
     REQUIRE(restored_root_stats["route_node_counts"].GetVector() ==
             source_root_stats["route_node_counts"].GetVector());
-    REQUIRE(restored_result->GetDim() == result->GetDim());
-    REQUIRE(std::equal(
-        result->GetIds(), result->GetIds() + result->GetDim(), restored_result->GetIds()));
+    REQUIRE(restored_result->GetDim() == source_result->GetDim());
+    REQUIRE(std::equal(source_result->GetIds(),
+                       source_result->GetIds() + source_result->GetDim(),
+                       restored_result->GetIds()));
+    for (uint64_t i = 0; i < source_result->GetDim(); ++i) {
+        REQUIRE(std::abs(restored_result->GetDistances()[i] - source_result->GetDistances()[i]) <
+                1e-6F);
+    }
 }
 
 TEST_CASE("Pyramid NSW Build and empty Add share routed construction",
