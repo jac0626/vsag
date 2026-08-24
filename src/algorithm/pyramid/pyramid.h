@@ -41,8 +41,7 @@
 namespace vsag {
 
 class IndexNode;
-using SearchFunc = std::function<DistHeapPtr(
-    const IndexNode* node, const VisitedListPtr& vl, InnerIdType entry_point)>;
+using SearchFunc = std::function<DistHeapPtr(const IndexNode* node, const VisitedListPtr& vl)>;
 
 std::vector<std::string>
 split(const std::string& str, char delimiter);
@@ -452,7 +451,6 @@ private:
                 int64_t reorder_topk,
                 int64_t final_topk,
                 int64_t reorder_candidate_limit,
-                const ComputerInterfacePtr& base_computer,
                 QueryContext& ctx,
                 const std::string& hierarchy_name,
                 const DistanceRecordVector* rabitq_lower_bound_candidates = nullptr) const;
@@ -519,14 +517,15 @@ private:
     run_parallel_blocks(uint64_t count,
                         const std::function<void(uint64_t begin, uint64_t end)>& task);
 
+    /// Resolve the bottom-graph entry for a node. The caller holds node.mutex_.
     InnerIdType
-    search_routes(const IndexNode& node,
-                  const VisitedListPtr& vl,
-                  const DatasetPtr& query,
-                  const FlattenInterfacePtr& codes,
-                  const ComputerInterfacePtr& computer,
-                  const InnerSearchParam& search_param,
-                  QueryContext& ctx) const;
+    resolve_entry_point(const IndexNode& node,
+                        const VisitedListPtr& vl,
+                        const DatasetPtr& query,
+                        const FlattenInterfacePtr& codes,
+                        const ComputerInterfacePtr& computer,
+                        const InnerSearchParam& search_param,
+                        QueryContext& ctx) const;
 
     /// Recursively insert a single vector into the hierarchy tree.
     void
@@ -551,7 +550,6 @@ private:
                 const FlattenInterfacePtr& codes,
                 QueryContext& ctx,
                 uint64_t subindex_ef_search,
-                InnerIdType entry_point,
                 DistanceRecordVector* rabitq_lower_bound_candidates = nullptr,
                 const ComputerInterfacePtr& preset_computer = nullptr) const;
 

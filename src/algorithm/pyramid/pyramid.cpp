@@ -382,15 +382,18 @@ Pyramid::add_routed_point(const Hierarchy& hierarchy,
 }
 
 InnerIdType
-Pyramid::search_routes(const IndexNode& node,
-                       const VisitedListPtr& vl,
-                       const DatasetPtr& query,
-                       const FlattenInterfacePtr& codes,
-                       const ComputerInterfacePtr& computer,
-                       const InnerSearchParam& search_param,
-                       QueryContext& ctx) const {
-    std::shared_lock node_lock(node.mutex_);
+Pyramid::resolve_entry_point(const IndexNode& node,
+                             const VisitedListPtr& vl,
+                             const DatasetPtr& query,
+                             const FlattenInterfacePtr& codes,
+                             const ComputerInterfacePtr& computer,
+                             const InnerSearchParam& search_param,
+                             QueryContext& ctx) const {
     InnerIdType entry_point = node.entry_point_;
+    if (not node.has_routing()) {
+        return entry_point;
+    }
+
     InnerSearchParam route_param = search_param;
     route_param.ef = 1;
     route_param.topk = 1;
@@ -418,6 +421,7 @@ Pyramid::search_routes(const IndexNode& node,
             entry_point = result->Top().second;
         }
     }
+    vl->Reset();
     return entry_point;
 }
 
@@ -642,12 +646,10 @@ IndexNode::Search(const SearchFunc& search_func,
                   const DistHeapPtr& search_result,
                   uint64_t ef_search) const {
     bool has_index = false;
-    InnerIdType entry_point = 0;
     Vector<const IndexNode*> children(allocator_);
     {
         std::shared_lock lock(mutex_);
         has_index = status_ != IndexNode::Status::NO_INDEX;
-        entry_point = entry_point_;
         if (not has_index) {
             children.reserve(children_.size());
             for (const auto& [key, child] : children_) {
@@ -656,7 +658,7 @@ IndexNode::Search(const SearchFunc& search_func,
         }
     }
     if (has_index) {
-        auto self_search_result = search_func(this, vl, entry_point);
+        auto self_search_result = search_func(this, vl);
         search_result->Merge(*self_search_result);
         while (search_result->Size() > ef_search) {
             search_result->Pop();
@@ -926,27 +928,25 @@ Pyramid::KnnSearch(const DatasetPtr& query,
         query_paths == nullptr ? base_codes_->FactoryComputer(query->GetFloat32Vectors()) : nullptr;
     DistanceRecordVector rabitq_lower_bound_candidates(allocator_);
     std::mutex rabitq_lower_bound_mutex;
-    SearchFunc search_func =
-        [&](const IndexNode* node, const VisitedListPtr& vl, InnerIdType entry_point) {
-            DistanceRecordVector local_candidates(allocator_);
-            auto* candidates = collect_rabitq_lower_bounds ? &local_candidates : nullptr;
-            auto result = this->search_node(node,
-                                            vl,
-                                            search_param,
-                                            query,
-                                            base_codes_,
-                                            ctx,
-                                            parsed_param.subindex_ef_search,
-                                            entry_point,
-                                            candidates,
-                                            base_computer);
-            if (candidates != nullptr and not candidates->empty()) {
-                std::lock_guard lock(rabitq_lower_bound_mutex);
-                rabitq_lower_bound_candidates.insert(
-                    rabitq_lower_bound_candidates.end(), candidates->begin(), candidates->end());
-            }
-            return result;
-        };
+    SearchFunc search_func = [&](const IndexNode* node, const VisitedListPtr& vl) {
+        DistanceRecordVector local_candidates(allocator_);
+        auto* candidates = collect_rabitq_lower_bounds ? &local_candidates : nullptr;
+        auto result = this->search_node(node,
+                                        vl,
+                                        search_param,
+                                        query,
+                                        base_codes_,
+                                        ctx,
+                                        parsed_param.subindex_ef_search,
+                                        candidates,
+                                        base_computer);
+        if (candidates != nullptr and not candidates->empty()) {
+            std::lock_guard lock(rabitq_lower_bound_mutex);
+            rabitq_lower_bound_candidates.insert(
+                rabitq_lower_bound_candidates.end(), candidates->begin(), candidates->end());
+        }
+        return result;
+    };
 
     auto result =
         this->search_impl(query,
@@ -955,7 +955,6 @@ Pyramid::KnnSearch(const DatasetPtr& query,
                           use_reorder_ and parsed_param.has_topk_factor ? k : search_param.topk,
                           k,
                           use_reorder_ and parsed_param.has_topk_factor ? search_param.topk : -1,
-                          base_computer,
                           ctx,
                           hierarchy_name,
                           collect_rabitq_lower_bounds ? &rabitq_lower_bound_candidates : nullptr);
@@ -1011,27 +1010,25 @@ Pyramid::RangeSearch(const DatasetPtr& query,
         query_paths == nullptr ? base_codes_->FactoryComputer(query->GetFloat32Vectors()) : nullptr;
     DistanceRecordVector rabitq_lower_bound_candidates(allocator_);
     std::mutex rabitq_lower_bound_mutex;
-    SearchFunc search_func =
-        [&](const IndexNode* node, const VisitedListPtr& vl, InnerIdType entry_point) {
-            DistanceRecordVector local_candidates(allocator_);
-            auto* candidates = collect_rabitq_lower_bounds ? &local_candidates : nullptr;
-            auto result = this->search_node(node,
-                                            vl,
-                                            search_param,
-                                            query,
-                                            base_codes_,
-                                            ctx,
-                                            parsed_param.subindex_ef_search,
-                                            entry_point,
-                                            candidates,
-                                            base_computer);
-            if (candidates != nullptr and not candidates->empty()) {
-                std::lock_guard lock(rabitq_lower_bound_mutex);
-                rabitq_lower_bound_candidates.insert(
-                    rabitq_lower_bound_candidates.end(), candidates->begin(), candidates->end());
-            }
-            return result;
-        };
+    SearchFunc search_func = [&](const IndexNode* node, const VisitedListPtr& vl) {
+        DistanceRecordVector local_candidates(allocator_);
+        auto* candidates = collect_rabitq_lower_bounds ? &local_candidates : nullptr;
+        auto result = this->search_node(node,
+                                        vl,
+                                        search_param,
+                                        query,
+                                        base_codes_,
+                                        ctx,
+                                        parsed_param.subindex_ef_search,
+                                        candidates,
+                                        base_computer);
+        if (candidates != nullptr and not candidates->empty()) {
+            std::lock_guard lock(rabitq_lower_bound_mutex);
+            rabitq_lower_bound_candidates.insert(
+                rabitq_lower_bound_candidates.end(), candidates->begin(), candidates->end());
+        }
+        return result;
+    };
 
     auto result =
         this->search_impl(query,
@@ -1040,7 +1037,6 @@ Pyramid::RangeSearch(const DatasetPtr& query,
                           search_param.topk,
                           search_param.topk,
                           -1,
-                          base_computer,
                           ctx,
                           hierarchy_name,
                           collect_rabitq_lower_bounds ? &rabitq_lower_bound_candidates : nullptr);
@@ -1055,7 +1051,6 @@ Pyramid::search_impl(const DatasetPtr& query,
                      int64_t reorder_topk,
                      int64_t final_topk,
                      int64_t reorder_candidate_limit,
-                     const ComputerInterfacePtr& base_computer,
                      QueryContext& ctx,
                      const std::string& hierarchy_name,
                      const DistanceRecordVector* rabitq_lower_bound_candidates) const {
@@ -1078,20 +1073,11 @@ Pyramid::search_impl(const DatasetPtr& query,
     std::shared_lock<std::shared_mutex> lock(resize_mutex_);
     VisitedListGuard vl_guard(pool_.get());
     const VisitedListPtr& vl = vl_guard.get();
-    SearchFunc routed_search_func =
-        [&](const IndexNode* node, const VisitedListPtr& search_vl, InnerIdType entry_point) {
-            if (node->has_routing()) {
-                entry_point = search_routes(
-                    *node, search_vl, query, base_codes_, base_computer, search_param, ctx);
-                search_vl->Reset();
-            }
-            return search_func(node, search_vl, entry_point);
-        };
     if (query_path != nullptr) {
         const std::string& current_path = query_path[0];
-        search_hierarchy(h, routed_search_func, vl, search_result, current_path, search_param);
+        search_hierarchy(h, search_func, vl, search_result, current_path, search_param);
     } else {
-        h.root->Search(routed_search_func, vl, search_result, search_param.ef);
+        h.root->Search(search_func, vl, search_result, search_param.ef);
     }
 
     if (use_reorder_) {
@@ -2317,7 +2303,6 @@ Pyramid::search_node(const IndexNode* node,
                      const FlattenInterfacePtr& codes,
                      QueryContext& ctx,
                      uint64_t subindex_ef_search,
-                     InnerIdType entry_point,
                      DistanceRecordVector* rabitq_lower_bound_candidates,
                      const ComputerInterfacePtr& preset_computer) const {
     std::shared_lock lock(node->mutex_);
@@ -2366,7 +2351,8 @@ Pyramid::search_node(const IndexNode* node,
         }
     } else if (node->status_ == IndexNode::Status::GRAPH) {
         InnerSearchParam modified_param = search_param;
-        modified_param.ep = entry_point;
+        modified_param.ep =
+            resolve_entry_point(*node, vl, query, codes, preset_computer, search_param, ctx);
         if (node->level_ != 0) {
             if (search_param.search_mode == KNN_SEARCH) {
                 modified_param.ef = std::min(
