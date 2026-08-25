@@ -437,9 +437,6 @@ private:
     void
     populate_hierarchy_trees(const DatasetPtr& base);
 
-    [[nodiscard]] bool
-    can_use_build_cache(const DatasetPtr& base) const;
-
     /// Insert vectors and their path labels into the hierarchy tree.
     void
     add_to_hierarchy(Hierarchy& h,
@@ -526,12 +523,11 @@ private:
                          const float* vector,
                          InnerSearchParam& search_param);
 
-    void
-    connect_cached_graph_point(InnerIdType inner_id,
-                               const DistHeapPtr& candidates,
-                               const GraphInterfacePtr& graph,
-                               const FlattenInterfacePtr& codes,
-                               float alpha);
+    DistHeapPtr
+    merge_cached_graph_candidates(InnerIdType inner_id,
+                                  const DistHeapPtr& candidates,
+                                  const GraphInterfacePtr& graph,
+                                  const FlattenInterfacePtr& codes);
 
     void
     add_routed_point(const Hierarchy& hierarchy,
@@ -558,10 +554,6 @@ private:
                            const float* vector,
                            uint64_t ef_construction,
                            bool use_self_as_entry);
-
-    void
-    run_parallel_blocks(uint64_t count,
-                        const std::function<void(uint64_t begin, uint64_t end)>& task);
 
     void
     run_parallel_insertions(const IndexNode& node,
