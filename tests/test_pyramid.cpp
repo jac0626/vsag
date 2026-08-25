@@ -289,6 +289,39 @@ TEST_CASE_PERSISTENT_FIXTURE(fixtures::PyramidTestIndex, "Pyramid Clone", "[ft][
 }
 
 TEST_CASE_PERSISTENT_FIXTURE(fixtures::PyramidTestIndex,
+                             "Pyramid Export Model",
+                             "[ft][pyramid][export_model]") {
+    const auto graph_type = GENERATE(std::string("nsw"), std::string("odescent"));
+    const auto use_reorder = GENERATE(false, true);
+    PyramidParam pyramid_param;
+    pyramid_param.graph_type = graph_type;
+    pyramid_param.no_build_levels = {0, 1, 2};
+    pyramid_param.base_quantization_type = "sq8";
+    pyramid_param.precise_quantization_type = "sq8";
+    pyramid_param.use_reorder = use_reorder;
+
+    const auto search_param = GeneratePyramidSearchParametersString(100);
+    for (const auto dim : dims) {
+        CAPTURE(graph_type, use_reorder, dim);
+        const auto param = GeneratePyramidBuildParametersString("l2", dim, pyramid_param);
+        auto index = TestFactory("pyramid", param, true);
+        auto restored_model = TestFactory("pyramid", param, true);
+        auto dataset = pool.GetDatasetAndCreate(dim, base_count, "l2", /*with_path=*/true);
+
+        REQUIRE(index->CheckFeature(vsag::IndexFeature::SUPPORT_EXPORT_MODEL));
+        TestBuildIndex(index, dataset, true);
+
+        auto exported_model = index->ExportModel();
+        REQUIRE(exported_model.has_value());
+        REQUIRE(exported_model.value()->GetNumElements() == 0);
+        REQUIRE(exported_model.value()->GetMemoryUsage() > 0);
+        REQUIRE(exported_model.value()->CheckFeature(vsag::IndexFeature::SUPPORT_EXPORT_MODEL));
+
+        TestExportModel(index, restored_model, dataset, search_param);
+    }
+}
+
+TEST_CASE_PERSISTENT_FIXTURE(fixtures::PyramidTestIndex,
                              "Pyramid Build Test With Random Allocator",
                              "[ft][pyramid]") {
     auto allocator = std::make_shared<fixtures::RandomAllocator>();

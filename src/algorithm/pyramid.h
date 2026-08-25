@@ -140,6 +140,9 @@ public:
     Deserialize(StreamReader& reader) override;
 
     [[nodiscard]] InnerIndexPtr
+    ExportModel(const IndexCommonParam& param) const override;
+
+    [[nodiscard]] InnerIndexPtr
     Fork(const IndexCommonParam& param) override {
         return std::make_shared<Pyramid>(this->create_param_ptr_, param);
     }
