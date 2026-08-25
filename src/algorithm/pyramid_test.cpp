@@ -17,6 +17,9 @@
 
 #include <catch2/catch_test_macros.hpp>
 
+#include "impl/allocator/safe_allocator.h"
+#include "vsag_exception.h"
+
 TEST_CASE("Split function tests", "[ut][pyramid]") {
     SECTION("Empty input string") {
         auto result = vsag::split("", ',');
@@ -56,5 +59,29 @@ TEST_CASE("Split function tests", "[ut][pyramid]") {
     SECTION("Mixed delimiters and spaces") {
         auto result = vsag::split("  , hello,  world  ", ',');
         REQUIRE(result == std::vector<std::string>{"  ", " hello", "  world  "});
+    }
+}
+
+TEST_CASE("Pyramid ExportModel rejects inconsistent reorder configuration",
+          "[ut][Pyramid][ExportModel]") {
+    vsag::IndexCommonParam common_param;
+    common_param.dim_ = 4;
+    common_param.metric_ = vsag::MetricType::METRIC_TYPE_L2SQR;
+    common_param.data_type_ = vsag::DataTypes::DATA_TYPE_FLOAT;
+    common_param.allocator_ = vsag::SafeAllocator::FactoryDefaultAllocator();
+
+    auto external_param = vsag::JsonType::Parse(R"({"use_reorder": false})");
+    auto index_param = vsag::Pyramid::CheckAndMappingExternalParam(external_param, common_param);
+    auto index = std::make_shared<vsag::Pyramid>(index_param, common_param);
+    REQUIRE_FALSE(index->use_reorder_);
+
+    index->use_reorder_ = true;
+    try {
+        index->ExportModel(common_param);
+        FAIL("ExportModel should reject a mismatched reorder configuration");
+    } catch (const vsag::VsagException& exception) {
+        REQUIRE(exception.error_.type == vsag::ErrorType::INTERNAL_ERROR);
+        REQUIRE(std::string(exception.what()) ==
+                "Export model's pyramid reorder config mismatched");
     }
 }
