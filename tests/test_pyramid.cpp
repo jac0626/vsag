@@ -38,6 +38,7 @@ struct PyramidParam {
     std::string graph_type = "nsw";
     bool use_reorder = false;
     bool support_duplicate = false;
+    bool store_raw_vector = false;
 };
 
 namespace fixtures {
@@ -93,7 +94,8 @@ PyramidTestIndex::GeneratePyramidBuildParametersString(const std::string& metric
             "precise_quantization_type": "{}",
             "use_reorder": {},
             "index_min_size": 28,
-            "support_duplicate": {}
+            "support_duplicate": {},
+            "store_raw_vector": {}
         }}
     }}
     )";
@@ -105,7 +107,8 @@ PyramidTestIndex::GeneratePyramidBuildParametersString(const std::string& metric
                                             param.base_quantization_type,
                                             param.precise_quantization_type,
                                             param.use_reorder,
-                                            param.support_duplicate);
+                                            param.support_duplicate,
+                                            param.store_raw_vector);
     return build_parameters_str;
 }
 
@@ -238,6 +241,55 @@ TEST_CASE_PERSISTENT_FIXTURE(fixtures::PyramidTestIndex,
         TestRangeSearch(index, dataset, search_param, 0.94, 10, true);
         TestRangeSearch(index, dataset, search_param, 0.49, 5, true);
     }
+}
+
+TEST_CASE_PERSISTENT_FIXTURE(fixtures::PyramidTestIndex,
+                             "Pyramid Raw Vector Retrieval",
+                             "[ft][pyramid][raw_vector]") {
+    const auto graph_type = GENERATE(std::string("nsw"), std::string("odescent"));
+    const auto use_reorder = GENERATE(false, true);
+    const auto metric_type = GENERATE(std::string("l2"), std::string("cosine"));
+    PyramidParam pyramid_param;
+    pyramid_param.graph_type = graph_type;
+    pyramid_param.use_reorder = use_reorder;
+    pyramid_param.store_raw_vector = true;
+    pyramid_param.base_quantization_type = "sq8";
+    if (use_reorder) {
+        pyramid_param.base_quantization_type = "rabitq";
+        pyramid_param.precise_quantization_type = "fp32";
+    }
+
+    const auto dim = dims.front();
+    const auto param = GeneratePyramidBuildParametersString(metric_type, dim, pyramid_param);
+    auto index = TestFactory("pyramid", param, true);
+    auto restored = TestFactory("pyramid", param, true);
+    auto dataset = pool.GetDatasetAndCreate(dim, base_count, metric_type, /*with_path=*/true);
+
+    TestBuildIndex(index, dataset, true);
+    TestGetRawVectorByIds(index, dataset, true);
+    TestSerializeFile(index, restored, dataset, GeneratePyramidSearchParametersString(100), true);
+    TestGetRawVectorByIds(restored, dataset, true);
+
+    std::stringstream stream;
+    REQUIRE(index->SerializeStreaming(stream).has_value());
+    const auto bytes = stream.str();
+
+    std::stringstream load_stream(bytes);
+    auto loaded = vsag::Index::Load(load_stream, "{}");
+    REQUIRE(loaded.has_value());
+    TestGetRawVectorByIds(loaded.value(), dataset, true);
+
+    std::array<int64_t, 2> requested_ids = {dataset->base_->GetIds()[base_count - 1],
+                                            dataset->base_->GetIds()[0]};
+    auto data_result = index->GetDataByIds(requested_ids.data(), requested_ids.size());
+    REQUIRE(data_result.has_value());
+    REQUIRE(data_result.value()->GetFloat32Vectors() != nullptr);
+    REQUIRE(std::equal(data_result.value()->GetFloat32Vectors(),
+                       data_result.value()->GetFloat32Vectors() + dim,
+                       dataset->base_->GetFloat32Vectors() + (base_count - 1) * dim));
+    REQUIRE(std::equal(data_result.value()->GetFloat32Vectors() + dim,
+                       data_result.value()->GetFloat32Vectors() + 2 * dim,
+                       dataset->base_->GetFloat32Vectors()));
 }
 
 TEST_CASE_PERSISTENT_FIXTURE(fixtures::PyramidTestIndex,

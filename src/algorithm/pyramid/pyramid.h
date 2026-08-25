@@ -167,6 +167,7 @@ public:
                 FlattenInterface::MakeInstance(pyramid_param->precise_codes_param, common_param);
             reorder_ = std::make_shared<FlattenReorder>(precise_codes_, allocator_);
         }
+        check_and_init_raw_vector(pyramid_param->raw_vector_param, common_param);
     }
 
     explicit Pyramid(const ParamPtr& param, const IndexCommonParam& common_param)
@@ -255,6 +256,10 @@ public:
     friend class PyramidAnalyzer;
 
 private:
+    void
+    check_and_init_raw_vector(const FlattenInterfaceParamPtr& raw_vector_param,
+                              const IndexCommonParam& common_param);
+
     MetadataPtr
     collect_streaming_header() const override;
 
@@ -358,6 +363,8 @@ private:
     UnorderedMap<std::string, std::unique_ptr<Hierarchy>> hierarchies_;  // named hierarchies
     FlattenInterfacePtr base_codes_{nullptr};          // coarse codes for graph build/search
     FlattenInterfacePtr precise_codes_{nullptr};       // precise codes for reorder (if enabled)
+    FlattenInterfacePtr raw_vector_{nullptr};          // exact vectors when explicitly stored
+    bool create_new_raw_vector_{false};                // owns separate raw-vector storage
     std::unique_ptr<VisitedListPool> pool_ = nullptr;  // pool of visited-lists for search
 
     MutexArrayPtr points_mutex_{nullptr};                // per-point locks for concurrent access

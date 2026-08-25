@@ -41,6 +41,8 @@ struct PyramidDefaultParam {
     std::string base_file_path = "base_path";
     std::string precise_io_type = "block_memory_io";
     std::string precise_file_path = "precise_path";
+    bool store_raw_vector = false;
+    std::string raw_quantization_type = "fp32";
     uint32_t index_min_size = 1000;
     bool support_duplicate = false;
 };
@@ -100,6 +102,16 @@ generate_pyramid(const PyramidDefaultParam& param) {
                     "type": "{}"
                 }}
             }},
+            "raw_vector": {{
+                "codes_type": "flatten",
+                "io_params": {{
+                    "type": "block_memory_io"
+                }},
+                "quantization_params": {{
+                    "type": "{}"
+                }}
+            }},
+            "store_raw_vector": {},
             "type": "pyramid",
             "use_reorder": {},
             "index_min_size": {},
@@ -121,6 +133,8 @@ generate_pyramid(const PyramidDefaultParam& param) {
                        param.precise_file_path,
                        param.precise_io_type,
                        param.precise_quantization_type,
+                       param.raw_quantization_type,
+                       param.store_raw_vector,
                        param.use_reorder,
                        param.index_min_size,
                        param.support_duplicate);
@@ -281,6 +295,21 @@ TEST_CASE("Pyramid Parameters CheckCompatibility", "[ut][PyramidParameter][Check
         "different precise quantization type", precise_quantization_type, "fp32", "fp16", false);
     TEST_COMPATIBILITY_CASE("different index min size", index_min_size, 500, 1500, false);
     TEST_COMPATIBILITY_CASE("different support duplicate", support_duplicate, false, true, false);
+    TEST_COMPATIBILITY_CASE("different store raw vector", store_raw_vector, false, true, false);
+
+    SECTION("different raw vector parameters") {
+        PyramidDefaultParam param1;
+        PyramidDefaultParam param2;
+        param1.store_raw_vector = true;
+        param2.store_raw_vector = true;
+        param2.raw_quantization_type = "fp16";
+        auto pyramid_param1 = std::make_shared<vsag::PyramidParameters>();
+        auto pyramid_param2 = std::make_shared<vsag::PyramidParameters>();
+        pyramid_param1->FromString(generate_pyramid(param1));
+        pyramid_param2->FromString(generate_pyramid(param2));
+
+        REQUIRE_FALSE(pyramid_param1->CheckCompatibility(pyramid_param2));
+    }
 
     SECTION("same hierarchies in different order") {
         auto param1 = ParsePyramidWithHierarchies(
