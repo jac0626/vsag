@@ -29,6 +29,9 @@
 namespace vsag {
 
 const static float RADIUS_EPSILON = 1.1F;
+static constexpr uint64_t PYRAMID_PATHS_MAGIC = 0x5059525041544853ULL;  // PYRPATHS
+static constexpr int64_t PYRAMID_PATHS_FORMAT_VERSION = 1;
+static constexpr const char* PYRAMID_PATHS_FORMAT_VERSION_KEY = "pyramid_paths_format_version";
 
 std::vector<std::string>
 split(const std::string& str, char delimiter) {
@@ -224,6 +227,13 @@ Pyramid::build_by_odescent(const DatasetPtr& base) {
     }
     if (create_new_raw_vector_) {
         raw_vector_->BatchInsertVector(data_vectors, data_num);
+    }
+    if (store_paths_) {
+        label_table_->ResetRemap(static_cast<uint64_t>(data_num));
+        for (uint64_t inner_id = 0; inner_id < static_cast<uint64_t>(data_num); ++inner_id) {
+            label_table_->InsertRemap(data_ids[inner_id], static_cast<InnerIdType>(inner_id));
+        }
+        path_store_->Record(path, static_cast<uint64_t>(data_num));
     }
     auto codes = use_reorder_ ? precise_codes_ : base_codes_;
 
@@ -433,9 +443,17 @@ Pyramid::Serialize(StreamWriter& writer) const {
     }
     root_->Serialize(writer);
 
-    // serialize footer (introduced since v0.15)
+    if (store_paths_) {
+        StreamWriter::WriteObj(writer, PYRAMID_PATHS_MAGIC);
+        serialize_paths(writer);
+    }
+
+    // The current Pyramid format always ends with a footer.
     JsonType basic_info;
     basic_info["max_capacity"].SetInt(max_capacity_);
+    if (store_paths_) {
+        basic_info[PYRAMID_PATHS_FORMAT_VERSION_KEY].SetInt(PYRAMID_PATHS_FORMAT_VERSION);
+    }
     auto metadata = std::make_shared<Metadata>();
     metadata->Set(BASIC_INFO, basic_info);
     auto footer = std::make_shared<Footer>(metadata);
@@ -444,14 +462,19 @@ Pyramid::Serialize(StreamWriter& writer) const {
 
 void
 Pyramid::Deserialize(StreamReader& reader) {
-    // try to deserialize footer (only in new version)
+    // The current Pyramid format requires a footer.
     auto footer = Footer::Parse(reader);
+    if (footer == nullptr) {
+        throw VsagException(ErrorType::READ_ERROR, "failed to read Pyramid index footer");
+    }
     auto metadata = footer->GetMetadata();
     auto basic_info = metadata->Get(BASIC_INFO);
     auto max_capacity = basic_info["max_capacity"].GetInt();
 
+    const auto body_length = reader.Length() - footer->Length();
+    auto body_reader = reader.Slice(0, body_length);
     BufferStreamReader buffer_reader(
-        &reader, std::numeric_limits<uint64_t>::max(), this->allocator_);
+        &body_reader, std::numeric_limits<uint64_t>::max(), this->allocator_);
 
     label_table_->Deserialize(buffer_reader);
     base_codes_->Deserialize(buffer_reader);
@@ -463,6 +486,26 @@ Pyramid::Deserialize(StreamReader& reader) {
     }
     cur_element_count_ = base_codes_->TotalCount();
     root_->Deserialize(buffer_reader);
+
+    const bool has_paths = basic_info.Contains(PYRAMID_PATHS_FORMAT_VERSION_KEY);
+    if (has_paths != store_paths_) {
+        throw VsagException(ErrorType::READ_ERROR,
+                            "serialized Pyramid paths metadata does not match config");
+    }
+    if (has_paths) {
+        const auto format_version = basic_info[PYRAMID_PATHS_FORMAT_VERSION_KEY].GetInt();
+        if (format_version != PYRAMID_PATHS_FORMAT_VERSION) {
+            throw VsagException(ErrorType::UNSUPPORTED_INDEX_OPERATION,
+                                "unsupported Pyramid paths format version");
+        }
+        uint64_t magic = 0;
+        StreamReader::ReadObj(buffer_reader, magic);
+        if (magic != PYRAMID_PATHS_MAGIC) {
+            throw VsagException(ErrorType::READ_ERROR, "missing Pyramid paths marker");
+        }
+        deserialize_paths(buffer_reader, static_cast<uint64_t>(cur_element_count_));
+        validate_paths(static_cast<uint64_t>(cur_element_count_));
+    }
     resize(max_capacity);
     this->current_memory_usage_ = static_cast<int64_t>(this->CalSerializeSize());
 }
@@ -570,6 +613,9 @@ Pyramid::Add(const DatasetPtr& base) {
             future.get();
         }
     }
+    if (store_paths_) {
+        path_store_->Record(path, data_biases, local_cur_element_count);
+    }
     return failed_ids;
 }
 
@@ -642,6 +688,9 @@ Pyramid::InitFeatures() {
     if (can_decode_exact_vector || raw_vector_ != nullptr) {
         this->index_feature_list_->SetFeature(IndexFeature::SUPPORT_GET_RAW_VECTOR_BY_IDS);
     }
+    if (store_paths_) {
+        this->index_feature_list_->SetFeature(IndexFeature::SUPPORT_GET_DATA_BY_IDS);
+    }
 }
 
 static const std::string HGRAPH_PARAMS_TEMPLATE =
@@ -713,7 +762,8 @@ static const std::string HGRAPH_PARAMS_TEMPLATE =
         "{EF_CONSTRUCTION_KEY}": 400,
         "{NO_BUILD_LEVELS}":[],
         "{INDEX_MIN_SIZE}": 0,
-        "{SUPPORT_DUPLICATE}": false
+        "{SUPPORT_DUPLICATE}": false,
+        "{PYRAMID_STORE_PATHS_KEY}": false
     })";
 
 ParamPtr
@@ -751,7 +801,8 @@ Pyramid::CheckAndMappingExternalParam(const JsonType& external_param,
         {ODESCENT_PARAMETER_NEIGHBOR_SAMPLE_RATE,
          {GRAPH_KEY, ODESCENT_PARAMETER_NEIGHBOR_SAMPLE_RATE}},
         {PYRAMID_INDEX_MIN_SIZE, {INDEX_MIN_SIZE}},
-        {PYRAMID_SUPPORT_DUPLICATE, {SUPPORT_DUPLICATE}}};
+        {PYRAMID_SUPPORT_DUPLICATE, {SUPPORT_DUPLICATE}},
+        {PYRAMID_STORE_PATHS, {PYRAMID_STORE_PATHS_KEY}}};
 
     std::string str = format_map(HGRAPH_PARAMS_TEMPLATE, DEFAULT_MAP);
     auto inner_json = JsonType::Parse(str);
