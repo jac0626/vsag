@@ -117,6 +117,7 @@ public:
                 FlattenInterface::MakeInstance(pyramid_param->precise_codes_param, common_param);
             reorder_ = std::make_shared<FlattenReorder>(precise_codes_, allocator_);
         }
+        check_and_init_raw_vector(pyramid_param->raw_vector_param, common_param);
     }
 
     explicit Pyramid(const ParamPtr& param, const IndexCommonParam& common_param)
@@ -185,7 +186,14 @@ public:
     void
     Train(const vsag::DatasetPtr& base) override;
 
+    void
+    GetVectorByInnerId(InnerIdType inner_id, float* data) const override;
+
 private:
+    void
+    check_and_init_raw_vector(const FlattenInterfaceParamPtr& raw_vector_param,
+                              const IndexCommonParam& common_param);
+
     void
     resize(int64_t new_max_capacity);
 
@@ -229,6 +237,8 @@ private:
     std::shared_ptr<IndexNode> root_{nullptr};
     FlattenInterfacePtr base_codes_{nullptr};
     FlattenInterfacePtr precise_codes_{nullptr};
+    FlattenInterfacePtr raw_vector_{nullptr};
+    bool create_new_raw_vector_{false};
     std::unique_ptr<VisitedListPool> pool_ = nullptr;
 
     MutexArrayPtr points_mutex_{nullptr};
