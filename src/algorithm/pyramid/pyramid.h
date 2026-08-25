@@ -17,10 +17,12 @@
 
 #include <memory>
 #include <optional>
+#include <shared_mutex>
 #include <utility>
 
 #include "algorithm/inner_index_interface.h"
 #include "algorithm/pyramid/pyramid_build_cache.h"
+#include "algorithm/pyramid/pyramid_path_store.h"
 #include "datacell/graph_interface.h"
 #include "datacell/sparse_graph_datacell_parameter.h"
 #include "impl/allocator/safe_allocator.h"
@@ -67,6 +69,7 @@ public:
                                              RABITQ_SPLIT_DATA_CELL),
           support_duplicate_(pyramid_param->support_duplicate),
           persist_source_id_(pyramid_param->persist_source_id),
+          store_paths_(pyramid_param->store_paths),
           cache_(std::make_unique<PyramidBuildCache>(common_param.allocator_.get())) {
         base_codes_ = FlattenInterface::MakeInstance(pyramid_param->base_codes_param, common_param);
         if (pyramid_param->has_hierarchies) {
@@ -85,6 +88,9 @@ public:
                                           h_param.no_build_levels.end());
                 h->ef_construction = h_param.ef_construction;
                 h->alpha = h_param.alpha;
+                if (store_paths_) {
+                    h->path_store = std::make_unique<PyramidPathStore>(allocator_);
+                }
                 hierarchies_.insert({h_param.name, std::move(h)});
             }
         } else {
@@ -95,6 +101,9 @@ public:
                                       pyramid_param->no_build_levels.end());
             h->ef_construction = pyramid_param->ef_construction;
             h->alpha = pyramid_param->alpha;
+            if (store_paths_) {
+                h->path_store = std::make_unique<PyramidPathStore>(allocator_);
+            }
             hierarchies_.insert({"", std::move(h)});
         }
         points_mutex_ = std::make_shared<PointsMutex>(max_capacity_, allocator_);
@@ -141,6 +150,9 @@ public:
                     int64_t count,
                     bool calculate_precise_distance = true,
                     int64_t topk = -1) const override;
+
+    DatasetPtr
+    GetDataByIds(const int64_t* ids, int64_t count) const override;
 
     void
     Deserialize(StreamReader& reader) override;
@@ -241,6 +253,12 @@ private:
     void
     deserialize_hierarchies(StreamReader& reader, const JsonType& basic_info);
 
+    void
+    serialize_paths(StreamWriter& writer) const;
+
+    void
+    deserialize_paths(StreamReader& reader, uint64_t max_count);
+
     // RAII guard that returns the VisitedList to the pool on scope exit,
     // ensuring no leak if the search throws.
     class VisitedListGuard {
@@ -277,6 +295,7 @@ private:
         Vector<int32_t> no_build_levels;           // depths where graph build is skipped
         uint64_t ef_construction{400};             // expansion factor during graph build
         float alpha{1.2F};  // Relative Neighborhood Graph pruning coefficient
+        std::unique_ptr<PyramidPathStore> path_store{nullptr};
 
         Hierarchy(const std::string& n, std::unique_ptr<IndexNode> r, Allocator* alloc)
             : name(n), root(std::move(r)), no_build_levels(alloc) {
@@ -423,6 +442,7 @@ private:
     uint32_t index_min_size_{0};  // min node size before graph is built
 
     bool persist_source_id_{false};  // whether to persist source_id in serialization
+    bool store_paths_{false};        // whether to retain paths for GetDataByIds
 
     std::unique_ptr<PyramidBuildCache> cache_{nullptr};  // per-graph caches for warm-start build
 

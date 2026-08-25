@@ -82,6 +82,7 @@ public:
     bool support_duplicate{false};
     bool has_hierarchies{false};
     bool persist_source_id{false};
+    bool store_paths{false};
 };
 
 class PyramidSearchParameters : public IndexSearchParameter {

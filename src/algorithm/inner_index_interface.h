@@ -552,6 +552,15 @@ public:
     }
 
 protected:
+    DatasetPtr
+    get_data_by_ids(const int64_t* ids, int64_t count, Vector<InnerIdType>& inner_ids) const;
+
+    DatasetPtr
+    get_data_by_ids_with_flag(const int64_t* ids,
+                              int64_t count,
+                              uint64_t selected_data_flag,
+                              Vector<InnerIdType>& inner_ids) const;
+
     virtual MetadataPtr
     collect_streaming_header() const;
 

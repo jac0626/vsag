@@ -138,10 +138,15 @@ Pyramid 构建参数同样放在 `index_param` 下：
     "index_param": {
         "base_quantization_type": "sq8",
         "max_degree": 24,
-        "ef_construction": 300
+        "ef_construction": 300,
+        "store_paths": true
     }
 }
 ```
+
+`store_paths` 是 Pyramid 顶层构建参数，默认值为 `false`。需要通过 `GetDataByIds`
+返回默认或命名 hierarchy 的原始路径时应启用它；路径完整性与持久化语义见
+[Pyramid 参数表](../indexes/pyramid.md#构建参数)。
 
 MRLE 与 split RaBitQ 组合使用 `base_quantization_type: "tq"`、
 `tq_chain: "mrle, rabitq"`、`mrle_dim`，以及

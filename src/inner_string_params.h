@@ -60,6 +60,7 @@ const char* const HGRAPH_MCI_INCREMENTAL_JOIN_RATIO_THRESHOLD_KEY =
 const char* const HGRAPH_MCI_INCREMENTAL_ADDED_MCT_KEY = "mci_incremental_added_mct";
 const char* const HGRAPH_MCI_INCREMENTAL_CLIQUE_MAX_KEY = "mci_incremental_clique_max";
 const char* const PYRAMID_PERSIST_SOURCE_ID_KEY = "persist_source_id";
+const char* const PYRAMID_STORE_PATHS_KEY = "store_paths";
 const char* const LABEL_REMAP_TYPE_VALUE_ROBIN = "robin";
 const char* const LABEL_REMAP_TYPE_VALUE_PG = "pg";
 const char* const GRAPH_KEY = "graph";
@@ -310,6 +311,7 @@ const std::unordered_map<std::string, std::string> DEFAULT_MAP = {
     {"HOLD_MOLDS", HOLD_MOLDS},
     {"HGRAPH_PERSIST_SOURCE_ID_KEY", HGRAPH_PERSIST_SOURCE_ID_KEY},
     {"PYRAMID_PERSIST_SOURCE_ID_KEY", PYRAMID_PERSIST_SOURCE_ID_KEY},
+    {"PYRAMID_STORE_PATHS_KEY", PYRAMID_STORE_PATHS_KEY},
     {"IVF_PARTITION_STRATEGY_TYPE_GNO_IMI", IVF_PARTITION_STRATEGY_TYPE_GNO_IMI},
     {"STORE_RAW_VECTOR_KEY", STORE_RAW_VECTOR_KEY},
     {"RAW_VECTOR_KEY", RAW_VECTOR_KEY},

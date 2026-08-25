@@ -2098,7 +2098,8 @@ TEST_CASE("Pyramid ExportCache + ImportCache + Build acceleration smoke test",
             "ef_construction": 16,
             "no_build_levels": [0, 1, 2],
             "index_min_size": 28,
-            "persist_source_id": true
+            "persist_source_id": true,
+            "store_paths": true
         }
     }
     )";
@@ -2152,6 +2153,10 @@ TEST_CASE("Pyramid ExportCache + ImportCache + Build acceleration smoke test",
     auto warmed_build = warmed->Build(make_dataset());
     REQUIRE(warmed_build.has_value());
     REQUIRE(warmed->GetNumElements() == TEST_COUNT);
+    auto restored_data = warmed->GetDataByIds(ids.data(), 1);
+    REQUIRE(restored_data.has_value());
+    REQUIRE(restored_data.value()->GetPaths() != nullptr);
+    REQUIRE(restored_data.value()->GetPaths()[0] == "a/b/c");
     auto warm_stats = vsag::JsonType::Parse(warmed->GetStats());
     REQUIRE(warm_stats["build_cache_hit_nodes"].GetInt() > 0);
     std::vector<float> query_vec(TEST_DIM);

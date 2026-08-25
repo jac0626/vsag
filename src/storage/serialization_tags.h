@@ -42,6 +42,7 @@ enum class StreamSerializationTag : uint32_t {
     IVF_BUCKET_GRAPH = 16,
     IVF_PRECISE_BUCKET = 17,
     CONJUGATE_GRAPH = 18,
+    PYRAMID_PATHS = 19,
 };
 
 inline const char*
@@ -85,6 +86,8 @@ StreamSerializationTagName(uint32_t tag) {
             return "ivf_precise_bucket";
         case StreamSerializationTag::CONJUGATE_GRAPH:
             return "conjugate_graph";
+        case StreamSerializationTag::PYRAMID_PATHS:
+            return "pyramid_paths";
     }
     return "unknown";
 }
@@ -114,6 +117,10 @@ StreamSerializationTagCritical(uint32_t tag) {
         case StreamSerializationTag::IVF_BUCKET_GRAPH:
         case StreamSerializationTag::CONJUGATE_GRAPH:
             return false;
+        case StreamSerializationTag::PYRAMID_PATHS:
+            // Unknown readers may skip this optional capability; readers configured with
+            // store_paths validate the block presence separately.
+            return false;
     }
     return false;
 }
@@ -140,6 +147,7 @@ StreamSerializationBlockCurrentVersion(uint32_t tag) {
         case StreamSerializationTag::PYRAMID_HIERARCHIES:
         case StreamSerializationTag::CODE_SLOT_MAP:
         case StreamSerializationTag::IVF_PRECISE_BUCKET:
+        case StreamSerializationTag::PYRAMID_PATHS:
             return kStreamSerializationBlockVersionV1;
         case StreamSerializationTag::IVF_BUCKET_GRAPH:
         case StreamSerializationTag::CONJUGATE_GRAPH:

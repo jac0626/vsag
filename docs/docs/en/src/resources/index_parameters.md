@@ -145,10 +145,16 @@ Pyramid build parameters also live under `index_param`:
     "index_param": {
         "base_quantization_type": "sq8",
         "max_degree": 24,
-        "ef_construction": 300
+        "ef_construction": 300,
+        "store_paths": true
     }
 }
 ```
+
+`store_paths` is a top-level Pyramid build parameter and defaults to `false`. Enable it when
+`GetDataByIds` must return the original default or named-hierarchy paths; see the
+[Pyramid parameter table](../indexes/pyramid.md#build-parameters) for its completeness and
+persistence semantics.
 
 MRLE with split RaBitQ uses `base_quantization_type: "tq"`,
 `tq_chain: "mrle, rabitq"`, `mrle_dim`, and the

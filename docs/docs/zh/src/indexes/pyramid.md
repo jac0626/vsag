@@ -98,6 +98,7 @@ auto result = index->KnnSearch(
 | `base_io_type` / `precise_io_type` | string | `"block_memory_io"` | 底层与精排存储后端；以 liburing 构建时可用 `uring_io` |
 | `base_file_path` / `precise_file_path` | string | — | `buffer_io`、`async_io`、`uring_io`、`mmap_io` 等磁盘存储必须设置 |
 | `store_raw_vector` | bool | `false` | 保留 FP32 原始向量，用于 `GetRawVectorByIds` 和精确的按 ID 距离计算 |
+| `store_paths` | bool | `false` | 顶层开关；保留传给 `Build` 和 `Add` 的原始路径，使 `GetDataByIds` 可以返回它们。该开关对所有已配置的 hierarchy 生效，不支持按 hierarchy 覆盖 |
 | `index_min_size` | int | `0` | 子索引的最小规模；小于该值的分区会退化为线性扫描 |
 | `support_duplicate` | bool | `false` | 是否允许重复 ID |
 | `build_thread_count` | int | `1` | 构建阶段并发线程数 |
@@ -226,6 +227,26 @@ base->NumElements(n)
 index->Build(base);
 ```
 
+### 按 ID 取回路径
+
+将顶层构建参数 `store_paths` 设为 `true` 后，Pyramid 会保留原始路径，供按 ID
+取回。`GetDataByIds` 返回的路径顺序与请求 ID 的顺序一致。默认匿名 hierarchy 使用
+`GetPaths()`，命名 hierarchy 使用 `GetPaths(hierarchy_name)`：
+
+```cpp
+int64_t requested_ids[] = {product_id_b, product_id_a};
+auto data = index->GetDataByIds(requested_ids, 2).value();
+
+const std::string* site_paths = data->GetPaths("site");
+const std::string* category_paths = data->GetPaths("category");
+```
+
+`store_paths` 为 `false` 时，`GetDataByIds` 不会附带任何路径数组。设为 `true`
+时，只有当所有请求 ID 在某个 hierarchy 中都有已记录的路径，结果才会包含该
+hierarchy。只要其中一个 ID 在构建或追加时没有提供该 hierarchy 的路径，对应
+getter 就返回 `nullptr`；其他路径完整的 hierarchy 仍会正常返回。单 hierarchy 模式下，
+`GetPaths()` 遵循相同的完整性规则。
+
 ### 检索指定层级
 
 通过检索参数中的 `"hierarchies"` 指定要检索的层级。查询 Dataset 也需要在对应的
@@ -271,7 +292,10 @@ auto result = index->RangeSearch(
 
 ### 序列化与反序列化
 
-多层级索引的序列化和反序列化完全透明。序列化格式包含所有层级名称及其图结构：
+多 hierarchy 索引的序列化和反序列化完全透明。序列化格式包含所有 hierarchy
+名称及其图结构。当 `store_paths: true` 时，常规序列化和 streaming 序列化还会持久化
+已保留的原始路径，因此反序列化后 `GetDataByIds` 仍能返回它们。使用默认值 `false`
+时，图 hierarchy 会被持久化，但不会保留按 ID 索引的原始路径：
 
 ```cpp
 // 序列化
