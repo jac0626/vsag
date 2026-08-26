@@ -37,6 +37,7 @@ public:
     void
     Record(const std::string* paths, const Vector<int64_t>& data_biases, int64_t first_inner_id);
 
+    // Full-build overload. The caller must use it only while the store is empty.
     void
     Record(const std::string* paths, uint64_t count);
 
