@@ -86,6 +86,16 @@ GetData(const vsag::IndexPtr& index, const std::vector<int64_t>& ids) {
     return result.value();
 }
 
+vsag::DatasetPtr
+GetDataWithFlag(const vsag::IndexPtr& index,
+                const std::vector<int64_t>& ids,
+                uint64_t selected_data_flag) {
+    auto result = index->GetDataByIdsWithFlag(
+        ids.data(), static_cast<int64_t>(ids.size()), selected_data_flag);
+    REQUIRE(result.has_value());
+    return result.value();
+}
+
 void
 RequirePaths(const std::string* actual, const std::vector<std::string>& expected) {
     REQUIRE(actual != nullptr);
@@ -136,7 +146,9 @@ TEST_CASE("Pyramid retains paths for NSW and ODescent Build", "[ft][pyramid][pat
     auto index = MakePyramidIndex(graph_type, true);
     REQUIRE(index->Build(MakeDataset({101, 42, 900}, {"alpha", "", "beta/gamma"})).has_value());
 
-    RequirePaths(GetData(index, {900, 101, 42})->GetPaths(), {"beta/gamma", "alpha", ""});
+    auto data = GetDataWithFlag(index, {900, 101, 42}, DATA_FLAG_PATH);
+    RequirePaths(data->GetPaths(), {"beta/gamma", "alpha", ""});
+    REQUIRE(data->GetIds() == nullptr);
 }
 
 TEST_CASE("Pyramid Add stores paths using accepted input offsets", "[ft][pyramid][paths]") {
@@ -148,7 +160,8 @@ TEST_CASE("Pyramid Add stores paths using accepted input offsets", "[ft][pyramid
     REQUIRE(add_result.has_value());
     REQUIRE(add_result.value() == std::vector<int64_t>{10});
 
-    RequirePaths(GetData(index, {20, 30, 10})->GetPaths(), {"path-20", "path-30", "original"});
+    RequirePaths(GetDataWithFlag(index, {20, 30, 10}, DATA_FLAG_PATH)->GetPaths(),
+                 {"path-20", "path-30", "original"});
 }
 
 TEST_CASE("Pyramid serialization and Clone preserve retained paths", "[ft][pyramid][paths]") {
@@ -157,13 +170,51 @@ TEST_CASE("Pyramid serialization and Clone preserve retained paths", "[ft][pyram
 
     auto clone = index->Clone();
     REQUIRE(clone.has_value());
-    RequirePaths(GetData(clone.value(), {8, 4})->GetPaths(), {"right", "left"});
+    RequirePaths(GetDataWithFlag(clone.value(), {8, 4}, DATA_FLAG_PATH)->GetPaths(),
+                 {"right", "left"});
 
     auto binary_set = index->Serialize();
     REQUIRE(binary_set.has_value());
     auto restored = MakePyramidIndex("nsw", true);
     REQUIRE(restored->Deserialize(binary_set.value()).has_value());
-    RequirePaths(GetData(restored, {4, 8})->GetPaths(), {"left", "right"});
+    auto restored_data = GetDataWithFlag(restored, {4, 8}, DATA_FLAG_ID | DATA_FLAG_PATH);
+    RequirePaths(restored_data->GetPaths(), {"left", "right"});
+    REQUIRE(restored_data->GetIds() != nullptr);
+    REQUIRE(restored_data->GetIds()[0] == 4);
+    REQUIRE(restored_data->GetIds()[1] == 8);
+}
+
+TEST_CASE("Pyramid returns paths only when selected", "[ft][pyramid][paths]") {
+    auto index = MakePyramidIndex("nsw", true);
+    REQUIRE(index->Build(MakeDataset({1, 2}, {"a", "b"})).has_value());
+
+    auto all_standard_data = GetData(index, {2, 1});
+    REQUIRE(all_standard_data->GetIds() != nullptr);
+    REQUIRE(all_standard_data->GetPaths() == nullptr);
+
+    auto ids_only = GetDataWithFlag(index, {2, 1}, DATA_FLAG_ID);
+    REQUIRE(ids_only->GetIds() != nullptr);
+    REQUIRE(ids_only->GetPaths() == nullptr);
+
+    auto paths_only = GetDataWithFlag(index, {2, 1}, DATA_FLAG_PATH);
+    REQUIRE(paths_only->GetIds() == nullptr);
+    RequirePaths(paths_only->GetPaths(), {"b", "a"});
+}
+
+TEST_CASE("Pyramid rejects selected paths when storage is disabled", "[ft][pyramid][paths]") {
+    auto index = MakePyramidIndex("nsw", false);
+    REQUIRE(index->Build(MakeDataset({1}, {"a"})).has_value());
+
+    const int64_t id = 1;
+    auto ids_only = index->GetDataByIdsWithFlag(&id, 1, DATA_FLAG_ID);
+    REQUIRE(ids_only.has_value());
+    REQUIRE(ids_only.value()->GetIds() != nullptr);
+    REQUIRE(ids_only.value()->GetIds()[0] == id);
+    REQUIRE(ids_only.value()->GetPaths() == nullptr);
+
+    auto result = index->GetDataByIdsWithFlag(&id, 1, DATA_FLAG_PATH);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().type == vsag::ErrorType::INVALID_ARGUMENT);
 }
 
 TEST_CASE("Pyramid rejects an incomplete serialized path sidecar",
@@ -219,7 +270,7 @@ TEST_CASE("Pyramid reports a retained path missing at query time",
     auto restored = MakePyramidIndex("nsw", true);
     REQUIRE(restored->Deserialize(binary_set.value()).has_value());
     const int64_t id = 4;
-    auto result = restored->GetDataByIds(&id, 1);
+    auto result = restored->GetDataByIdsWithFlag(&id, 1, DATA_FLAG_PATH);
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().type == vsag::ErrorType::INTERNAL_ERROR);
 }

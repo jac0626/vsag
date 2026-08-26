@@ -97,7 +97,7 @@ main(int argc, char** argv) {
     // - "precise_quantization_type": The precise quantization codes
     // - "index_min_size": The minimum size required to build the index
     // - "support_duplicate": support for duplicate data in the index
-    // - "store_paths": retain paths for GetDataByIds (disabled by default)
+    // - "store_paths": retain paths for DATA_FLAG_PATH retrieval (disabled by default)
     auto pyramid_build_paramesters = R"(
     {
         "dtype": "float32",
@@ -129,7 +129,7 @@ main(int argc, char** argv) {
     }
 
     int64_t requested_ids[] = {1, 0};
-    auto restored = index->GetDataByIds(requested_ids, 2).value();
+    auto restored = index->GetDataByIdsWithFlag(requested_ids, 2, DATA_FLAG_PATH).value();
     std::cout << "Paths by id: " << restored->GetPaths()[0] << ", " << restored->GetPaths()[1]
               << std::endl;
 

@@ -143,7 +143,9 @@ public:
     CalDistanceById(const float* query, const int64_t* ids, int64_t count) const override;
 
     DatasetPtr
-    GetDataByIds(const int64_t* ids, int64_t count) const override;
+    GetDataByIdsWithFlag(const int64_t* ids,
+                         int64_t count,
+                         uint64_t selected_data_flag) const override;
 
     void
     Deserialize(StreamReader& reader) override;
@@ -275,7 +277,7 @@ private:
     // static
     uint32_t index_min_size_{0};
     bool immutable_{false};
-    bool store_paths_{false};
+    bool store_paths_{false};  // whether to retain paths for ID-based retrieval
     std::unique_ptr<PyramidPathStore> path_store_{nullptr};
 };
 
