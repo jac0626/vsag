@@ -152,7 +152,9 @@ public:
                     int64_t topk = -1) const override;
 
     DatasetPtr
-    GetDataByIds(const int64_t* ids, int64_t count) const override;
+    GetDataByIdsWithFlag(const int64_t* ids,
+                         int64_t count,
+                         uint64_t selected_data_flag) const override;
 
     void
     Deserialize(StreamReader& reader) override;
@@ -442,7 +444,7 @@ private:
     uint32_t index_min_size_{0};  // min node size before graph is built
 
     bool persist_source_id_{false};  // whether to persist source_id in serialization
-    bool store_paths_{false};        // whether to retain paths for GetDataByIds
+    bool store_paths_{false};        // whether to retain paths for ID-based retrieval
 
     std::unique_ptr<PyramidBuildCache> cache_{nullptr};  // per-graph caches for warm-start build
 

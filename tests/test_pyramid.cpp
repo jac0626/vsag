@@ -2153,7 +2153,7 @@ TEST_CASE("Pyramid ExportCache + ImportCache + Build acceleration smoke test",
     auto warmed_build = warmed->Build(make_dataset());
     REQUIRE(warmed_build.has_value());
     REQUIRE(warmed->GetNumElements() == TEST_COUNT);
-    auto restored_data = warmed->GetDataByIds(ids.data(), 1);
+    auto restored_data = warmed->GetDataByIdsWithFlag(ids.data(), 1, DATA_FLAG_ID | DATA_FLAG_PATH);
     REQUIRE(restored_data.has_value());
     REQUIRE(restored_data.value()->GetPaths() != nullptr);
     REQUIRE(restored_data.value()->GetPaths()[0] == "a/b/c");
