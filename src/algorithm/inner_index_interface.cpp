@@ -463,6 +463,9 @@ DatasetPtr
 InnerIndexInterface::GetDataByIdsWithFlag(const int64_t* ids,
                                           int64_t count,
                                           uint64_t selected_data_flag) const {
+    if ((selected_data_flag & DATA_FLAG_FLOAT32_VECTOR) != 0U && not this->has_raw_vector_) {
+        throw VsagException(ErrorType::INVALID_ARGUMENT, "has_raw_vector_ is false");
+    }
     auto* inner_ids =
         reinterpret_cast<InnerIdType*>(this->allocator_->Allocate(count * sizeof(InnerIdType)));
     {
@@ -476,9 +479,6 @@ InnerIndexInterface::GetDataByIdsWithFlag(const int64_t* ids,
     auto dataset = Dataset::Make();
     dataset->NumElements(count)->Dim(dim_)->Owner(true, allocator_);
     if ((selected_data_flag & DATA_FLAG_FLOAT32_VECTOR) != 0U) {
-        if (not this->has_raw_vector_) {
-            throw VsagException(ErrorType::INVALID_ARGUMENT, "has_raw_vector_ is false");
-        }
         auto* fp32_data = reinterpret_cast<float*>(
             this->allocator_->Allocate(count * this->dim_ * sizeof(float)));
         dataset->Float32Vectors(fp32_data);

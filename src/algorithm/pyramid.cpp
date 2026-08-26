@@ -214,11 +214,16 @@ Pyramid::build_by_odescent(const DatasetPtr& base) {
     const auto* data_ids = base->GetIds();
 
     resize(data_num);
-    std::memcpy(label_table_->label_table_.data(), data_ids, sizeof(LabelType) * data_num);
+    for (InnerIdType inner_id = 0; inner_id < data_num; ++inner_id) {
+        label_table_->Insert(inner_id, data_ids[inner_id]);
+    }
 
     base_codes_->BatchInsertVector(data_vectors, data_num);
     if (use_reorder_) {
         precise_codes_->BatchInsertVector(data_vectors, data_num);
+    }
+    if (create_new_raw_vector_) {
+        raw_vector_->BatchInsertVector(data_vectors, data_num);
     }
     auto codes = use_reorder_ ? precise_codes_ : base_codes_;
 
@@ -423,6 +428,9 @@ Pyramid::Serialize(StreamWriter& writer) const {
     if (use_reorder_) {
         precise_codes_->Serialize(writer);
     }
+    if (create_new_raw_vector_) {
+        raw_vector_->Serialize(writer);
+    }
     root_->Serialize(writer);
 
     // serialize footer (introduced since v0.15)
@@ -449,6 +457,9 @@ Pyramid::Deserialize(StreamReader& reader) {
     base_codes_->Deserialize(buffer_reader);
     if (use_reorder_) {
         precise_codes_->Deserialize(buffer_reader);
+    }
+    if (create_new_raw_vector_) {
+        raw_vector_->Deserialize(buffer_reader);
     }
     cur_element_count_ = base_codes_->TotalCount();
     root_->Deserialize(buffer_reader);
@@ -506,6 +517,10 @@ Pyramid::Add(const DatasetPtr& base) {
                 if (use_reorder_) {
                     precise_codes_->InsertVector(data_vectors + dim_ * i,
                                                  valid_id_count + local_cur_element_count);
+                }
+                if (create_new_raw_vector_) {
+                    raw_vector_->InsertVector(data_vectors + dim_ * i,
+                                              valid_id_count + local_cur_element_count);
                 }
                 valid_id_count++;
                 data_biases.push_back(i);
@@ -570,6 +585,9 @@ Pyramid::resize(int64_t new_max_capacity) {
     if (use_reorder_) {
         precise_codes_->Resize(new_max_capacity);
     }
+    if (create_new_raw_vector_) {
+        raw_vector_->Resize(new_max_capacity);
+    }
     points_mutex_->Resize(new_max_capacity);
     max_capacity_ = new_max_capacity;
 }
@@ -617,6 +635,13 @@ Pyramid::InitFeatures() {
         IndexFeature::SUPPORT_EXPORT_MODEL,
         IndexFeature::SUPPORT_GET_MEMORY_USAGE,
     });
+    const auto& retrieval_codes = use_reorder_ ? precise_codes_ : base_codes_;
+    const bool can_decode_exact_vector =
+        retrieval_codes->GetQuantizerName() == QUANTIZATION_TYPE_VALUE_FP32 &&
+        (metric_ != MetricType::METRIC_TYPE_COSINE || retrieval_codes->HoldMolds());
+    if (can_decode_exact_vector || raw_vector_ != nullptr) {
+        this->index_feature_list_->SetFeature(IndexFeature::SUPPORT_GET_RAW_VECTOR_BY_IDS);
+    }
 }
 
 static const std::string HGRAPH_PARAMS_TEMPLATE =
@@ -672,6 +697,18 @@ static const std::string HGRAPH_PARAMS_TEMPLATE =
                 "{HOLD_MOLDS}": false
             }
         },
+        "{STORE_RAW_VECTOR_KEY}": false,
+        "{RAW_VECTOR_KEY}": {
+            "{IO_PARAMS_KEY}": {
+                "{TYPE_KEY}": "{IO_TYPE_VALUE_BLOCK_MEMORY_IO}",
+                "{IO_FILE_PATH_KEY}": "{DEFAULT_FILE_PATH_VALUE}"
+            },
+            "{CODES_TYPE_KEY}": "flatten",
+            "{QUANTIZATION_PARAMS_KEY}": {
+                "{TYPE_KEY}": "{QUANTIZATION_TYPE_VALUE_FP32}",
+                "{HOLD_MOLDS}": true
+            }
+        },
         "{BUILD_THREAD_COUNT_KEY}": 1,
         "{EF_CONSTRUCTION_KEY}": 400,
         "{NO_BUILD_LEVELS}":[],
@@ -686,6 +723,7 @@ Pyramid::CheckAndMappingExternalParam(const JsonType& external_param,
         {PYRAMID_EF_CONSTRUCTION, {EF_CONSTRUCTION_KEY}},
         {PYRAMID_USE_REORDER, {USE_REORDER_KEY}},
         {PYRAMID_BASE_QUANTIZATION_TYPE, {BASE_CODES_KEY, QUANTIZATION_PARAMS_KEY, TYPE_KEY}},
+        {STORE_RAW_VECTOR, {BASE_CODES_KEY, QUANTIZATION_PARAMS_KEY, HOLD_MOLDS}},
         {PYRAMID_RABITQ_BITS_PER_DIM_BASE,
          {BASE_CODES_KEY, QUANTIZATION_PARAMS_KEY, RABITQ_QUANTIZATION_BITS_PER_DIM_BASE_KEY}},
         {PYRAMID_RABITQ_BITS_PER_DIM_QUERY,
@@ -693,6 +731,8 @@ Pyramid::CheckAndMappingExternalParam(const JsonType& external_param,
         {PYRAMID_RABITQ_PCA_DIM, {BASE_CODES_KEY, QUANTIZATION_PARAMS_KEY, PCA_DIM_KEY}},
         {PYRAMID_RABITQ_USE_FHT, {BASE_CODES_KEY, QUANTIZATION_PARAMS_KEY, USE_FHT_KEY}},
         {PYRAMID_PRECISE_QUANTIZATION_TYPE, {PRECISE_CODES_KEY, QUANTIZATION_PARAMS_KEY, TYPE_KEY}},
+        {STORE_RAW_VECTOR, {PRECISE_CODES_KEY, QUANTIZATION_PARAMS_KEY, HOLD_MOLDS}},
+        {STORE_RAW_VECTOR, {STORE_RAW_VECTOR_KEY}},
         {PYRAMID_GRAPH_MAX_DEGREE, {GRAPH_KEY, GRAPH_PARAM_MAX_DEGREE_KEY}},
         {PYRAMID_BASE_IO_TYPE, {BASE_CODES_KEY, IO_PARAMS_KEY, TYPE_KEY}},
         {PYRAMID_BUILD_ALPHA, {GRAPH_KEY, ODESCENT_PARAMETER_ALPHA}},
@@ -726,6 +766,9 @@ Pyramid::Train(const DatasetPtr& base) {
     this->base_codes_->Train(base->GetFloat32Vectors(), base->GetNumElements());
     if (use_reorder_) {
         this->precise_codes_->Train(base->GetFloat32Vectors(), base->GetNumElements());
+    }
+    if (create_new_raw_vector_) {
+        this->raw_vector_->Train(base->GetFloat32Vectors(), base->GetNumElements());
     }
 }
 std::vector<int64_t>
@@ -915,6 +958,9 @@ Pyramid::CalcDistanceById(const float* query, int64_t id) const {
     if (use_reorder_) {
         flat = this->precise_codes_;
     }
+    if (create_new_raw_vector_) {
+        flat = this->raw_vector_;
+    }
     return InnerIndexInterface::calc_distance_by_id(query, id, flat);
 }
 
@@ -925,6 +971,52 @@ Pyramid::CalDistanceById(const float* query, const int64_t* ids, int64_t count) 
     if (use_reorder_) {
         flat = this->precise_codes_;
     }
+    if (create_new_raw_vector_) {
+        flat = this->raw_vector_;
+    }
     return InnerIndexInterface::cal_distance_by_id(query, ids, count, flat);
+}
+
+void
+Pyramid::GetVectorByInnerId(InnerIdType inner_id, float* data) const {
+    std::shared_lock<std::shared_mutex> lock(resize_mutex_);
+    auto codes = use_reorder_ ? precise_codes_ : base_codes_;
+    if (create_new_raw_vector_) {
+        codes = raw_vector_;
+    }
+    bool release = false;
+    const auto* buffer = codes->GetCodesById(inner_id, release);
+    if (buffer == nullptr) {
+        throw VsagException(ErrorType::INTERNAL_ERROR,
+                            fmt::format("failed to get vector by inner id {}", inner_id));
+    }
+    const bool decoded = codes->Decode(buffer, data);
+    if (release) {
+        codes->Release(buffer);
+    }
+    if (not decoded) {
+        throw VsagException(ErrorType::INTERNAL_ERROR,
+                            fmt::format("failed to decode vector by inner id {}", inner_id));
+    }
+}
+
+void
+Pyramid::check_and_init_raw_vector(const FlattenInterfaceParamPtr& raw_vector_param,
+                                   const IndexCommonParam& common_param) {
+    if (raw_vector_param == nullptr) {
+        return;
+    }
+
+    const auto& retrieval_codes = use_reorder_ ? precise_codes_ : base_codes_;
+    const auto io_type_name = raw_vector_param->io_parameter->GetTypeName();
+    const bool is_memory_io =
+        io_type_name == IO_TYPE_VALUE_BLOCK_MEMORY_IO || io_type_name == IO_TYPE_VALUE_MEMORY_IO;
+    if (retrieval_codes->GetQuantizerName() == QUANTIZATION_TYPE_VALUE_FP32 && is_memory_io) {
+        raw_vector_ = retrieval_codes;
+    } else {
+        raw_vector_ = FlattenInterface::MakeInstance(raw_vector_param, common_param);
+        create_new_raw_vector_ = true;
+    }
+    has_raw_vector_ = true;
 }
 }  // namespace vsag
