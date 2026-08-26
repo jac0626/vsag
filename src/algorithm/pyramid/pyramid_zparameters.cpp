@@ -53,14 +53,12 @@ parse_root_graph_storage_type(const JsonType& graph_json) {
     CHECK_ARGUMENT(graph_json[GRAPH_STORAGE_TYPE_KEY].IsString(),
                    "graph_storage_type must be a string");
     const auto storage_type = graph_json[GRAPH_STORAGE_TYPE_KEY].GetString();
-    if (storage_type == GRAPH_STORAGE_TYPE_VALUE_FLAT) {
-        return GraphStorageTypes::GRAPH_STORAGE_TYPE_VALUE_FLAT;
-    }
-    if (storage_type == GRAPH_STORAGE_TYPE_VALUE_COMPRESSED) {
-        return GraphStorageTypes::GRAPH_STORAGE_TYPE_VALUE_COMPRESSED;
-    }
-    CHECK_ARGUMENT(false, fmt::format("invalid graph_storage_type: {}", storage_type));
-    return GraphStorageTypes::GRAPH_STORAGE_TYPE_VALUE_FLAT;
+    CHECK_ARGUMENT(storage_type == GRAPH_STORAGE_TYPE_VALUE_FLAT ||
+                       storage_type == GRAPH_STORAGE_TYPE_VALUE_COMPRESSED,
+                   fmt::format("invalid graph_storage_type: {}", storage_type));
+    return storage_type == GRAPH_STORAGE_TYPE_VALUE_COMPRESSED
+               ? GraphStorageTypes::GRAPH_STORAGE_TYPE_VALUE_COMPRESSED
+               : GraphStorageTypes::GRAPH_STORAGE_TYPE_VALUE_FLAT;
 }
 
 const char*
@@ -129,6 +127,39 @@ append_hierarchy_selector(PyramidSearchParameters& params,
 }
 
 }  // namespace
+
+void
+validate_pyramid_external_root_graph_config(const JsonType& external_param,
+                                            const PyramidParameters& params) {
+    const bool root_graph_type_is_explicit = external_param.Contains(PYRAMID_ROOT_GRAPH_TYPE);
+    const auto validate_explicit_root_graph_type = [](bool is_explicit,
+                                                      const std::vector<int32_t>& no_build_levels,
+                                                      const std::string& context) {
+        CHECK_ARGUMENT(
+            not is_explicit || std::find(no_build_levels.begin(), no_build_levels.end(), 0) ==
+                                   no_build_levels.end(),
+            fmt::format("{} root_graph_type cannot be specified when level 0 is not built",
+                        context));
+    };
+
+    if (not params.has_hierarchies) {
+        validate_explicit_root_graph_type(
+            root_graph_type_is_explicit, params.no_build_levels, "Pyramid");
+        return;
+    }
+
+    const auto& hierarchy_values = *external_param[PYRAMID_HIERARCHIES].GetInnerJson();
+    for (uint64_t i = 0; i < params.hierarchies.size(); ++i) {
+        JsonType hierarchy_json;
+        *hierarchy_json.GetInnerJson() = hierarchy_values[i];
+        const bool hierarchy_root_graph_type_is_explicit =
+            root_graph_type_is_explicit ||
+            (hierarchy_json.IsObject() && hierarchy_json.Contains(PYRAMID_ROOT_GRAPH_TYPE));
+        validate_explicit_root_graph_type(hierarchy_root_graph_type_is_explicit,
+                                          params.hierarchies[i].no_build_levels,
+                                          fmt::format("hierarchy {}", params.hierarchies[i].name));
+    }
+}
 
 void
 PyramidHierarchyParameters::FromJson(const JsonType& json) {

@@ -40,6 +40,25 @@
 #include "utils/slow_task_timer.h"
 #include "utils/util_functions.h"
 namespace vsag {
+namespace {
+
+void
+drain_futures(Vector<std::future<void>>& futures, std::exception_ptr first_exception = nullptr) {
+    for (auto& future : futures) {
+        try {
+            future.get();
+        } catch (...) {
+            if (first_exception == nullptr) {
+                first_exception = std::current_exception();
+            }
+        }
+    }
+    if (first_exception != nullptr) {
+        std::rethrow_exception(first_exception);
+    }
+}
+
+}  // namespace
 
 const static float RADIUS_EPSILON = 1.1F;
 static constexpr uint64_t SOURCE_ID_TABLE_MAGIC = 0x534F555243454944ULL;  // SOURCEID
@@ -104,7 +123,6 @@ Pyramid::make_root_graph_param(const GraphInterfaceParamPtr& child_graph_param,
         auto root = std::make_shared<CompressedGraphDatacellParameter>();
         root->max_degree_ = child->max_degree_;
         root->support_duplicate_ = child->support_duplicate_;
-        root->use_reverse_edges_ = child->use_reverse_edges_;
         return root;
     }
     CHECK_ARGUMENT(storage_type == GraphStorageTypes::GRAPH_STORAGE_TYPE_VALUE_FLAT,
@@ -231,35 +249,80 @@ Pyramid::search_graph_for_add(const GraphInterfacePtr& graph,
     return results;
 }
 
-DistHeapPtr
-Pyramid::merge_cached_graph_candidates(InnerIdType inner_id,
-                                       const DistHeapPtr& candidates,
-                                       const GraphInterfacePtr& graph,
-                                       const FlattenInterfacePtr& codes) {
-    Vector<InnerIdType> cached_neighbors(allocator_);
-    {
-        SharedLock point_lock(points_mutex_, inner_id);
-        graph->GetNeighbors(inner_id, cached_neighbors);
-    }
+void
+Pyramid::connect_cached_graph_point(InnerIdType inner_id,
+                                    const DistHeapPtr& candidates,
+                                    const GraphInterfacePtr& graph,
+                                    const FlattenInterfacePtr& codes,
+                                    float alpha) {
+    const auto max_degree = graph->MaximumDegree();
 
-    auto merged = std::make_shared<StandardHeap<true, false>>(allocator_, -1);
-    UnorderedSet<InnerIdType> seen(allocator_);
-    seen.reserve(cached_neighbors.size() + (candidates == nullptr ? 0 : candidates->Size()));
-    for (const auto neighbor : cached_neighbors) {
-        if (neighbor != inner_id && seen.emplace(neighbor).second) {
-            merged->Push(codes->ComputePairVectors(inner_id, neighbor), neighbor);
-        }
-    }
-    if (candidates != nullptr) {
-        while (not candidates->Empty()) {
-            const auto candidate = candidates->Top();
-            candidates->Pop();
-            if (candidate.second != inner_id && seen.emplace(candidate.second).second) {
-                merged->Push(candidate.first, candidate.second);
+    // Cache rows are all visible before parallel refinement starts. Never hold the current-row
+    // lock while acquiring a neighbor lock: two mutually selected rows would otherwise deadlock.
+    Vector<InnerIdType> forward_neighbors(allocator_);
+    {
+        LockGuard current_lock(points_mutex_, inner_id);
+        Vector<InnerIdType> existing_neighbors(allocator_);
+        graph->GetNeighbors(inner_id, existing_neighbors);
+
+        auto merged = std::make_shared<StandardHeap<true, false>>(allocator_, -1);
+        UnorderedSet<InnerIdType> seen(allocator_);
+        seen.reserve(existing_neighbors.size() + (candidates == nullptr ? 0 : candidates->Size()));
+        for (const auto neighbor : existing_neighbors) {
+            if (neighbor != inner_id && seen.emplace(neighbor).second) {
+                merged->Push(codes->ComputePairVectors(inner_id, neighbor), neighbor);
             }
         }
+        if (candidates != nullptr) {
+            while (not candidates->Empty()) {
+                const auto candidate = candidates->Top();
+                candidates->Pop();
+                if (candidate.second != inner_id && seen.emplace(candidate.second).second) {
+                    merged->Push(candidate.first, candidate.second);
+                }
+            }
+        }
+        if (not merged->Empty()) {
+            select_edges_by_heuristic(merged, max_degree, codes, allocator_, alpha);
+            forward_neighbors.reserve(merged->Size());
+            while (not merged->Empty()) {
+                forward_neighbors.push_back(merged->Top().second);
+                merged->Pop();
+            }
+        }
+        graph->InsertNeighborsById(inner_id, forward_neighbors);
     }
-    return merged;
+
+    Vector<InnerIdType> reverse_neighbors(allocator_);
+    for (const auto neighbor : forward_neighbors) {
+        LockGuard neighbor_lock(points_mutex_, neighbor);
+        reverse_neighbors.clear();
+        graph->GetNeighbors(neighbor, reverse_neighbors);
+        if (std::find(reverse_neighbors.begin(), reverse_neighbors.end(), inner_id) !=
+            reverse_neighbors.end()) {
+            continue;
+        }
+        if (reverse_neighbors.size() < max_degree) {
+            reverse_neighbors.push_back(inner_id);
+            graph->InsertNeighborsById(neighbor, reverse_neighbors);
+            continue;
+        }
+
+        auto reverse_candidates = std::make_shared<StandardHeap<true, false>>(allocator_, -1);
+        reverse_candidates->Push(codes->ComputePairVectors(neighbor, inner_id), inner_id);
+        for (const auto existing_neighbor : reverse_neighbors) {
+            reverse_candidates->Push(codes->ComputePairVectors(neighbor, existing_neighbor),
+                                     existing_neighbor);
+        }
+        select_edges_by_heuristic(reverse_candidates, max_degree, codes, allocator_, alpha);
+        reverse_neighbors.clear();
+        reverse_neighbors.reserve(reverse_candidates->Size());
+        while (not reverse_candidates->Empty()) {
+            reverse_neighbors.push_back(reverse_candidates->Top().second);
+            reverse_candidates->Pop();
+        }
+        graph->InsertNeighborsById(neighbor, reverse_neighbors);
+    }
 }
 
 void
@@ -323,9 +386,7 @@ Pyramid::add_routed_point(const Hierarchy& hierarchy,
         }
 
         if (use_self_as_entry) {
-            results = merge_cached_graph_candidates(inner_id, results, node.graph_, codes);
-            mutually_connect_new_element(
-                inner_id, results, node.graph_, codes, points_mutex_, allocator_, hierarchy.alpha);
+            connect_cached_graph_point(inner_id, results, node.graph_, codes, hierarchy.alpha);
         } else {
             LockGuard point_lock(points_mutex_, inner_id);
             if (results == nullptr || results->Empty()) {
@@ -748,21 +809,24 @@ Pyramid::run_parallel_insertions(
 
     Vector<std::future<void>> futures(allocator_);
     futures.reserve(has_route_seed ? count - 1 : count);
-    for (uint64_t index = 0; index < count; ++index) {
-        if (has_route_seed and index == seed_index) {
-            continue;
+    std::exception_ptr submit_exception = nullptr;
+    try {
+        for (uint64_t index = 0; index < count; ++index) {
+            if (has_route_seed and index == seed_index) {
+                continue;
+            }
+            const int sampled_level =
+                has_route_seed ? sampled_levels[index] : std::numeric_limits<int>::min();
+            if (thread_pool_ != nullptr) {
+                futures.push_back(thread_pool_->GeneralEnqueue(task, index, sampled_level));
+            } else {
+                task(index, sampled_level);
+            }
         }
-        const int sampled_level =
-            has_route_seed ? sampled_levels[index] : std::numeric_limits<int>::min();
-        if (thread_pool_ != nullptr) {
-            futures.push_back(thread_pool_->GeneralEnqueue(task, index, sampled_level));
-        } else {
-            task(index, sampled_level);
-        }
+    } catch (...) {
+        submit_exception = std::current_exception();
     }
-    for (auto& future : futures) {
-        future.get();
-    }
+    drain_futures(futures, submit_exception);
 }
 
 std::vector<int64_t>
@@ -1665,16 +1729,19 @@ Pyramid::encode_add_batch(const DatasetPtr& base, const AddBatch& batch) {
         const uint64_t block_size = (count + worker_count - 1) / worker_count;
         Vector<std::future<void>> futures(allocator_);
         futures.reserve(worker_count);
-        for (uint64_t worker = 0; worker < worker_count; ++worker) {
-            const uint64_t begin = worker * block_size;
-            const uint64_t end = std::min<uint64_t>(begin + block_size, count);
-            if (begin < end) {
-                futures.push_back(thread_pool_->GeneralEnqueue(encode_range, begin, end));
+        std::exception_ptr submit_exception = nullptr;
+        try {
+            for (uint64_t worker = 0; worker < worker_count; ++worker) {
+                const uint64_t begin = worker * block_size;
+                const uint64_t end = std::min<uint64_t>(begin + block_size, count);
+                if (begin < end) {
+                    futures.push_back(thread_pool_->GeneralEnqueue(encode_range, begin, end));
+                }
             }
+        } catch (...) {
+            submit_exception = std::current_exception();
         }
-        for (auto& future : futures) {
-            future.get();
-        }
+        drain_futures(futures, submit_exception);
     } else {
         encode_range(0, batch.input_indices.size());
     }
@@ -1918,6 +1985,7 @@ Pyramid::CheckAndMappingExternalParam(const JsonType& external_param,
     }
     auto pyramid_params = std::make_shared<PyramidParameters>();
     pyramid_params->FromJson(inner_json);
+    validate_pyramid_external_root_graph_config(external_param, *pyramid_params);
     return pyramid_params;
 }
 
@@ -2034,10 +2102,11 @@ Pyramid::add_bottom_graph_point(const Hierarchy& hierarchy,
             return;
         }
         if (use_self_as_entry) {
-            results = merge_cached_graph_candidates(inner_id, results, node.graph_, codes);
+            connect_cached_graph_point(inner_id, results, node.graph_, codes, hierarchy.alpha);
+        } else {
+            mutually_connect_new_element(
+                inner_id, results, node.graph_, codes, points_mutex_, allocator_, hierarchy.alpha);
         }
-        mutually_connect_new_element(
-            inner_id, results, node.graph_, codes, points_mutex_, allocator_, hierarchy.alpha);
         if (update_entry_point) {
             node.entry_point_ = inner_id;
         }

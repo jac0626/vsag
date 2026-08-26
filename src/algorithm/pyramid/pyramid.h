@@ -530,11 +530,12 @@ private:
                          const float* vector,
                          InnerSearchParam& search_param);
 
-    DistHeapPtr
-    merge_cached_graph_candidates(InnerIdType inner_id,
-                                  const DistHeapPtr& candidates,
-                                  const GraphInterfacePtr& graph,
-                                  const FlattenInterfacePtr& codes);
+    void
+    connect_cached_graph_point(InnerIdType inner_id,
+                               const DistHeapPtr& candidates,
+                               const GraphInterfacePtr& graph,
+                               const FlattenInterfacePtr& codes,
+                               float alpha);
 
     void
     add_routed_point(const Hierarchy& hierarchy,

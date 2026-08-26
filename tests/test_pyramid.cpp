@@ -2188,27 +2188,31 @@ TEST_CASE("Pyramid ExportCache + ImportCache + Build acceleration smoke test",
     constexpr int64_t TEST_DIM = 32;
     constexpr int64_t TEST_COUNT = 200;
     constexpr int64_t TOPK = 10;
+    const auto graph_storage_type = GENERATE(std::string("flat"), std::string("compressed"));
+    CAPTURE(graph_storage_type);
 
     // params must include persist_source_id: true so ExportCache produces a
     // usable cache after a Build that recorded source_ids. ef_construction equals
     // max_degree to match the HGraph cache-hit refinement eligibility.
-    const auto* param = R"(
-    {
+    const auto param = fmt::format(R"(
+    {{
         "dtype": "float32",
         "metric_type": "l2",
         "dim": 32,
-        "index_param": {
+        "index_param": {{
             "base_quantization_type": "fp32",
             "max_degree": 16,
             "ef_construction": 16,
             "build_thread_count": 8,
             "root_graph_type": "multi_layer",
+            "graph_storage_type": "{}",
             "no_build_levels": [1, 2],
             "index_min_size": 28,
             "persist_source_id": true
-        }
-    }
-    )";
+        }}
+    }}
+    )",
+                                   graph_storage_type);
 
     std::mt19937 rng(42);
     std::uniform_real_distribution<float> dist(-1.0F, 1.0F);

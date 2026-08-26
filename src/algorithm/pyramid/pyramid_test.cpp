@@ -901,6 +901,9 @@ TEST_CASE("Pyramid multi-layer root builds routes and survives serialization",
     constexpr int64_t post_restore_count = 512;
     std::vector<float> post_restore_vectors(post_restore_count * PYRAMID_TEST_DIM);
     FillRootVectors(post_restore_vectors, post_restore_count);
+    for (auto& value : post_restore_vectors) {
+        value += 2.0F;
+    }
     std::vector<int64_t> post_restore_ids(post_restore_count);
     std::iota(post_restore_ids.begin(), post_restore_ids.end(), count + added_count);
     std::vector<std::string> post_restore_paths(post_restore_count, "");
@@ -911,13 +914,19 @@ TEST_CASE("Pyramid multi-layer root builds routes and survives serialization",
                                          post_restore_count))
                 .empty());
     REQUIRE(restored.index->GetNumElements() == count + added_count + post_restore_count);
-    auto post_restore_query = vsag::Dataset::Make()
-                                  ->NumElements(1)
-                                  ->Dim(PYRAMID_TEST_DIM)
-                                  ->Float32Vectors(post_restore_vectors.data())
-                                  ->Owner(false);
-    REQUIRE(restored.index->KnnSearch(post_restore_query, 10, search_params, nullptr)->GetDim() ==
-            10);
+    for (const int64_t offset : {int64_t{0}, post_restore_count - 1}) {
+        auto post_restore_query =
+            vsag::Dataset::Make()
+                ->NumElements(1)
+                ->Dim(PYRAMID_TEST_DIM)
+                ->Float32Vectors(post_restore_vectors.data() + offset * PYRAMID_TEST_DIM)
+                ->Owner(false);
+        const auto post_restore_result =
+            restored.index->KnnSearch(post_restore_query, 1, search_params, nullptr);
+        REQUIRE(post_restore_result->GetDim() == 1);
+        REQUIRE(post_restore_result->GetIds()[0] == post_restore_ids[offset]);
+        REQUIRE(std::abs(post_restore_result->GetDistances()[0]) < 1e-6F);
+    }
 }
 
 TEST_CASE("Pyramid NSW Build and empty Add share routed construction",
