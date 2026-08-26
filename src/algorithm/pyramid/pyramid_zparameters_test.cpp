@@ -290,6 +290,21 @@ TEST_CASE("Pyramid Parameters CheckCompatibility", "[ut][PyramidParameter][Check
         "different base io type", base_io_type, "memory_io", "block_memory_io", true);
 
     TEST_COMPATIBILITY_CASE("different graph type", graph_type, "odescent", "nsw", true);
+    SECTION("root graph storage matters only for multi-layer roots") {
+        PyramidDefaultParam flat_param;
+        PyramidDefaultParam compressed_param;
+        flat_param.graph_storage_type = "flat";
+        compressed_param.graph_storage_type = "compressed";
+        auto flat = std::make_shared<vsag::PyramidParameters>();
+        auto compressed = std::make_shared<vsag::PyramidParameters>();
+        flat->FromString(generate_pyramid(flat_param));
+        compressed->FromString(generate_pyramid(compressed_param));
+
+        REQUIRE(flat->CheckCompatibility(compressed));
+        flat->root_graph_type = vsag::PYRAMID_ROOT_GRAPH_TYPE_MULTI_LAYER;
+        compressed->root_graph_type = vsag::PYRAMID_ROOT_GRAPH_TYPE_MULTI_LAYER;
+        REQUIRE_FALSE(flat->CheckCompatibility(compressed));
+    }
     TEST_COMPATIBILITY_CASE("different build thread count", build_thread_count, 4, 8, true);
     TEST_COMPATIBILITY_CASE(
         "different precise quantization type", precise_quantization_type, "fp32", "fp16", false);
@@ -705,8 +720,22 @@ TEST_CASE("Pyramid validates root graph type and hierarchy overrides", "[ut][Pyr
     auto mapped = std::dynamic_pointer_cast<vsag::PyramidParameters>(
         vsag::Pyramid::CheckAndMappingExternalParam(external, common_param));
     REQUIRE(mapped->root_graph_type == vsag::PYRAMID_ROOT_GRAPH_TYPE_SINGLE_LAYER);
+    REQUIRE(mapped->root_graph_storage_type ==
+            vsag::GraphStorageTypes::GRAPH_STORAGE_TYPE_VALUE_FLAT);
     REQUIRE(mapped->hierarchies[0].root_graph_type == vsag::PYRAMID_ROOT_GRAPH_TYPE_SINGLE_LAYER);
     REQUIRE(mapped->hierarchies[1].root_graph_type == vsag::PYRAMID_ROOT_GRAPH_TYPE_MULTI_LAYER);
+
+    external[vsag::PYRAMID_GRAPH_STORAGE_TYPE].SetString(vsag::GRAPH_STORAGE_TYPE_VALUE_COMPRESSED);
+    mapped = std::dynamic_pointer_cast<vsag::PyramidParameters>(
+        vsag::Pyramid::CheckAndMappingExternalParam(external, common_param));
+    REQUIRE(mapped->root_graph_storage_type ==
+            vsag::GraphStorageTypes::GRAPH_STORAGE_TYPE_VALUE_COMPRESSED);
+    REQUIRE(mapped->ToJson()[vsag::GRAPH_KEY][vsag::GRAPH_STORAGE_TYPE_KEY].GetString() ==
+            vsag::GRAPH_STORAGE_TYPE_VALUE_COMPRESSED);
+
+    external[vsag::PYRAMID_GRAPH_STORAGE_TYPE].SetString("unknown");
+    REQUIRE_THROWS(vsag::Pyramid::CheckAndMappingExternalParam(external, common_param));
+    external[vsag::PYRAMID_GRAPH_STORAGE_TYPE].SetString(vsag::GRAPH_STORAGE_TYPE_VALUE_FLAT);
 
     external[vsag::PYRAMID_ROOT_GRAPH_TYPE].SetString("unknown");
     REQUIRE_THROWS(vsag::Pyramid::CheckAndMappingExternalParam(external, common_param));

@@ -89,6 +89,7 @@ Build-time parameters live under `index_param`.
 | `mrle_dim` | int | `0` | Prefix dimension retained by MRLE; `0` keeps the input dimension. |
 | `max_degree` | int | `64` | Maximum out-degree per node within a sub-graph. |
 | `graph_type` | string | `"nsw"` | `nsw` or `odescent`. |
+| `graph_storage_type` | string | `"flat"` | Bottom-graph storage for a `multi_layer` root: `flat` favors construction and search speed, while `compressed` reduces graph memory. Compressed storage requires `max_degree <= 255`. Single-layer roots, routing graphs, and child graphs remain sparse. |
 | `ef_construction` | int | `400` | Candidate list size for `nsw` builds. |
 | `alpha` | float | `1.2` | Pruning factor during graph construction. |
 | `graph_iter_turn` | int | — | ODescent iterations (effective with `graph_type: "odescent"`). |
@@ -104,7 +105,7 @@ Build-time parameters live under `index_param`.
 | `base_file_path` / `precise_file_path` | string | — | Required for disk-backed storage such as `buffer_io`, `async_io`, `uring_io`, or `mmap_io`. |
 | `store_raw_vector` | bool | `false` | Preserve an FP32 copy for `GetRawVectorByIds` and precise distance-by-id calculations. |
 | `index_min_size` | int | `0` | Minimum sub-index size; smaller groups fall back to scan. |
-| `root_graph_type` | string | `"single_layer"` | Root graph layout: `single_layer` preserves the original sparse bottom graph; `multi_layer` uses a preallocated dense Flat bottom graph with HGraph-style sparse routing layers and joint construction. `multi_layer` requires `graph_type: "nsw"` and a built level 0. |
+| `root_graph_type` | string | `"single_layer"` | Root graph layout: `single_layer` preserves the original sparse bottom graph; `multi_layer` uses a preallocated Flat or Compressed bottom graph with HGraph-style sparse routing layers and joint construction. `multi_layer` requires `graph_type: "nsw"` and a built level 0. |
 | `support_duplicate` | bool | `false` | Allow duplicate ids. |
 | `build_thread_count` | int | `1` | Threads used for parallel build. |
 | `hierarchies` | array | `[]` | Named hierarchy definitions. Each element is either a string (inherits all top-level params) or an object with `name` and optional overrides (`max_degree`, `ef_construction`, `alpha`, `no_build_levels`, `index_min_size`, `root_graph_type`). When present, multi-hierarchy mode is activated and each hierarchy maintains its own independent path tree. |
@@ -197,13 +198,15 @@ Add a `hierarchies` array inside `index_param`. Each element is either:
 Overridable per-hierarchy parameters: `max_degree`, `ef_construction`, `alpha`,
 `no_build_levels`, `index_min_size`, `root_graph_type`.
 
-`root_graph_type: "multi_layer"` changes only the selected hierarchy's root. It uses a preallocated
-dense Flat bottom graph, while sparse routing graphs choose a better entry point before the bottom
-search. Bulk Build and incremental Add jointly construct the route and bottom layers with the same
-HGraph-style insertion protocol. This layout requires `graph_type: "nsw"`; combining `multi_layer`
-with `odescent` is rejected during parameter validation. Bottom and routing edges use the precise
-codes when an independent precise store exists, otherwise they use the base codes. Query traversal
-continues to use the base codes, and final reordering uses the configured reorder source.
+`root_graph_type: "multi_layer"` changes only the selected hierarchy's root. Its bottom graph uses
+the top-level `graph_storage_type`: Flat by default, or Compressed to trade construction and search
+speed for lower graph memory. Sparse routing graphs choose a better entry point before the bottom
+search; child graphs remain sparse. Bulk Build and incremental Add jointly construct the route and
+bottom layers with the same HGraph-style insertion protocol. This layout requires
+`graph_type: "nsw"`; combining `multi_layer` with `odescent` is rejected during parameter
+validation. Bottom and routing edges use the precise codes when an independent precise store
+exists, otherwise they use the base codes. Query traversal continues to use the base codes, and
+final reordering uses the configured reorder source.
 
 ```json
 {

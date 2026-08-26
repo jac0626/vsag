@@ -44,6 +44,7 @@ struct PyramidParam {
     uint64_t rabitq_bits_per_dim_base = 1;
     bool fast_encode_rabitq = true;
     std::optional<std::string> root_graph_type;
+    std::optional<std::string> graph_storage_type;
 };
 
 namespace fixtures {
@@ -110,6 +111,11 @@ PyramidTestIndex::GeneratePyramidBuildParametersString(const std::string& metric
         param.root_graph_type.has_value()
             ? fmt::format(",\n            \"root_graph_type\": \"{}\"", *param.root_graph_type)
             : "";
+    const auto graph_storage_parameter =
+        param.graph_storage_type.has_value()
+            ? fmt::format(",\n            \"graph_storage_type\": \"{}\"",
+                          *param.graph_storage_type)
+            : "";
     auto build_parameters_str = fmt::format(parameter_temp,
                                             metric_type,
                                             dim,
@@ -120,7 +126,7 @@ PyramidTestIndex::GeneratePyramidBuildParametersString(const std::string& metric
                                             param.fast_encode_rabitq,
                                             param.precise_quantization_type,
                                             param.use_reorder,
-                                            root_graph_parameter,
+                                            root_graph_parameter + graph_storage_parameter,
                                             param.support_duplicate);
     return build_parameters_str;
 }
@@ -849,9 +855,12 @@ TEST_CASE_PERSISTENT_FIXTURE(fixtures::PyramidTestIndex,
 TEST_CASE_PERSISTENT_FIXTURE(fixtures::PyramidTestIndex,
                              "Pyramid multi-layer root streaming serialization",
                              "[ft][pyramid][root_graph][streaming]") {
+    const auto graph_storage_type = GENERATE(std::string("flat"), std::string("compressed"));
+    CAPTURE(graph_storage_type);
     PyramidParam pyramid_param;
     pyramid_param.no_build_levels = {1, 2};
     pyramid_param.root_graph_type = "multi_layer";
+    pyramid_param.graph_storage_type = graph_storage_type;
     const auto param = GeneratePyramidBuildParametersString("l2", 16, pyramid_param);
     auto index = TestFactory("pyramid", param, true);
     auto dataset = pool.GetDatasetAndCreate(16, 1000, "l2", /*with_path=*/true);

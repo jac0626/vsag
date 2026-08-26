@@ -134,7 +134,8 @@ MakeRootPyramidIndex(const std::string& root_graph_type,
                      const std::string& graph_type = vsag::GRAPH_TYPE_VALUE_NSW,
                      bool support_duplicate = false,
                      uint64_t build_thread_count = 1,
-                     bool use_rabitq_with_sq8 = false) {
+                     bool use_rabitq_with_sq8 = false,
+                     const std::string& graph_storage_type = vsag::GRAPH_STORAGE_TYPE_VALUE_FLAT) {
     PyramidTestIndex result;
     vsag::IndexCommonParam common_param;
     common_param.dim_ = PYRAMID_TEST_DIM;
@@ -156,6 +157,7 @@ MakeRootPyramidIndex(const std::string& root_graph_type,
     })");
     external[vsag::PYRAMID_ROOT_GRAPH_TYPE].SetString(root_graph_type);
     external[vsag::PYRAMID_GRAPH_TYPE].SetString(graph_type);
+    external[vsag::PYRAMID_GRAPH_STORAGE_TYPE].SetString(graph_storage_type);
     external[vsag::PYRAMID_USE_REORDER].SetBool(use_reorder || use_rabitq_with_sq8);
     external[vsag::PYRAMID_SUPPORT_DUPLICATE].SetBool(support_duplicate);
     external[vsag::PYRAMID_BUILD_THREAD_COUNT].SetUint64(build_thread_count);
@@ -805,13 +807,23 @@ TEST_CASE("Pyramid exposes stored raw vectors", "[ut][pyramid][raw_vector]") {
 
 TEST_CASE("Pyramid multi-layer root builds routes and survives serialization",
           "[ut][pyramid][root_graph]") {
+    const auto graph_storage_type =
+        GENERATE(std::string(vsag::GRAPH_STORAGE_TYPE_VALUE_FLAT),
+                 std::string(vsag::GRAPH_STORAGE_TYPE_VALUE_COMPRESSED));
+    CAPTURE(graph_storage_type);
     constexpr int64_t count = 512;
     std::vector<float> vectors(count * PYRAMID_TEST_DIM);
     FillRootVectors(vectors, count);
     std::vector<int64_t> ids(count);
     std::iota(ids.begin(), ids.end(), 0);
     std::vector<std::string> paths(count, "");
-    auto source = MakeRootPyramidIndex(vsag::PYRAMID_ROOT_GRAPH_TYPE_MULTI_LAYER);
+    auto source = MakeRootPyramidIndex(vsag::PYRAMID_ROOT_GRAPH_TYPE_MULTI_LAYER,
+                                       false,
+                                       vsag::GRAPH_TYPE_VALUE_NSW,
+                                       false,
+                                       1,
+                                       false,
+                                       graph_storage_type);
     REQUIRE(source.index->Build(MakePyramidDataset(vectors.data(), ids.data(), paths.data(), count))
                 .empty());
 
@@ -819,7 +831,7 @@ TEST_CASE("Pyramid multi-layer root builds routes and survives serialization",
     auto root_stats = stats["root_graphs"]["default"];
     REQUIRE(root_stats[vsag::PYRAMID_ROOT_GRAPH_TYPE].GetString() ==
             vsag::PYRAMID_ROOT_GRAPH_TYPE_MULTI_LAYER);
-    REQUIRE(root_stats["bottom_graph_storage_type"].GetString() == "flat");
+    REQUIRE(root_stats["bottom_graph_storage_type"].GetString() == graph_storage_type);
     REQUIRE(root_stats["bottom_graph_node_count"].GetUint64() == count);
     REQUIRE(root_stats["bottom_graph_size"].GetUint64() > 0);
     REQUIRE(root_stats["route_graph_count"].GetUint64() > 0);
@@ -858,7 +870,13 @@ TEST_CASE("Pyramid multi-layer root builds routes and survives serialization",
     std::stringstream stream;
     vsag::IOStreamWriter writer(stream);
     source.index->Serialize(writer);
-    auto restored = MakeRootPyramidIndex(vsag::PYRAMID_ROOT_GRAPH_TYPE_MULTI_LAYER);
+    auto restored = MakeRootPyramidIndex(vsag::PYRAMID_ROOT_GRAPH_TYPE_MULTI_LAYER,
+                                         false,
+                                         vsag::GRAPH_TYPE_VALUE_NSW,
+                                         false,
+                                         1,
+                                         false,
+                                         graph_storage_type);
     vsag::IOStreamReader reader(stream);
     restored.index->Deserialize(reader);
     auto restored_result = restored.index->KnnSearch(query, 10, search_params, nullptr);
@@ -879,6 +897,27 @@ TEST_CASE("Pyramid multi-layer root builds routes and survives serialization",
         REQUIRE(std::abs(restored_result->GetDistances()[i] - source_result->GetDistances()[i]) <
                 1e-6F);
     }
+
+    constexpr int64_t post_restore_count = 512;
+    std::vector<float> post_restore_vectors(post_restore_count * PYRAMID_TEST_DIM);
+    FillRootVectors(post_restore_vectors, post_restore_count);
+    std::vector<int64_t> post_restore_ids(post_restore_count);
+    std::iota(post_restore_ids.begin(), post_restore_ids.end(), count + added_count);
+    std::vector<std::string> post_restore_paths(post_restore_count, "");
+    REQUIRE(restored.index
+                ->Add(MakePyramidDataset(post_restore_vectors.data(),
+                                         post_restore_ids.data(),
+                                         post_restore_paths.data(),
+                                         post_restore_count))
+                .empty());
+    REQUIRE(restored.index->GetNumElements() == count + added_count + post_restore_count);
+    auto post_restore_query = vsag::Dataset::Make()
+                                  ->NumElements(1)
+                                  ->Dim(PYRAMID_TEST_DIM)
+                                  ->Float32Vectors(post_restore_vectors.data())
+                                  ->Owner(false);
+    REQUIRE(restored.index->KnnSearch(post_restore_query, 10, search_params, nullptr)->GetDim() ==
+            10);
 }
 
 TEST_CASE("Pyramid NSW Build and empty Add share routed construction",

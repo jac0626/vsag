@@ -23,6 +23,7 @@
 
 #include "algorithm/inner_index_interface.h"
 #include "analyzer/analyzer.h"
+#include "datacell/compressed_graph_datacell_parameter.h"
 #include "datacell/flatten_interface.h"
 #include "datacell/graph_datacell_parameter.h"
 #include "impl/distance_provider_for_graph.h"
@@ -91,9 +92,23 @@ Pyramid::make_route_graph_param(const GraphInterfaceParamPtr& bottom_graph_param
 }
 
 GraphInterfaceParamPtr
-Pyramid::make_root_graph_param(const GraphInterfaceParamPtr& child_graph_param) {
+Pyramid::make_root_graph_param(const GraphInterfaceParamPtr& child_graph_param,
+                               GraphStorageTypes storage_type) {
     auto child = std::dynamic_pointer_cast<SparseGraphDatacellParameter>(child_graph_param);
     CHECK_ARGUMENT(child != nullptr, "Pyramid multi-layer root requires sparse child graphs");
+    if (storage_type == GraphStorageTypes::GRAPH_STORAGE_TYPE_VALUE_COMPRESSED) {
+        CHECK_ARGUMENT(child->max_degree_ <= std::numeric_limits<uint8_t>::max(),
+                       "Pyramid compressed root max_degree must not exceed 255");
+        CHECK_ARGUMENT(not child->use_reverse_edges_,
+                       "Pyramid compressed root does not support reverse edges");
+        auto root = std::make_shared<CompressedGraphDatacellParameter>();
+        root->max_degree_ = child->max_degree_;
+        root->support_duplicate_ = child->support_duplicate_;
+        root->use_reverse_edges_ = child->use_reverse_edges_;
+        return root;
+    }
+    CHECK_ARGUMENT(storage_type == GraphStorageTypes::GRAPH_STORAGE_TYPE_VALUE_FLAT,
+                   "Pyramid multi-layer root supports flat or compressed graph storage");
     auto root = std::make_shared<GraphDataCellParameter>();
     root->max_degree_ = child->max_degree_;
     root->support_remove_ = child->support_delete_;
@@ -107,10 +122,12 @@ Pyramid::make_root_graph_param(const GraphInterfaceParamPtr& child_graph_param) 
 std::unique_ptr<IndexNode>
 Pyramid::create_root_node(const GraphInterfaceParamPtr& child_graph_param,
                           uint32_t index_min_size,
-                          const std::string& root_graph_type) {
+                          const std::string& root_graph_type,
+                          GraphStorageTypes root_graph_storage_type) {
     const bool multi_layer = root_graph_type == PYRAMID_ROOT_GRAPH_TYPE_MULTI_LAYER;
-    auto root_graph_param =
-        multi_layer ? make_root_graph_param(child_graph_param) : child_graph_param;
+    auto root_graph_param = multi_layer
+                                ? make_root_graph_param(child_graph_param, root_graph_storage_type)
+                                : child_graph_param;
     auto root = std::make_unique<IndexNode>(
         allocator_, root_graph_param, index_min_size, common_param_, child_graph_param);
     if (multi_layer) {
@@ -482,6 +499,11 @@ IndexNode::Deserialize(StreamReader& reader) {
         graph_ = GraphInterface::MakeInstance(graph_param_, common_param_);
         CHECK_ARGUMENT(graph_ != nullptr, "failed to create Pyramid graph storage");
         graph_->Deserialize(reader);
+        if (graph_param_->graph_storage_type_ == GraphStorageTypes::GRAPH_STORAGE_TYPE_VALUE_FLAT ||
+            graph_param_->graph_storage_type_ ==
+                GraphStorageTypes::GRAPH_STORAGE_TYPE_VALUE_COMPRESSED) {
+            graph_capacity_ = graph_->MaxCapacity();
+        }
     } else if (status_ == Status::FLAT) {
         StreamReader::ReadVector(reader, ids_);
     }
@@ -585,10 +607,14 @@ IndexNode::get_graph_stats() const {
     JsonType stats;
     stats[PYRAMID_ROOT_GRAPH_TYPE].SetString(has_routing() ? PYRAMID_ROOT_GRAPH_TYPE_MULTI_LAYER
                                                            : PYRAMID_ROOT_GRAPH_TYPE_SINGLE_LAYER);
-    stats["bottom_graph_storage_type"].SetString(
-        graph_param_->graph_storage_type_ == GraphStorageTypes::GRAPH_STORAGE_TYPE_VALUE_FLAT
-            ? GRAPH_STORAGE_TYPE_VALUE_FLAT
-            : "sparse");
+    const char* storage_type = "sparse";
+    if (graph_param_->graph_storage_type_ == GraphStorageTypes::GRAPH_STORAGE_TYPE_VALUE_FLAT) {
+        storage_type = GRAPH_STORAGE_TYPE_VALUE_FLAT;
+    } else if (graph_param_->graph_storage_type_ ==
+               GraphStorageTypes::GRAPH_STORAGE_TYPE_VALUE_COMPRESSED) {
+        storage_type = GRAPH_STORAGE_TYPE_VALUE_COMPRESSED;
+    }
+    stats["bottom_graph_storage_type"].SetString(storage_type);
     stats["bottom_graph_node_count"].SetUint64(graph_ == nullptr ? 0 : graph_->TotalCount());
     stats["bottom_graph_size"].SetUint64(graph_ == nullptr ? 0 : graph_->GetMemoryUsage());
 
@@ -633,13 +659,18 @@ IndexNode::get_ids_unlocked() const {
 void
 IndexNode::resize_graph(InnerIdType new_capacity) {
     std::unique_lock lock(mutex_);
-    auto flat_param = std::dynamic_pointer_cast<GraphDataCellParameter>(graph_param_);
-    if (flat_param == nullptr) {
+    if (graph_param_->graph_storage_type_ != GraphStorageTypes::GRAPH_STORAGE_TYPE_VALUE_FLAT &&
+        graph_param_->graph_storage_type_ !=
+            GraphStorageTypes::GRAPH_STORAGE_TYPE_VALUE_COMPRESSED) {
         return;
     }
-    flat_param->init_max_capacity_ = static_cast<uint64_t>(new_capacity);
+    graph_capacity_ = std::max(graph_capacity_, new_capacity);
+    auto flat_param = std::dynamic_pointer_cast<GraphDataCellParameter>(graph_param_);
+    if (flat_param != nullptr) {
+        flat_param->init_max_capacity_ = static_cast<uint64_t>(graph_capacity_);
+    }
     if (graph_ != nullptr) {
-        graph_->Resize(new_capacity);
+        graph_->Resize(graph_capacity_);
     }
 }
 
@@ -659,12 +690,15 @@ IndexNode::Init() {
             }
             graph_ = GraphInterface::MakeInstance(graph_param_, common_param_);
             CHECK_ARGUMENT(graph_ != nullptr, "failed to create Pyramid graph storage");
-            if (graph_param_->graph_storage_type_ ==
-                GraphStorageTypes::GRAPH_STORAGE_TYPE_VALUE_FLAT) {
+            if (graph_capacity_ == 0 && graph_param_->graph_storage_type_ ==
+                                            GraphStorageTypes::GRAPH_STORAGE_TYPE_VALUE_FLAT) {
                 const auto flat_param =
                     std::dynamic_pointer_cast<GraphDataCellParameter>(graph_param_);
                 CHECK_ARGUMENT(flat_param != nullptr, "missing Pyramid flat graph parameters");
-                graph_->Resize(static_cast<InnerIdType>(flat_param->init_max_capacity_));
+                graph_capacity_ = static_cast<InnerIdType>(flat_param->init_max_capacity_);
+            }
+            if (graph_capacity_ > 0) {
+                graph_->Resize(graph_capacity_);
             }
             status_ = Status::GRAPH;
         } else {

@@ -163,6 +163,7 @@ private:
     const IndexCommonParam& common_param_;
     GraphInterfaceParamPtr graph_param_{nullptr};
     GraphInterfaceParamPtr child_graph_param_{nullptr};
+    InnerIdType graph_capacity_{0};
     std::unique_ptr<RoutingOverlay> routing_{nullptr};
 };
 
@@ -203,8 +204,10 @@ public:
                     new_gp->max_degree_ = h_param.max_degree;
                     graph_param = new_gp;
                 }
-                auto root =
-                    create_root_node(graph_param, h_param.index_min_size, h_param.root_graph_type);
+                auto root = create_root_node(graph_param,
+                                             h_param.index_min_size,
+                                             h_param.root_graph_type,
+                                             pyramid_param->root_graph_storage_type);
                 auto h = std::make_unique<Hierarchy>(h_param.name, std::move(root), allocator_);
                 h->no_build_levels.assign(h_param.no_build_levels.begin(),
                                           h_param.no_build_levels.end());
@@ -213,8 +216,10 @@ public:
                 hierarchies_.insert({h_param.name, std::move(h)});
             }
         } else {
-            auto root = create_root_node(
-                pyramid_param->graph_param, index_min_size_, pyramid_param->root_graph_type);
+            auto root = create_root_node(pyramid_param->graph_param,
+                                         index_min_size_,
+                                         pyramid_param->root_graph_type,
+                                         pyramid_param->root_graph_storage_type);
             auto h = std::make_unique<Hierarchy>("", std::move(root), allocator_);
             h->no_build_levels.assign(pyramid_param->no_build_levels.begin(),
                                       pyramid_param->no_build_levels.end());
@@ -492,12 +497,14 @@ private:
     make_route_graph_param(const GraphInterfaceParamPtr& bottom_graph_param);
 
     static GraphInterfaceParamPtr
-    make_root_graph_param(const GraphInterfaceParamPtr& child_graph_param);
+    make_root_graph_param(const GraphInterfaceParamPtr& child_graph_param,
+                          GraphStorageTypes storage_type);
 
     std::unique_ptr<IndexNode>
     create_root_node(const GraphInterfaceParamPtr& child_graph_param,
                      uint32_t index_min_size,
-                     const std::string& root_graph_type);
+                     const std::string& root_graph_type,
+                     GraphStorageTypes root_graph_storage_type);
 
     int
     sample_route_level(const IndexNode& node);

@@ -45,6 +45,43 @@ validate_root_graph_type(const std::string& root_graph_type, const std::string& 
                                root_graph_type));
 }
 
+GraphStorageTypes
+parse_root_graph_storage_type(const JsonType& graph_json) {
+    if (not graph_json.Contains(GRAPH_STORAGE_TYPE_KEY)) {
+        return GraphStorageTypes::GRAPH_STORAGE_TYPE_VALUE_FLAT;
+    }
+    CHECK_ARGUMENT(graph_json[GRAPH_STORAGE_TYPE_KEY].IsString(),
+                   "graph_storage_type must be a string");
+    const auto storage_type = graph_json[GRAPH_STORAGE_TYPE_KEY].GetString();
+    if (storage_type == GRAPH_STORAGE_TYPE_VALUE_FLAT) {
+        return GraphStorageTypes::GRAPH_STORAGE_TYPE_VALUE_FLAT;
+    }
+    if (storage_type == GRAPH_STORAGE_TYPE_VALUE_COMPRESSED) {
+        return GraphStorageTypes::GRAPH_STORAGE_TYPE_VALUE_COMPRESSED;
+    }
+    CHECK_ARGUMENT(false, fmt::format("invalid graph_storage_type: {}", storage_type));
+    return GraphStorageTypes::GRAPH_STORAGE_TYPE_VALUE_FLAT;
+}
+
+const char*
+root_graph_storage_type_to_string(GraphStorageTypes storage_type) {
+    if (storage_type == GraphStorageTypes::GRAPH_STORAGE_TYPE_VALUE_COMPRESSED) {
+        return GRAPH_STORAGE_TYPE_VALUE_COMPRESSED;
+    }
+    return GRAPH_STORAGE_TYPE_VALUE_FLAT;
+}
+
+bool
+has_multi_layer_root(const PyramidParameters& params) {
+    if (not params.has_hierarchies) {
+        return params.root_graph_type == PYRAMID_ROOT_GRAPH_TYPE_MULTI_LAYER;
+    }
+    return std::any_of(
+        params.hierarchies.begin(), params.hierarchies.end(), [](const auto& hierarchy) {
+            return hierarchy.root_graph_type == PYRAMID_ROOT_GRAPH_TYPE_MULTI_LAYER;
+        });
+}
+
 void
 validate_root_graph_config(const std::string& root_graph_type,
                            const std::vector<int32_t>& no_build_levels,
@@ -197,6 +234,7 @@ PyramidParameters::FromJson(const JsonType& json) {
 
     graph_param = GraphInterfaceParameter::GetGraphParameterByJson(
         GraphStorageTypes::GRAPH_STORAGE_TYPE_SPARSE, graph_json);
+    this->root_graph_storage_type = parse_root_graph_storage_type(graph_json);
     this->alpha = graph_json[ALPHA_KEY].GetFloat();
     this->max_degree = graph_json[GRAPH_PARAM_MAX_DEGREE_KEY].GetInt();
 
@@ -287,6 +325,8 @@ PyramidParameters::ToJson() const {
     json[BASE_CODES_KEY].SetJson(base_codes_param->ToJson());
 
     auto graph_json = graph_param->ToJson();
+    graph_json[GRAPH_STORAGE_TYPE_KEY].SetString(
+        root_graph_storage_type_to_string(this->root_graph_storage_type));
     graph_json[ALPHA_KEY].SetFloat(this->alpha);
     graph_json[GRAPH_TYPE_KEY].SetString(this->graph_type);
     if (this->graph_type == GRAPH_TYPE_ODESCENT) {
@@ -369,6 +409,9 @@ PyramidParameters::CheckCompatibility(const ParamPtr& other) const {
     }
     CHECK_FIELD_EQ(*this, *p, index_min_size);
     CHECK_FIELD_EQ(*this, *p, root_graph_type);
+    if (has_multi_layer_root(*this)) {
+        CHECK_FIELD_EQ(*this, *p, root_graph_storage_type);
+    }
     CHECK_FIELD_EQ(*this, *p, support_duplicate);
     return true;
 }

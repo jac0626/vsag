@@ -84,6 +84,7 @@ auto result = index->KnnSearch(
 | `mrle_dim` | int | `0` | MRLE 保留的前缀维度；`0` 表示保持输入维度。 |
 | `max_degree` | int | `64` | 子图内节点的最大出度 |
 | `graph_type` | string | `"nsw"` | `nsw` 或 `odescent` |
+| `graph_storage_type` | string | `"flat"` | `multi_layer` 根节点的底图存储：`flat` 偏向构建和检索速度，`compressed` 减少图内存。压缩存储要求 `max_degree <= 255`。单层根图、路由图和子图仍使用 Sparse。 |
 | `ef_construction` | int | `400` | `nsw` 构图时的候选集大小 |
 | `alpha` | float | `1.2` | 构图剪枝系数 |
 | `graph_iter_turn` | int | — | ODescent 迭代轮数（`graph_type: "odescent"` 时生效） |
@@ -99,7 +100,7 @@ auto result = index->KnnSearch(
 | `base_file_path` / `precise_file_path` | string | — | `buffer_io`、`async_io`、`uring_io`、`mmap_io` 等磁盘存储必须设置 |
 | `store_raw_vector` | bool | `false` | 保留 FP32 原始向量，用于 `GetRawVectorByIds` 和精确的按 ID 距离计算 |
 | `index_min_size` | int | `0` | 子索引的最小规模；小于该值的分区会退化为线性扫描 |
-| `root_graph_type` | string | `"single_layer"` | 根图结构：`single_layer` 保留原有稀疏底图；`multi_layer` 使用预分配的稠密 Flat 底图、类似 HGraph 的稀疏路由层以及联合构图流程。`multi_layer` 要求 `graph_type: "nsw"` 且第 0 层参与构建。 |
+| `root_graph_type` | string | `"single_layer"` | 根图结构：`single_layer` 保留原有稀疏底图；`multi_layer` 使用预分配的 Flat 或 Compressed 底图、类似 HGraph 的稀疏路由层以及联合构图流程。`multi_layer` 要求 `graph_type: "nsw"` 且第 0 层参与构建。 |
 | `support_duplicate` | bool | `false` | 是否允许重复 ID |
 | `build_thread_count` | int | `1` | 构建阶段并发线程数 |
 | `hierarchies` | array | `[]` | 命名层级定义。每个元素可以是字符串（继承全部顶层参数）或对象（含 `name` 及可选覆盖参数：`max_degree`、`ef_construction`、`alpha`、`no_build_levels`、`index_min_size`、`root_graph_type`）。设置后激活多层级模式，每个层级维护独立的路径树。 |
@@ -188,12 +189,13 @@ auto result = index->KnnSearch(
 可按层级覆盖的参数：`max_degree`、`ef_construction`、`alpha`、`no_build_levels`、
 `index_min_size`、`root_graph_type`。
 
-`root_graph_type: "multi_layer"` 只改变所选层级的根节点：根节点使用预分配的稠密 Flat
-底图，稀疏路由图先选择更好的入口点，再进入底图检索。批量 Build 与增量 Add 都使用类似
-HGraph 的 route 与 bottom 联合插入流程。该结构要求 `graph_type: "nsw"`；参数校验会拒绝
-`multi_layer` 与 `odescent` 的组合。存在独立 precise storage 时，底图和路由图的边统一使用
-precise codes 构建，否则使用 base codes；查询遍历继续使用 base codes，最终精排使用配置的
-reorder source。
+`root_graph_type: "multi_layer"` 只改变所选层级的根节点。底图使用顶层
+`graph_storage_type`：默认使用 Flat，也可使用 Compressed，以构建和检索速度换取更低的图
+内存；路由图和子图仍使用 Sparse。稀疏路由图先选择更好的入口点，再进入底图检索。批量
+Build 与增量 Add 都使用类似 HGraph 的 route 与 bottom 联合插入流程。该结构要求
+`graph_type: "nsw"`；参数校验会拒绝 `multi_layer` 与 `odescent` 的组合。存在独立 precise
+storage 时，底图和路由图的边统一使用 precise codes 构建，否则使用 base codes；查询遍历
+继续使用 base codes，最终精排使用配置的 reorder source。
 
 ```json
 {
