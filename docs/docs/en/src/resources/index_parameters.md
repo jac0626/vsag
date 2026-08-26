@@ -128,7 +128,8 @@ Pyramid supports organising multiple subgraphs by tag:
 ```
 
 `store_paths` is a top-level Pyramid build parameter and defaults to `false`. Enable it when
-`GetDataByIds` must return the original default or named-hierarchy paths; see the
+`GetDataByIdsWithFlag` must return the original default or named-hierarchy paths with
+`DATA_FLAG_PATH`; see the
 [Pyramid parameter table](../indexes/pyramid.md#build-parameters) for its completeness and
 persistence semantics.
 

@@ -66,26 +66,34 @@ Pyramid::deserialize_paths(StreamReader& reader, uint64_t max_count) {
 }
 
 DatasetPtr
-Pyramid::GetDataByIds(const int64_t* ids, int64_t count) const {
+Pyramid::GetDataByIdsWithFlag(const int64_t* ids,
+                              int64_t count,
+                              uint64_t selected_data_flag) const {
+    const bool wants_paths = (selected_data_flag & DATA_FLAG_PATH) != 0U;
+    if (wants_paths) {
+        CHECK_ARGUMENT(store_paths_, "store_paths is false");
+    }
+
     Vector<InnerIdType> inner_ids(allocator_);
-    auto result = this->get_data_by_ids(ids, count, inner_ids);
-    if (not store_paths_) {
+    auto result = this->get_data_by_ids_with_flag(ids, count, selected_data_flag, inner_ids);
+    if (not wants_paths) {
         return result;
     }
 
     for (const auto& [hierarchy_name, hierarchy] : hierarchies_) {
         if (hierarchy->path_store == nullptr) {
-            continue;
+            throw VsagException(ErrorType::INTERNAL_ERROR, "Pyramid path store is missing");
         }
         auto paths = std::make_unique<std::string[]>(static_cast<uint64_t>(count));
         if (not hierarchy->path_store->GetPaths(inner_ids, paths.get())) {
             continue;
         }
         if (hierarchy_name.empty()) {
-            result->Paths(paths.release());
+            result->Paths(paths.get());
         } else {
-            result->Paths(hierarchy_name, paths.release());
+            result->Paths(hierarchy_name, paths.get());
         }
+        paths.release();
     }
     return result;
 }

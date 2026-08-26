@@ -98,7 +98,8 @@ RequirePyramidPaths(const vsag::IndexPtr& index,
                     const std::vector<std::string>& expected_category_paths) {
     REQUIRE(ids.size() == expected_site_paths.size());
     REQUIRE(ids.size() == expected_category_paths.size());
-    auto result = index->GetDataByIds(ids.data(), static_cast<int64_t>(ids.size()));
+    auto result = index->GetDataByIdsWithFlag(
+        ids.data(), static_cast<int64_t>(ids.size()), DATA_FLAG_ID | DATA_FLAG_PATH);
     REQUIRE(result.has_value());
     const auto data = result.value();
     REQUIRE(data->GetPaths() == nullptr);

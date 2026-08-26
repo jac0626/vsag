@@ -98,6 +98,16 @@ GetData(const vsag::IndexPtr& index, const std::vector<int64_t>& ids) {
     return result.value();
 }
 
+vsag::DatasetPtr
+GetDataWithFlag(const vsag::IndexPtr& index,
+                const std::vector<int64_t>& ids,
+                uint64_t selected_data_flag) {
+    auto result = index->GetDataByIdsWithFlag(
+        ids.data(), static_cast<int64_t>(ids.size()), selected_data_flag);
+    REQUIRE(result.has_value());
+    return result.value();
+}
+
 void
 RequirePaths(const std::string* actual, const std::vector<std::string>& expected) {
     REQUIRE(actual != nullptr);
@@ -137,9 +147,10 @@ TEST_CASE("Pyramid retains unnamed paths for NSW Build", "[ft][pyramid][paths]")
     auto base = MakeDataset({101, 42, 900}, {{"", {"alpha", "", "beta/gamma"}}});
 
     REQUIRE(index->Build(base).has_value());
-    auto data = GetData(index, {900, 101, 42});
+    auto data = GetDataWithFlag(index, {900, 101, 42}, DATA_FLAG_PATH);
 
     RequirePaths(data->GetPaths(), {"beta/gamma", "alpha", ""});
+    REQUIRE(data->GetIds() == nullptr);
 }
 
 TEST_CASE("Pyramid retains unnamed paths for ODescent Build", "[ft][pyramid][paths]") {
@@ -147,9 +158,13 @@ TEST_CASE("Pyramid retains unnamed paths for ODescent Build", "[ft][pyramid][pat
     auto base = MakeDataset({7, 3, 11}, {{"", {"one", "two", "three"}}});
 
     REQUIRE(index->Build(base).has_value());
-    auto data = GetData(index, {3, 11, 7});
+    auto data = GetDataWithFlag(index, {3, 11, 7}, DATA_FLAG_ID | DATA_FLAG_PATH);
 
     RequirePaths(data->GetPaths(), {"two", "three", "one"});
+    REQUIRE(data->GetIds() != nullptr);
+    REQUIRE(data->GetIds()[0] == 3);
+    REQUIRE(data->GetIds()[1] == 11);
+    REQUIRE(data->GetIds()[2] == 7);
 }
 
 TEST_CASE("Pyramid Clone retains paths", "[ft][pyramid][paths]") {
@@ -158,7 +173,8 @@ TEST_CASE("Pyramid Clone retains paths", "[ft][pyramid][paths]") {
 
     auto clone = index->Clone();
     REQUIRE(clone.has_value());
-    RequirePaths(GetData(clone.value(), {8, 4})->GetPaths(), {"right", "left"});
+    RequirePaths(GetDataWithFlag(clone.value(), {8, 4}, DATA_FLAG_PATH)->GetPaths(),
+                 {"right", "left"});
 }
 
 TEST_CASE("Pyramid Add stores paths using accepted input offsets", "[ft][pyramid][paths]") {
@@ -170,7 +186,7 @@ TEST_CASE("Pyramid Add stores paths using accepted input offsets", "[ft][pyramid
     REQUIRE(add_result.has_value());
     REQUIRE(add_result.value() == std::vector<int64_t>{10});
 
-    auto data = GetData(index, {20, 30, 10});
+    auto data = GetDataWithFlag(index, {20, 30, 10}, DATA_FLAG_PATH);
     RequirePaths(data->GetPaths(), {"path-20", "path-30", "original"});
 }
 
@@ -181,12 +197,43 @@ TEST_CASE("Pyramid returns only complete named hierarchy paths", "[ft][pyramid][
     REQUIRE(index->Build(base).has_value());
     REQUIRE(index->Add(MakeDataset({3}, {{"site", {"jp/tokyo"}}})).has_value());
 
-    auto complete = GetData(index, {2, 1});
+    auto complete = GetDataWithFlag(index, {2, 1}, DATA_FLAG_PATH);
     REQUIRE(complete->GetPaths() == nullptr);
     RequirePaths(complete->GetPaths("site"), {"uk/london", "us/ca"});
     RequirePaths(complete->GetPaths("category"), {"science/physics", "tech/ai"});
 
-    auto partial = GetData(index, {1, 3});
+    auto partial = GetDataWithFlag(index, {1, 3}, DATA_FLAG_PATH);
     RequirePaths(partial->GetPaths("site"), {"us/ca", "jp/tokyo"});
     REQUIRE(partial->GetPaths("category") == nullptr);
+}
+
+TEST_CASE("Pyramid returns paths only when selected", "[ft][pyramid][paths]") {
+    auto index = MakePyramidIndex("nsw", true);
+    REQUIRE(index->Build(MakeDataset({1, 2}, {{"", {"a", "b"}}})).has_value());
+
+    auto all_standard_data = GetData(index, {2, 1});
+    REQUIRE(all_standard_data->GetIds() != nullptr);
+    REQUIRE(all_standard_data->GetPaths() == nullptr);
+
+    auto ids_only = GetDataWithFlag(index, {2, 1}, DATA_FLAG_ID);
+    REQUIRE(ids_only->GetIds() != nullptr);
+    REQUIRE(ids_only->GetPaths() == nullptr);
+
+    auto paths_only = GetDataWithFlag(index, {2, 1}, DATA_FLAG_PATH);
+    REQUIRE(paths_only->GetIds() == nullptr);
+    RequirePaths(paths_only->GetPaths(), {"b", "a"});
+}
+
+TEST_CASE("Pyramid rejects selected paths when storage is disabled", "[ft][pyramid][paths]") {
+    auto index = MakePyramidIndex("nsw", false);
+    REQUIRE(index->Build(MakeDataset({1}, {{"", {"a"}}})).has_value());
+
+    const int64_t id = 1;
+    auto ids_only = index->GetDataByIdsWithFlag(&id, 1, DATA_FLAG_ID);
+    REQUIRE(ids_only.has_value());
+    REQUIRE(ids_only.value()->GetIds()[0] == id);
+
+    auto result = index->GetDataByIdsWithFlag(&id, 1, DATA_FLAG_PATH);
+    REQUIRE_FALSE(result.has_value());
+    REQUIRE(result.error().type == vsag::ErrorType::INVALID_ARGUMENT);
 }
