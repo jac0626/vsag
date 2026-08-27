@@ -71,7 +71,8 @@ Pyramid::GetDataByIdsWithFlag(const int64_t* ids,
                               uint64_t selected_data_flag) const {
     const bool wants_paths = (selected_data_flag & DATA_FLAG_PATH) != 0U;
     if (wants_paths) {
-        CHECK_ARGUMENT(store_paths_, "store_paths is false");
+        CHECK_ARGUMENT(store_paths_,
+                       "DATA_FLAG_PATH requires store_paths=true in the Pyramid build parameters");
     }
 
     Vector<InnerIdType> inner_ids(allocator_);
