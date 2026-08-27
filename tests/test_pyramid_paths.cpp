@@ -21,6 +21,8 @@
 #include <utility>
 #include <vector>
 
+#include "storage/serialization.h"
+#include "storage/stream_reader.h"
 #include "vsag/vsag.h"
 
 namespace {
@@ -104,6 +106,23 @@ RequirePaths(const std::string* actual, const std::vector<std::string>& expected
     }
 }
 
+uint64_t
+GetPathSidecarOffset(const vsag::Binary& binary, const std::vector<std::string>& paths) {
+    auto read_func = [&binary](uint64_t offset, uint64_t length, void* destination) {
+        std::memcpy(destination, binary.data.get() + offset, length);
+    };
+    ReadFuncStreamReader reader(read_func, 0, binary.size);
+    const auto footer = vsag::Footer::Parse(reader);
+    REQUIRE(footer != nullptr);
+
+    uint64_t payload_size = sizeof(uint64_t);
+    for (const auto& path : paths) {
+        payload_size += sizeof(uint8_t) + sizeof(uint64_t) + static_cast<uint64_t>(path.size());
+    }
+    REQUIRE(binary.size >= footer->Length() + payload_size);
+    return binary.size - footer->Length() - payload_size;
+}
+
 }  // namespace
 
 TEST_CASE("Pyramid advertises GetDataByIds only when paths are retained",
@@ -139,6 +158,29 @@ TEST_CASE("Pyramid retained paths support empty-index serialization",
     auto restored = MakePyramidIndex("nsw", true);
     REQUIRE(restored->Deserialize(binary_set.value()).has_value());
     REQUIRE(restored->Serialize().has_value());
+}
+
+TEST_CASE("Pyramid serialized path storage configuration must match",
+          "[ft][pyramid][paths][serialization]") {
+    SECTION("stored paths require an enabled reader") {
+        auto index = MakePyramidIndex("nsw", true);
+        REQUIRE(index->Build(MakeDataset({4}, {"path"})).has_value());
+        auto binary_set = index->Serialize();
+        REQUIRE(binary_set.has_value());
+
+        auto restored = MakePyramidIndex("nsw", false);
+        REQUIRE_FALSE(restored->Deserialize(binary_set.value()).has_value());
+    }
+
+    SECTION("a reader requiring paths rejects an index without them") {
+        auto index = MakePyramidIndex("nsw", false);
+        REQUIRE(index->Build(MakeDataset({4}, {"path"})).has_value());
+        auto binary_set = index->Serialize();
+        REQUIRE(binary_set.has_value());
+
+        auto restored = MakePyramidIndex("nsw", true);
+        REQUIRE_FALSE(restored->Deserialize(binary_set.value()).has_value());
+    }
 }
 
 TEST_CASE("Pyramid retains paths for NSW and ODescent Build", "[ft][pyramid][paths]") {
@@ -219,27 +261,16 @@ TEST_CASE("Pyramid rejects selected paths when storage is disabled", "[ft][pyram
 
 TEST_CASE("Pyramid rejects an incomplete serialized path sidecar",
           "[ft][pyramid][paths][serialization]") {
+    const std::vector<std::string> paths = {"left", "right"};
     auto index = MakePyramidIndex("nsw", true);
-    REQUIRE(index->Build(MakeDataset({4, 8}, {"left", "right"})).has_value());
+    REQUIRE(index->Build(MakeDataset({4, 8}, paths)).has_value());
 
     auto binary_set = index->Serialize();
     REQUIRE(binary_set.has_value());
     auto binary = binary_set.value().Get("pyramid");
-    constexpr uint64_t paths_magic = 0x5059525041544853ULL;
-    bool found_paths = false;
-    for (uint64_t offset = 0; offset + sizeof(uint64_t) * 2 <= binary.size; ++offset) {
-        uint64_t value = 0;
-        std::memcpy(&value, binary.data.get() + offset, sizeof(value));
-        if (value == paths_magic) {
-            const uint64_t empty_slot_count = 0;
-            std::memcpy(binary.data.get() + offset + sizeof(value),
-                        &empty_slot_count,
-                        sizeof(empty_slot_count));
-            found_paths = true;
-            break;
-        }
-    }
-    REQUIRE(found_paths);
+    const auto sidecar_offset = GetPathSidecarOffset(binary, paths);
+    const uint64_t empty_slot_count = 0;
+    std::memcpy(binary.data.get() + sidecar_offset, &empty_slot_count, sizeof(empty_slot_count));
 
     auto restored = MakePyramidIndex("nsw", true);
     REQUIRE_FALSE(restored->Deserialize(binary_set.value()).has_value());
@@ -247,25 +278,15 @@ TEST_CASE("Pyramid rejects an incomplete serialized path sidecar",
 
 TEST_CASE("Pyramid reports a retained path missing at query time",
           "[ft][pyramid][paths][serialization]") {
+    const std::vector<std::string> paths = {""};
     auto index = MakePyramidIndex("nsw", true);
-    REQUIRE(index->Build(MakeDataset({4}, {""})).has_value());
+    REQUIRE(index->Build(MakeDataset({4}, paths)).has_value());
 
     auto binary_set = index->Serialize();
     REQUIRE(binary_set.has_value());
     auto binary = binary_set.value().Get("pyramid");
-    constexpr uint64_t paths_magic = 0x5059525041544853ULL;
-    bool found_paths = false;
-    for (uint64_t offset = 0; offset + sizeof(uint64_t) * 2 + sizeof(uint8_t) <= binary.size;
-         ++offset) {
-        uint64_t value = 0;
-        std::memcpy(&value, binary.data.get() + offset, sizeof(value));
-        if (value == paths_magic) {
-            binary.data.get()[offset + sizeof(uint64_t) * 2] = 0;
-            found_paths = true;
-            break;
-        }
-    }
-    REQUIRE(found_paths);
+    const auto sidecar_offset = GetPathSidecarOffset(binary, paths);
+    binary.data.get()[sidecar_offset + sizeof(uint64_t)] = 0;
 
     auto restored = MakePyramidIndex("nsw", true);
     REQUIRE(restored->Deserialize(binary_set.value()).has_value());

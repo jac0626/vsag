@@ -29,9 +29,6 @@
 namespace vsag {
 
 const static float RADIUS_EPSILON = 1.1F;
-static constexpr uint64_t PYRAMID_PATHS_MAGIC = 0x5059525041544853ULL;  // PYRPATHS
-static constexpr int64_t PYRAMID_PATHS_FORMAT_VERSION = 1;
-static constexpr const char* PYRAMID_PATHS_FORMAT_VERSION_KEY = "pyramid_paths_format_version";
 
 std::vector<std::string>
 split(const std::string& str, char delimiter) {
@@ -444,16 +441,13 @@ Pyramid::Serialize(StreamWriter& writer) const {
     root_->Serialize(writer);
 
     if (store_paths_) {
-        StreamWriter::WriteObj(writer, PYRAMID_PATHS_MAGIC);
         serialize_paths(writer);
     }
 
     // The current Pyramid format always ends with a footer.
     JsonType basic_info;
     basic_info["max_capacity"].SetInt(max_capacity_);
-    if (store_paths_) {
-        basic_info[PYRAMID_PATHS_FORMAT_VERSION_KEY].SetInt(PYRAMID_PATHS_FORMAT_VERSION);
-    }
+    basic_info[INDEX_PARAM].SetString(this->create_param_ptr_->ToString());
     auto metadata = std::make_shared<Metadata>();
     metadata->Set(BASIC_INFO, basic_info);
     auto footer = std::make_shared<Footer>(metadata);
@@ -470,6 +464,16 @@ Pyramid::Deserialize(StreamReader& reader) {
     auto metadata = footer->GetMetadata();
     auto basic_info = metadata->Get(BASIC_INFO);
     auto max_capacity = basic_info["max_capacity"].GetInt();
+    bool serialized_store_paths = false;
+    if (basic_info.Contains(INDEX_PARAM)) {
+        const auto param_json = JsonType::Parse(basic_info[INDEX_PARAM].GetString());
+        serialized_store_paths = param_json.Contains(PYRAMID_STORE_PATHS_KEY) &&
+                                 param_json[PYRAMID_STORE_PATHS_KEY].GetBool();
+    }
+    if (serialized_store_paths != store_paths_) {
+        throw VsagException(ErrorType::READ_ERROR,
+                            "serialized Pyramid store_paths does not match config");
+    }
 
     const auto body_length = reader.Length() - footer->Length();
     auto body_reader = reader.Slice(0, body_length);
@@ -487,22 +491,7 @@ Pyramid::Deserialize(StreamReader& reader) {
     cur_element_count_ = base_codes_->TotalCount();
     root_->Deserialize(buffer_reader);
 
-    const bool has_paths = basic_info.Contains(PYRAMID_PATHS_FORMAT_VERSION_KEY);
-    if (has_paths != store_paths_) {
-        throw VsagException(ErrorType::READ_ERROR,
-                            "serialized Pyramid paths metadata does not match config");
-    }
-    if (has_paths) {
-        const auto format_version = basic_info[PYRAMID_PATHS_FORMAT_VERSION_KEY].GetInt();
-        if (format_version != PYRAMID_PATHS_FORMAT_VERSION) {
-            throw VsagException(ErrorType::UNSUPPORTED_INDEX_OPERATION,
-                                "unsupported Pyramid paths format version");
-        }
-        uint64_t magic = 0;
-        StreamReader::ReadObj(buffer_reader, magic);
-        if (magic != PYRAMID_PATHS_MAGIC) {
-            throw VsagException(ErrorType::READ_ERROR, "missing Pyramid paths marker");
-        }
+    if (store_paths_) {
         deserialize_paths(buffer_reader, static_cast<uint64_t>(cur_element_count_));
         validate_paths(static_cast<uint64_t>(cur_element_count_));
     }
