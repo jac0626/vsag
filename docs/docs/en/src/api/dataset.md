@@ -11,7 +11,8 @@ using DatasetPtr = std::shared_ptr<Dataset>;
 ## Builder pattern
 
 `Dataset` uses a fluent builder: `Make()` creates an instance, and every setter returns the same
-`DatasetPtr` so calls chain. Setters only store pointers/values — they do **not** copy your buffers.
+`DatasetPtr` so calls chain. Pointer setters store the supplied buffers without copying them. Value
+setters, such as the structured Pyramid paths overload, keep their own value.
 
 ```cpp
 auto base = vsag::Dataset::Make()
@@ -88,7 +89,17 @@ For documents that hold several dense sub-vectors each:
 | `ExtraInfoSize(int64_t)` | `GetExtraInfoSize()` | `int64_t` | Bytes per extra-info blob. |
 | `Paths(const std::string*)` | `GetPaths()` | `const std::string*` | Hierarchy paths (Pyramid). Default hierarchy. |
 | `Paths(const std::string& hierarchy, const std::string*)` | `GetPaths(const std::string& hierarchy)` | `const std::string*` | Paths for a named hierarchy. |
+| `Paths(const std::string& hierarchy, std::vector<std::vector<std::string>>)` | — | structured paths | Zero, one, or multiple Pyramid paths per element. |
 | `SourceID(const std::string*)` | `GetSourceID()` | `const std::string*` | Optional stable source identifier per element; HGraph uses it to match build-cache entries across snapshots. |
+
+For the structured `Paths` overload, the outer vector must have exactly `NumElements()` entries and
+each inner vector lists the independent paths for that element. An empty inner vector means that the
+element does not enter that hierarchy; an inner vector containing one empty string (`{""}`) assigns
+the element to the hierarchy root. Repeated or shared-prefix paths do not duplicate the vector in a
+node or in search results.
+
+The structured container is copied or moved into `Dataset`, so its lifetime is independent of
+`Owner()`.
 
 See [Attribute Filter (Hybrid Search)](../advanced/attribute_filter.md),
 [Extra Info](../advanced/extra_info.md), and
