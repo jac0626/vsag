@@ -83,6 +83,8 @@ void
 PyramidPathStore::Record(const std::string* paths, uint64_t count) {
     CHECK_ARGUMENT(paths != nullptr, "paths must not be null");
     std::unique_lock lock(mutex_);
+    CHECK_ARGUMENT(paths_by_inner_id_.empty() && has_path_.empty(),
+                   "Pyramid path store must be empty before full-build recording");
     paths_by_inner_id_.resize(count);
     has_path_.resize(count, 0);
     for (uint64_t inner_id = 0; inner_id < count; ++inner_id) {

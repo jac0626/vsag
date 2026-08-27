@@ -42,6 +42,9 @@ TEST_CASE("PyramidPathStore records and reorders paths", "[ut][pyramid][path_sto
 
     REQUIRE(store.GetPaths(inner_ids, restored.data()));
     REQUIRE(restored == std::array<std::string, 3>{"root/c", "root/a", ""});
+
+    REQUIRE_THROWS(store.Record(source.data(), source.size()));
+    REQUIRE(store.Size() == source.size());
 }
 
 TEST_CASE("PyramidPathStore records filtered paths with holes", "[ut][pyramid][path_store]") {
