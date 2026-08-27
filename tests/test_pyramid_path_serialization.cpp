@@ -213,8 +213,38 @@ TEST_CASE("Pyramid default BinarySet roundtrip does not return paths",
     REQUIRE(data.value()->GetPaths("category") == nullptr);
 }
 
+TEST_CASE("Pyramid BinarySet path storage configuration must match",
+          "[ft][pyramid][paths][serialization]") {
+    SECTION("stored paths require an enabled reader") {
+        auto index = MakePyramidPathIndex(true);
+        REQUIRE(index->Build(MakePyramidPathDataset(INITIAL_ROWS)).has_value());
+        auto binary_set = index->Serialize();
+        REQUIRE(binary_set.has_value());
+
+        auto restored = MakePyramidPathIndex(false);
+        REQUIRE_FALSE(restored->Deserialize(binary_set.value()).has_value());
+    }
+
+    SECTION("a reader requiring paths rejects an index without them") {
+        auto index = MakePyramidPathIndex(false);
+        REQUIRE(index->Build(MakePyramidPathDataset(INITIAL_ROWS)).has_value());
+        auto binary_set = index->Serialize();
+        REQUIRE(binary_set.has_value());
+
+        auto restored = MakePyramidPathIndex(true);
+        REQUIRE_FALSE(restored->Deserialize(binary_set.value()).has_value());
+    }
+}
+
 TEST_CASE("Pyramid path storage supports empty serialization roundtrips",
           "[ft][pyramid][paths][serialization][streaming]") {
+    SECTION("Clone") {
+        auto index = MakePyramidPathIndex(true);
+        auto clone = index->Clone();
+        REQUIRE(clone.has_value());
+        REQUIRE(clone.value()->GetNumElements() == 0);
+    }
+
     SECTION("BinarySet") {
         auto index = MakePyramidPathIndex(true);
         auto binary_set = index->Serialize();
