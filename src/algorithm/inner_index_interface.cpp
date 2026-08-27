@@ -480,6 +480,9 @@ InnerIndexInterface::get_data_by_ids_with_flag(const int64_t* ids,
                                                int64_t count,
                                                uint64_t selected_data_flag,
                                                Vector<InnerIdType>& inner_ids) const {
+    if ((selected_data_flag & DATA_FLAG_FLOAT32_VECTOR) != 0U && not this->has_raw_vector_) {
+        throw VsagException(ErrorType::INVALID_ARGUMENT, "has_raw_vector_ is false");
+    }
     CHECK_ARGUMENT(count >= 0, "count must not be negative");
     inner_ids.clear();
     inner_ids.reserve(static_cast<uint64_t>(count));
