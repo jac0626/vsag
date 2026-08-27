@@ -158,6 +158,25 @@ TEST_CASE("Pyramid retains unnamed paths for ODescent Build", "[ft][pyramid][pat
     REQUIRE(data->GetIds()[2] == 7);
 }
 
+TEST_CASE("Pyramid stores structured path rows", "[ft][pyramid][paths][multi_path]") {
+    for (const std::string graph_type : {"nsw", "odescent"}) {
+        auto index = MakePyramidIndex(graph_type, true);
+        auto base = MakeDataset({1, 2, 3}, {});
+        base->Paths("", std::vector<std::vector<std::string>>{{"left", "right"}, {"single"}, {}});
+
+        REQUIRE(index->Build(base).has_value());
+        RequirePaths(GetDataWithFlag(index, {2}, DATA_FLAG_PATH)->GetPaths(), {"single"});
+        REQUIRE(GetDataWithFlag(index, {1}, DATA_FLAG_PATH)->GetPaths() == nullptr);
+        REQUIRE(GetDataWithFlag(index, {3}, DATA_FLAG_PATH)->GetPaths() == nullptr);
+
+        auto added = MakeDataset({4, 5}, {});
+        added->Paths("", std::vector<std::vector<std::string>>{{"added"}, {"added/a", "added/b"}});
+        REQUIRE(index->Add(added).has_value());
+        RequirePaths(GetDataWithFlag(index, {4}, DATA_FLAG_PATH)->GetPaths(), {"added"});
+        REQUIRE(GetDataWithFlag(index, {5}, DATA_FLAG_PATH)->GetPaths() == nullptr);
+    }
+}
+
 TEST_CASE("Pyramid Clone retains paths", "[ft][pyramid][paths]") {
     auto index = MakePyramidIndex("nsw", true);
     REQUIRE(index->Build(MakeDataset({4, 8}, {{"", {"left", "right"}}})).has_value());
