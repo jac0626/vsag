@@ -14,9 +14,11 @@
 
 #pragma once
 
+#include <cstdint>
 #include <mutex>
 #include <shared_mutex>
 #include <string>
+#include <vector>
 
 #include "typing.h"
 
@@ -25,6 +27,7 @@ namespace vsag {
 class StreamReader;
 class StreamWriter;
 
+// Reads a serialized path string only after verifying that its payload fits in the reader.
 std::string
 ReadPyramidPathString(StreamReader& reader);
 
@@ -39,8 +42,15 @@ public:
         Writer&
         operator=(Writer&&) = delete;
 
+        // Prepares storage for one batch. Existing rows are never removed.
+        void
+        Prepare(uint64_t slot_count, uint64_t additional_path_count);
+
         void
         Insert(InnerIdType inner_id, const std::string& path);
+
+        void
+        Insert(InnerIdType inner_id, const std::string* paths, uint64_t path_count);
 
     private:
         friend class PyramidPathStore;
@@ -53,7 +63,7 @@ public:
     };
 
     explicit PyramidPathStore(Allocator* allocator)
-        : paths_by_inner_id_(allocator), has_path_(allocator), allocator_(allocator) {
+        : offsets_(allocator), counts_(allocator), paths_(allocator), allocator_(allocator) {
     }
 
     // Holds the store's exclusive lock for the lifetime of the returned writer.
@@ -62,6 +72,10 @@ public:
 
     [[nodiscard]] bool
     GetPaths(const Vector<InnerIdType>& inner_ids, std::string* paths) const;
+
+    [[nodiscard]] bool
+    GetPathRows(const Vector<InnerIdType>& inner_ids,
+                std::vector<std::vector<std::string>>& path_rows) const;
 
     void
     Serialize(StreamWriter& writer) const;
@@ -74,8 +88,9 @@ public:
 
 private:
     mutable std::shared_mutex mutex_;
-    Vector<std::string> paths_by_inner_id_;
-    Vector<uint8_t> has_path_;
+    Vector<uint64_t> offsets_;
+    Vector<uint16_t> counts_;
+    Vector<std::string> paths_;
     Allocator* allocator_{nullptr};
 };
 
