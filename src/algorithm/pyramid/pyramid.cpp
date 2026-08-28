@@ -775,15 +775,10 @@ Pyramid::read_streaming_body(StreamReader& reader, const MetadataPtr& metadata) 
 void
 Pyramid::Deserialize(StreamReader& reader) {
     // try to deserialize footer (only in new version)
-    const auto footer = Footer::Parse(reader);
-    if (footer == nullptr) {
+    JsonType basic_info;
+    if (not read_index_footer(reader, basic_info)) {
         throw VsagException(ErrorType::READ_ERROR, "failed to read index footer");
     }
-    const auto metadata = footer->GetMetadata();
-    if (metadata == nullptr || metadata->EmptyIndex()) {
-        throw VsagException(ErrorType::INDEX_EMPTY, "index is empty");
-    }
-    auto basic_info = metadata->Get(BASIC_INFO);
     auto max_capacity = basic_info["max_capacity"].GetInt();
     auto param_json = JsonType::Parse(basic_info[INDEX_PARAM].GetString());
     const bool serialized_store_paths = param_json.Contains(PYRAMID_STORE_PATHS_KEY) &&
@@ -793,10 +788,8 @@ Pyramid::Deserialize(StreamReader& reader) {
                             "serialized Pyramid store_paths does not match config");
     }
 
-    const auto body_length = reader.Length() - footer->Length();
-    auto body_reader = reader.Slice(0, body_length);
     BufferStreamReader buffer_reader(
-        &body_reader, std::numeric_limits<uint64_t>::max(), this->allocator_);
+        &reader, std::numeric_limits<uint64_t>::max(), this->allocator_);
 
     label_table_->Deserialize(buffer_reader);
     delete_count_.store(static_cast<int64_t>(label_table_->GetAllDeletedIds().size()),

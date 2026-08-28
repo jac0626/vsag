@@ -597,14 +597,6 @@ InnerIndexInterface::ExportIDs() const {
 
 DatasetPtr
 InnerIndexInterface::GetDataByIds(const int64_t* ids, int64_t count) const {
-    Vector<InnerIdType> inner_ids(allocator_);
-    return this->get_data_by_ids(ids, count, inner_ids);
-}
-
-DatasetPtr
-InnerIndexInterface::get_data_by_ids(const int64_t* ids,
-                                     int64_t count,
-                                     Vector<InnerIdType>& inner_ids) const {
     uint64_t selected_flag = DATA_FLAG_ID;
     if (this->has_raw_vector_) {
         selected_flag |= DATA_FLAG_FLOAT32_VECTOR;
@@ -615,7 +607,7 @@ InnerIndexInterface::get_data_by_ids(const int64_t* ids,
     if (this->extra_info_size_ > 0) {
         selected_flag |= DATA_FLAG_EXTRA_INFO;
     }
-    return this->get_data_by_ids_with_flag(ids, count, selected_flag, inner_ids);
+    return this->GetDataByIdsWithFlag(ids, count, selected_flag);
 }
 
 DatasetPtr

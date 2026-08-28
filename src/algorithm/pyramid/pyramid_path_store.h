@@ -83,9 +83,6 @@ public:
     void
     Deserialize(StreamReader& reader, uint64_t max_count);
 
-    [[nodiscard]] uint64_t
-    Size() const;
-
 private:
     mutable std::shared_mutex mutex_;
     Vector<uint64_t> offsets_;

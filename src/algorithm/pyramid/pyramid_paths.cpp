@@ -44,19 +44,12 @@ Pyramid::deserialize_paths(StreamReader& reader, uint64_t max_count) {
         throw VsagException(ErrorType::READ_ERROR, "corrupted Pyramid path hierarchy count");
     }
 
-    UnorderedSet<std::string> seen_hierarchies(allocator_);
-    seen_hierarchies.reserve(hierarchy_count);
     for (uint64_t offset = 0; offset < hierarchy_count; ++offset) {
         auto hierarchy_name = ReadPyramidPathString(reader);
         const auto hierarchy = hierarchies_.find(hierarchy_name);
         if (hierarchy == hierarchies_.end()) {
             throw VsagException(ErrorType::READ_ERROR,
                                 fmt::format("unknown Pyramid path hierarchy '{}'", hierarchy_name));
-        }
-        if (not seen_hierarchies.emplace(hierarchy_name).second) {
-            throw VsagException(
-                ErrorType::READ_ERROR,
-                fmt::format("duplicate Pyramid path hierarchy '{}'", hierarchy_name));
         }
         if (hierarchy->second->path_store == nullptr) {
             throw VsagException(ErrorType::READ_ERROR, "Pyramid path storage is disabled");
