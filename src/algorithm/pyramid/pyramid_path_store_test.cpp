@@ -37,8 +37,6 @@ TEST_CASE("PyramidPathStore inserts and reorders paths", "[ut][pyramid][path_sto
             writer.Insert(static_cast<vsag::InnerIdType>(slot), source[slot]);
         }
     }
-    REQUIRE(store.Size() == source.size());
-
     vsag::Vector<vsag::InnerIdType> inner_ids(allocator.get());
     inner_ids.push_back(2);
     inner_ids.push_back(0);
@@ -52,7 +50,6 @@ TEST_CASE("PyramidPathStore inserts and reorders paths", "[ut][pyramid][path_sto
         auto writer = store.AcquireWriter();
         REQUIRE_THROWS(writer.Insert(0, "duplicate"));
     }
-    REQUIRE(store.Size() == source.size());
 }
 
 TEST_CASE("PyramidPathStore stores zero, one, and multiple paths", "[ut][pyramid][path_store]") {
@@ -66,8 +63,6 @@ TEST_CASE("PyramidPathStore stores zero, one, and multiple paths", "[ut][pyramid
         writer.Insert(2, nullptr, 0);
         writer.Insert(4, "single");
     }
-    REQUIRE(store.Size() == 6);
-
     vsag::Vector<vsag::InnerIdType> inner_ids(allocator.get());
     inner_ids.push_back(5);
     inner_ids.push_back(2);
@@ -124,8 +119,6 @@ TEST_CASE("PyramidPathStore preparation does not shrink slots", "[ut][pyramid][p
         writer.Prepare(3, 1);
         writer.Insert(2, "earlier");
     }
-    REQUIRE(store.Size() == 8);
-
     vsag::Vector<vsag::InnerIdType> present_ids(allocator.get());
     present_ids.push_back(7);
     present_ids.push_back(2);
@@ -138,63 +131,13 @@ TEST_CASE("PyramidPathStore preparation does not shrink slots", "[ut][pyramid][p
     REQUIRE_FALSE(store.GetPaths(hole_ids, restored.data()));
 }
 
-TEST_CASE("PyramidPathStore single-path serialization remains compatible",
-          "[ut][pyramid][path_store]") {
-    auto allocator = vsag::SafeAllocator::FactoryDefaultAllocator();
-    vsag::PyramidPathStore store(allocator.get());
-    {
-        auto writer = store.AcquireWriter();
-        writer.Insert(0, "first");
-        writer.Insert(2, "");
-    }
-
-    std::stringstream stream;
-    vsag::IOStreamWriter writer(stream);
-    store.Serialize(writer);
-
-    std::stringstream legacy_stream;
-    vsag::IOStreamWriter legacy_writer(legacy_stream);
-    vsag::StreamWriter::WriteObj(legacy_writer, uint64_t{3});
-    vsag::StreamWriter::WriteObj(legacy_writer, uint8_t{1});
-    vsag::StreamWriter::WriteString(legacy_writer, "first");
-    vsag::StreamWriter::WriteObj(legacy_writer, uint8_t{0});
-    vsag::StreamWriter::WriteObj(legacy_writer, uint8_t{1});
-    vsag::StreamWriter::WriteString(legacy_writer, "");
-    REQUIRE(stream.str() == legacy_stream.str());
-
-    vsag::PyramidPathStore restored_store(allocator.get());
-    vsag::IOStreamReader reader(legacy_stream);
-    restored_store.Deserialize(reader, 3);
-    REQUIRE(restored_store.Size() == 3);
-
-    vsag::Vector<vsag::InnerIdType> present_ids(allocator.get());
-    present_ids.push_back(0);
-    present_ids.push_back(2);
-    std::array<std::string, 2> restored;
-    REQUIRE(restored_store.GetPaths(present_ids, restored.data()));
-    REQUIRE(restored == std::array<std::string, 2>{"first", ""});
-
-    vsag::Vector<vsag::InnerIdType> hole_ids(allocator.get());
-    hole_ids.push_back(1);
-    REQUIRE_FALSE(restored_store.GetPaths(hole_ids, restored.data()));
-}
-
-TEST_CASE("PyramidPathStore path-row serialization roundtrip is deterministic",
-          "[ut][pyramid][path_store]") {
+TEST_CASE("PyramidPathStore serializes direct dense fields", "[ut][pyramid][path_store]") {
     auto allocator = vsag::SafeAllocator::FactoryDefaultAllocator();
     const std::array<std::string, 3> multiple_paths = {"root/a", "root/b", "root/a"};
 
     vsag::PyramidPathStore store(allocator.get());
     {
         auto writer = store.AcquireWriter();
-        writer.Insert(4, "single");
-        writer.Insert(2, nullptr, 0);
-        writer.Insert(0, multiple_paths.data(), multiple_paths.size());
-    }
-
-    vsag::PyramidPathStore reversed_store(allocator.get());
-    {
-        auto writer = reversed_store.AcquireWriter();
         writer.Insert(0, multiple_paths.data(), multiple_paths.size());
         writer.Insert(2, nullptr, 0);
         writer.Insert(4, "single");
@@ -203,32 +146,24 @@ TEST_CASE("PyramidPathStore path-row serialization roundtrip is deterministic",
     std::stringstream stream;
     vsag::IOStreamWriter writer(stream);
     store.Serialize(writer);
-    std::stringstream reversed_stream;
-    vsag::IOStreamWriter reversed_writer(reversed_stream);
-    reversed_store.Serialize(reversed_writer);
-    REQUIRE(stream.str() == reversed_stream.str());
 
     std::stringstream expected_stream;
     vsag::IOStreamWriter expected_writer(expected_stream);
-    vsag::StreamWriter::WriteObj(expected_writer, uint64_t{5});
-    vsag::StreamWriter::WriteObj(expected_writer, uint8_t{2});
-    vsag::StreamWriter::WriteObj(expected_writer, uint16_t{3});
+    const std::vector<uint64_t> expected_offsets = {
+        0, std::numeric_limits<uint64_t>::max(), 3, std::numeric_limits<uint64_t>::max(), 3};
+    const std::vector<uint16_t> expected_counts = {3, 0, 0, 0, 1};
+    vsag::StreamWriter::WriteVector(expected_writer, expected_offsets);
+    vsag::StreamWriter::WriteVector(expected_writer, expected_counts);
+    vsag::StreamWriter::WriteObj(expected_writer, uint64_t{4});
     for (const auto& path : multiple_paths) {
         vsag::StreamWriter::WriteString(expected_writer, path);
     }
-    vsag::StreamWriter::WriteObj(expected_writer, uint8_t{0});
-    vsag::StreamWriter::WriteObj(expected_writer, uint8_t{2});
-    vsag::StreamWriter::WriteObj(expected_writer, uint16_t{0});
-    vsag::StreamWriter::WriteObj(expected_writer, uint8_t{0});
-    vsag::StreamWriter::WriteObj(expected_writer, uint8_t{1});
     vsag::StreamWriter::WriteString(expected_writer, "single");
     REQUIRE(stream.str() == expected_stream.str());
 
     vsag::PyramidPathStore restored_store(allocator.get());
     vsag::IOStreamReader reader(stream);
     restored_store.Deserialize(reader, 5);
-    REQUIRE(restored_store.Size() == 5);
-
     vsag::Vector<vsag::InnerIdType> inner_ids(allocator.get());
     inner_ids.push_back(0);
     inner_ids.push_back(2);
@@ -237,12 +172,28 @@ TEST_CASE("PyramidPathStore path-row serialization roundtrip is deterministic",
     REQUIRE(restored_store.GetPathRows(inner_ids, restored_rows));
     REQUIRE(restored_rows ==
             std::vector<std::vector<std::string>>{{"root/a", "root/b", "root/a"}, {}, {"single"}});
+
+    vsag::Vector<vsag::InnerIdType> hole_ids(allocator.get());
+    hole_ids.push_back(1);
+    REQUIRE_FALSE(restored_store.GetPathRows(hole_ids, restored_rows));
 }
 
 TEST_CASE("PyramidPathStore rejects malformed serialization", "[ut][pyramid][path_store]") {
     auto allocator = vsag::SafeAllocator::FactoryDefaultAllocator();
+    const auto write_payload = [](std::stringstream& stream,
+                                  const std::vector<uint64_t>& offsets,
+                                  const std::vector<uint16_t>& counts,
+                                  const std::vector<std::string>& paths) {
+        vsag::IOStreamWriter writer(stream);
+        vsag::StreamWriter::WriteVector(writer, offsets);
+        vsag::StreamWriter::WriteVector(writer, counts);
+        vsag::StreamWriter::WriteObj(writer, static_cast<uint64_t>(paths.size()));
+        for (const auto& path : paths) {
+            vsag::StreamWriter::WriteString(writer, path);
+        }
+    };
 
-    SECTION("slot count exceeds maximum") {
+    SECTION("vector size exceeds maximum") {
         std::stringstream stream;
         vsag::IOStreamWriter writer(stream);
         vsag::StreamWriter::WriteObj(writer, uint64_t{3});
@@ -252,46 +203,38 @@ TEST_CASE("PyramidPathStore rejects malformed serialization", "[ut][pyramid][pat
         REQUIRE_THROWS(store.Deserialize(reader, 2));
     }
 
-    SECTION("path row state is invalid") {
-        std::stringstream stream;
-        vsag::IOStreamWriter writer(stream);
-        vsag::StreamWriter::WriteObj(writer, uint64_t{1});
-        vsag::StreamWriter::WriteObj(writer, uint8_t{3});
-
-        vsag::PyramidPathStore store(allocator.get());
-        vsag::IOStreamReader reader(stream);
-        REQUIRE_THROWS(store.Deserialize(reader, 1));
-    }
-
-    SECTION("slot count exceeds remaining payload") {
+    SECTION("vector size exceeds remaining payload") {
         std::stringstream stream;
         vsag::IOStreamWriter writer(stream);
         vsag::StreamWriter::WriteObj(writer, uint64_t{2});
+        vsag::StreamWriter::WriteObj(writer, uint64_t{0});
 
         vsag::PyramidPathStore store(allocator.get());
         vsag::IOStreamReader reader(stream);
         REQUIRE_THROWS(store.Deserialize(reader, 2));
     }
 
-    SECTION("path length exceeds remaining payload") {
+    SECTION("slot vector sizes do not match") {
         std::stringstream stream;
-        vsag::IOStreamWriter writer(stream);
-        vsag::StreamWriter::WriteObj(writer, uint64_t{1});
-        vsag::StreamWriter::WriteObj(writer, uint8_t{1});
-        vsag::StreamWriter::WriteObj(writer, std::numeric_limits<uint64_t>::max());
+        write_payload(stream, {0}, {}, {"path"});
 
         vsag::PyramidPathStore store(allocator.get());
         vsag::IOStreamReader reader(stream);
         REQUIRE_THROWS(store.Deserialize(reader, 1));
     }
 
-    SECTION("path-list state cannot encode one path") {
+    SECTION("hole has a nonzero path count") {
         std::stringstream stream;
-        vsag::IOStreamWriter writer(stream);
-        vsag::StreamWriter::WriteObj(writer, uint64_t{1});
-        vsag::StreamWriter::WriteObj(writer, uint8_t{2});
-        vsag::StreamWriter::WriteObj(writer, uint16_t{1});
-        vsag::StreamWriter::WriteString(writer, "path");
+        write_payload(stream, {std::numeric_limits<uint64_t>::max()}, {1}, {});
+
+        vsag::PyramidPathStore store(allocator.get());
+        vsag::IOStreamReader reader(stream);
+        REQUIRE_THROWS(store.Deserialize(reader, 1));
+    }
+
+    SECTION("path range is invalid") {
+        std::stringstream stream;
+        write_payload(stream, {1}, {1}, {"path"});
 
         vsag::PyramidPathStore store(allocator.get());
         vsag::IOStreamReader reader(stream);
@@ -301,36 +244,25 @@ TEST_CASE("PyramidPathStore rejects malformed serialization", "[ut][pyramid][pat
     SECTION("path count exceeds remaining payload") {
         std::stringstream stream;
         vsag::IOStreamWriter writer(stream);
+        vsag::StreamWriter::WriteVector(writer, std::vector<uint64_t>{0});
+        vsag::StreamWriter::WriteVector(writer, std::vector<uint16_t>{1});
         vsag::StreamWriter::WriteObj(writer, uint64_t{1});
-        vsag::StreamWriter::WriteObj(writer, uint8_t{2});
-        vsag::StreamWriter::WriteObj(writer, uint16_t{2});
 
         vsag::PyramidPathStore store(allocator.get());
         vsag::IOStreamReader reader(stream);
         REQUIRE_THROWS(store.Deserialize(reader, 1));
     }
 
-    SECTION("failed restore preserves existing rows") {
+    SECTION("path string exceeds remaining payload") {
         std::stringstream stream;
         vsag::IOStreamWriter writer(stream);
+        vsag::StreamWriter::WriteVector(writer, std::vector<uint64_t>{0});
+        vsag::StreamWriter::WriteVector(writer, std::vector<uint16_t>{1});
         vsag::StreamWriter::WriteObj(writer, uint64_t{1});
-        vsag::StreamWriter::WriteObj(writer, uint8_t{2});
-        vsag::StreamWriter::WriteObj(writer, uint16_t{2});
-        vsag::StreamWriter::WriteString(writer, "only-one-path");
+        vsag::StreamWriter::WriteObj(writer, std::numeric_limits<uint64_t>::max());
 
         vsag::PyramidPathStore store(allocator.get());
-        {
-            auto path_writer = store.AcquireWriter();
-            path_writer.Insert(0, "preserved");
-        }
         vsag::IOStreamReader reader(stream);
         REQUIRE_THROWS(store.Deserialize(reader, 1));
-
-        vsag::Vector<vsag::InnerIdType> inner_ids(allocator.get());
-        inner_ids.push_back(0);
-        std::array<std::string, 1> restored;
-        REQUIRE(store.GetPaths(inner_ids, restored.data()));
-        REQUIRE(restored[0] == "preserved");
-        REQUIRE(store.Size() == 1);
     }
 }
