@@ -14,6 +14,7 @@
 
 #pragma once
 
+#include <mutex>
 #include <shared_mutex>
 #include <string>
 
@@ -26,15 +27,35 @@ namespace vsag {
 
 class PyramidPathStore {
 public:
+    class Writer {
+    public:
+        Writer(const Writer&) = delete;
+        Writer&
+        operator=(const Writer&) = delete;
+        Writer(Writer&&) = delete;
+        Writer&
+        operator=(Writer&&) = delete;
+
+        void
+        Insert(InnerIdType inner_id, const std::string& path);
+
+    private:
+        friend class PyramidPathStore;
+
+        explicit Writer(PyramidPathStore& store) : store_(store), lock_(store.mutex_) {
+        }
+
+        PyramidPathStore& store_;
+        std::unique_lock<std::shared_mutex> lock_;
+    };
+
     explicit PyramidPathStore(Allocator* allocator)
         : paths_by_inner_id_(allocator), has_path_(allocator), allocator_(allocator) {
     }
 
-    void
-    Record(const std::string* paths, const Vector<int64_t>& data_biases, int64_t first_inner_id);
-
-    void
-    Record(const std::string* paths, uint64_t count);
+    // Holds the store's exclusive lock for the lifetime of the returned writer.
+    [[nodiscard]] Writer
+    AcquireWriter();
 
     [[nodiscard]] bool
     GetPaths(const Vector<InnerIdType>& inner_ids, std::string* paths) const;

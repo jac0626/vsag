@@ -26,12 +26,17 @@
 #include "storage/stream_reader.h"
 #include "storage/stream_writer.h"
 
-TEST_CASE("PyramidPathStore records and reorders paths", "[ut][pyramid][path_store]") {
+TEST_CASE("PyramidPathStore inserts and reorders paths", "[ut][pyramid][path_store]") {
     auto allocator = vsag::SafeAllocator::FactoryDefaultAllocator();
     vsag::PyramidPathStore store(allocator.get());
     const std::array<std::string, 4> source = {"root/a", "", "root/c", "root/d"};
 
-    store.Record(source.data(), source.size());
+    {
+        auto writer = store.AcquireWriter();
+        for (uint64_t slot = 0; slot < source.size(); ++slot) {
+            writer.Insert(static_cast<vsag::InnerIdType>(slot), source[slot]);
+        }
+    }
     REQUIRE(store.Size() == source.size());
 
     vsag::Vector<vsag::InnerIdType> inner_ids(allocator.get());
@@ -43,19 +48,22 @@ TEST_CASE("PyramidPathStore records and reorders paths", "[ut][pyramid][path_sto
     REQUIRE(store.GetPaths(inner_ids, restored.data()));
     REQUIRE(restored == std::array<std::string, 3>{"root/c", "root/a", ""});
 
-    REQUIRE_THROWS(store.Record(source.data(), source.size()));
+    {
+        auto writer = store.AcquireWriter();
+        REQUIRE_THROWS(writer.Insert(0, "duplicate"));
+    }
     REQUIRE(store.Size() == source.size());
 }
 
-TEST_CASE("PyramidPathStore records filtered paths with holes", "[ut][pyramid][path_store]") {
+TEST_CASE("PyramidPathStore inserts paths with holes", "[ut][pyramid][path_store]") {
     auto allocator = vsag::SafeAllocator::FactoryDefaultAllocator();
     vsag::PyramidPathStore store(allocator.get());
     const std::array<std::string, 4> source = {"zero", "one", "two", "three"};
-    vsag::Vector<int64_t> data_biases(allocator.get());
-    data_biases.push_back(3);
-    data_biases.push_back(1);
-
-    store.Record(source.data(), data_biases, 4);
+    {
+        auto writer = store.AcquireWriter();
+        writer.Insert(5, source[1]);
+        writer.Insert(4, source[3]);
+    }
     REQUIRE(store.Size() == 6);
 
     vsag::Vector<vsag::InnerIdType> present_ids(allocator.get());
@@ -78,10 +86,11 @@ TEST_CASE("PyramidPathStore serialization roundtrip", "[ut][pyramid][path_store]
     auto allocator = vsag::SafeAllocator::FactoryDefaultAllocator();
     vsag::PyramidPathStore store(allocator.get());
     const std::array<std::string, 3> source = {"first", "unused", ""};
-    vsag::Vector<int64_t> data_biases(allocator.get());
-    data_biases.push_back(2);
-    data_biases.push_back(0);
-    store.Record(source.data(), data_biases, 2);
+    {
+        auto writer = store.AcquireWriter();
+        writer.Insert(3, source[0]);
+        writer.Insert(2, source[2]);
+    }
 
     std::stringstream stream;
     IOStreamWriter writer(stream);
@@ -108,7 +117,10 @@ TEST_CASE("PyramidPathStore uses fixed-width path lengths", "[ut][pyramid][path_
     auto allocator = vsag::SafeAllocator::FactoryDefaultAllocator();
     vsag::PyramidPathStore store(allocator.get());
     const std::array<std::string, 1> source = {"path"};
-    store.Record(source.data(), source.size());
+    {
+        auto writer = store.AcquireWriter();
+        writer.Insert(0, source[0]);
+    }
 
     std::stringstream stream;
     IOStreamWriter writer(stream);

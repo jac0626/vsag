@@ -230,7 +230,10 @@ Pyramid::build_by_odescent(const DatasetPtr& base) {
         for (uint64_t inner_id = 0; inner_id < static_cast<uint64_t>(data_num); ++inner_id) {
             label_table_->InsertRemap(data_ids[inner_id], static_cast<InnerIdType>(inner_id));
         }
-        path_store_->Record(path, static_cast<uint64_t>(data_num));
+        auto writer = path_store_->AcquireWriter();
+        for (uint64_t offset = 0; offset < static_cast<uint64_t>(data_num); ++offset) {
+            writer.Insert(static_cast<InnerIdType>(offset), path[offset]);
+        }
     }
     auto codes = use_reorder_ ? precise_codes_ : base_codes_;
 
@@ -527,6 +530,7 @@ Pyramid::Add(const DatasetPtr& base) {
     const auto* data_ids = base->GetIds();
     std::vector<int64_t> failed_ids;
     Vector<int64_t> data_biases(allocator_);
+    Vector<InnerIdType> accepted_inner_ids(allocator_);
     int64_t local_cur_element_count = 0;
     {
         std::lock_guard lock(cur_element_count_mutex_);
@@ -541,21 +545,26 @@ Pyramid::Add(const DatasetPtr& base) {
             resize(new_capacity);
         }
         int64_t valid_id_count = 0;
+        if (store_paths_) {
+            accepted_inner_ids.reserve(data_num);
+        }
         for (int64_t i = 0; i < data_num; ++i) {
             if (not label_table_->CheckLabel(data_ids[i])) {
-                label_table_->Insert(valid_id_count + local_cur_element_count, data_ids[i]);
-                base_codes_->InsertVector(data_vectors + dim_ * i,
-                                          valid_id_count + local_cur_element_count);
+                const auto inner_id =
+                    static_cast<InnerIdType>(valid_id_count + local_cur_element_count);
+                label_table_->Insert(inner_id, data_ids[i]);
+                base_codes_->InsertVector(data_vectors + dim_ * i, inner_id);
                 if (use_reorder_) {
-                    precise_codes_->InsertVector(data_vectors + dim_ * i,
-                                                 valid_id_count + local_cur_element_count);
+                    precise_codes_->InsertVector(data_vectors + dim_ * i, inner_id);
                 }
                 if (create_new_raw_vector_) {
-                    raw_vector_->InsertVector(data_vectors + dim_ * i,
-                                              valid_id_count + local_cur_element_count);
+                    raw_vector_->InsertVector(data_vectors + dim_ * i, inner_id);
                 }
                 valid_id_count++;
                 data_biases.push_back(i);
+                if (store_paths_) {
+                    accepted_inner_ids.push_back(inner_id);
+                }
             } else {
                 logger::warn("Label {} already exists, skip adding.", data_ids[i]);
                 failed_ids.push_back(data_ids[i]);
@@ -603,7 +612,10 @@ Pyramid::Add(const DatasetPtr& base) {
         }
     }
     if (store_paths_) {
-        path_store_->Record(path, data_biases, local_cur_element_count);
+        auto writer = path_store_->AcquireWriter();
+        for (uint64_t offset = 0; offset < data_biases.size(); ++offset) {
+            writer.Insert(accepted_inner_ids[offset], path[data_biases[offset]]);
+        }
     }
     return failed_ids;
 }

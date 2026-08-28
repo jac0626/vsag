@@ -16,6 +16,7 @@
 #include <catch2/generators/catch_generators.hpp>
 #include <cstdint>
 #include <cstring>
+#include <future>
 #include <nlohmann/json.hpp>
 #include <string>
 #include <utility>
@@ -193,17 +194,34 @@ TEST_CASE("Pyramid retains paths for NSW and ODescent Build", "[ft][pyramid][pat
     REQUIRE(data->GetIds() == nullptr);
 }
 
-TEST_CASE("Pyramid Add stores paths using accepted input offsets", "[ft][pyramid][paths]") {
+TEST_CASE("Pyramid Add stores paths for allocated inner IDs", "[ft][pyramid][paths]") {
     auto index = MakePyramidIndex("nsw", true);
     REQUIRE(index->Build(MakeDataset({10}, {"original"})).has_value());
 
     auto add_result =
-        index->Add(MakeDataset({10, 20, 30}, {"duplicate-path", "path-20", "path-30"}));
+        index->Add(MakeDataset({20, 10, 30}, {"path-20", "duplicate-path", "path-30"}));
     REQUIRE(add_result.has_value());
     REQUIRE(add_result.value() == std::vector<int64_t>{10});
 
     RequirePaths(GetDataWithFlag(index, {20, 30, 10}, DATA_FLAG_PATH)->GetPaths(),
                  {"path-20", "path-30", "original"});
+}
+
+TEST_CASE("Pyramid concurrent Add keeps paths aligned with IDs", "[ft][pyramid][paths]") {
+    auto index = MakePyramidIndex("nsw", true);
+    REQUIRE(index->Build(MakeDataset({10}, {"original"})).has_value());
+    auto first = MakeDataset({20, 21}, {"first/20", "first/21"});
+    auto second = MakeDataset({30, 31}, {"second/30", "second/31"});
+
+    auto first_result =
+        std::async(std::launch::async, [index, first]() { return index->Add(first); });
+    auto second_result =
+        std::async(std::launch::async, [index, second]() { return index->Add(second); });
+    REQUIRE(first_result.get().has_value());
+    REQUIRE(second_result.get().has_value());
+
+    auto data = GetDataWithFlag(index, {31, 20, 30, 21}, DATA_FLAG_PATH);
+    RequirePaths(data->GetPaths(), {"second/31", "first/20", "second/30", "first/21"});
 }
 
 TEST_CASE("Pyramid serialization and Clone preserve retained paths", "[ft][pyramid][paths]") {
