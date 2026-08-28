@@ -154,6 +154,7 @@ Pyramid::build_by_odescent(const DatasetPtr& base) {
             const auto* paths = base->GetPaths(hierarchy_name);
             if (paths != nullptr) {
                 auto writer = hierarchy->path_store->AcquireWriter();
+                writer.Prepare(static_cast<uint64_t>(data_num), static_cast<uint64_t>(data_num));
                 for (uint64_t offset = 0; offset < static_cast<uint64_t>(data_num); ++offset) {
                     writer.Insert(static_cast<InnerIdType>(offset), paths[offset]);
                 }
@@ -1205,8 +1206,10 @@ Pyramid::Add(const DatasetPtr& base) {
     for (const auto& [hname, h_ptr] : hierarchies_) {
         const auto* hpath = base->GetPaths(hname);
         if (hpath != nullptr) {
-            if (store_paths_) {
+            if (store_paths_ and not accepted_inner_ids.empty()) {
                 auto writer = h_ptr->path_store->AcquireWriter();
+                writer.Prepare(static_cast<uint64_t>(accepted_inner_ids.back()) + 1,
+                               data_biases.size());
                 for (uint64_t offset = 0; offset < data_biases.size(); ++offset) {
                     writer.Insert(accepted_inner_ids[offset], hpath[data_biases[offset]]);
                 }
@@ -2138,6 +2141,7 @@ Pyramid::build_with_cache(const DatasetPtr& base) {
         if (hpath != nullptr) {
             if (store_paths_) {
                 auto writer = h_ptr->path_store->AcquireWriter();
+                writer.Prepare(static_cast<uint64_t>(data_num), static_cast<uint64_t>(data_num));
                 for (uint64_t offset = 0; offset < static_cast<uint64_t>(data_num); ++offset) {
                     writer.Insert(static_cast<InnerIdType>(offset), hpath[offset]);
                 }
