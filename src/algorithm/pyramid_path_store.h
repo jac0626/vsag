@@ -37,6 +37,9 @@ public:
         operator=(Writer&&) = delete;
 
         void
+        EnsureSlots(uint64_t slot_count);
+
+        void
         Insert(InnerIdType inner_id, const std::string& path);
 
     private:

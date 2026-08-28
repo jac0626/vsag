@@ -54,19 +54,27 @@ write_path_string(StreamWriter& writer, const std::string& value) {
 }  // namespace
 
 void
+PyramidPathStore::Writer::EnsureSlots(uint64_t slot_count) {
+    if (slot_count <= store_.paths_by_inner_id_.size()) {
+        return;
+    }
+
+    const auto old_path_count = store_.paths_by_inner_id_.size();
+    const auto old_presence_count = store_.has_path_.size();
+    try {
+        store_.paths_by_inner_id_.resize(slot_count);
+        store_.has_path_.resize(slot_count, 0);
+    } catch (...) {
+        store_.paths_by_inner_id_.resize(old_path_count);
+        store_.has_path_.resize(old_presence_count);
+        throw;
+    }
+}
+
+void
 PyramidPathStore::Writer::Insert(InnerIdType inner_id, const std::string& path) {
     const auto slot = static_cast<uint64_t>(inner_id);
-    if (store_.paths_by_inner_id_.size() <= slot) {
-        const auto old_size = store_.paths_by_inner_id_.size();
-        try {
-            store_.paths_by_inner_id_.resize(slot + 1);
-            store_.has_path_.resize(slot + 1, 0);
-        } catch (...) {
-            store_.paths_by_inner_id_.resize(old_size);
-            store_.has_path_.resize(old_size);
-            throw;
-        }
-    }
+    EnsureSlots(slot + 1);
     CHECK_ARGUMENT(store_.has_path_[slot] == 0, "inner id already has a Pyramid path");
     store_.paths_by_inner_id_[slot] = path;
     store_.has_path_[slot] = 1;

@@ -226,11 +226,8 @@ Pyramid::build_by_odescent(const DatasetPtr& base) {
         raw_vector_->BatchInsertVector(data_vectors, data_num);
     }
     if (store_paths_) {
-        label_table_->ResetRemap(static_cast<uint64_t>(data_num));
-        for (uint64_t inner_id = 0; inner_id < static_cast<uint64_t>(data_num); ++inner_id) {
-            label_table_->InsertRemap(data_ids[inner_id], static_cast<InnerIdType>(inner_id));
-        }
         auto writer = path_store_->AcquireWriter();
+        writer.EnsureSlots(static_cast<uint64_t>(data_num));
         for (uint64_t offset = 0; offset < static_cast<uint64_t>(data_num); ++offset) {
             writer.Insert(static_cast<InnerIdType>(offset), path[offset]);
         }
@@ -611,8 +608,9 @@ Pyramid::Add(const DatasetPtr& base) {
             future.get();
         }
     }
-    if (store_paths_) {
+    if (store_paths_ && not accepted_inner_ids.empty()) {
         auto writer = path_store_->AcquireWriter();
+        writer.EnsureSlots(static_cast<uint64_t>(accepted_inner_ids.back()) + 1);
         for (uint64_t offset = 0; offset < data_biases.size(); ++offset) {
             writer.Insert(accepted_inner_ids[offset], path[data_biases[offset]]);
         }

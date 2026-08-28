@@ -33,6 +33,7 @@ TEST_CASE("PyramidPathStore inserts and reorders paths", "[ut][pyramid][path_sto
 
     {
         auto writer = store.AcquireWriter();
+        writer.EnsureSlots(source.size());
         for (uint64_t slot = 0; slot < source.size(); ++slot) {
             writer.Insert(static_cast<vsag::InnerIdType>(slot), source[slot]);
         }
@@ -61,10 +62,12 @@ TEST_CASE("PyramidPathStore inserts paths with holes", "[ut][pyramid][path_store
     const std::array<std::string, 4> source = {"zero", "one", "two", "three"};
     {
         auto writer = store.AcquireWriter();
+        writer.EnsureSlots(8);
         writer.Insert(5, source[1]);
         writer.Insert(4, source[3]);
+        writer.EnsureSlots(3);
     }
-    REQUIRE(store.Size() == 6);
+    REQUIRE(store.Size() == 8);
 
     vsag::Vector<vsag::InnerIdType> present_ids(allocator.get());
     present_ids.push_back(5);
@@ -78,7 +81,7 @@ TEST_CASE("PyramidPathStore inserts paths with holes", "[ut][pyramid][path_store
     REQUIRE_FALSE(store.GetPaths(hole_ids, restored.data()));
 
     vsag::Vector<vsag::InnerIdType> out_of_range_ids(allocator.get());
-    out_of_range_ids.push_back(6);
+    out_of_range_ids.push_back(8);
     REQUIRE_FALSE(store.GetPaths(out_of_range_ids, restored.data()));
 }
 
