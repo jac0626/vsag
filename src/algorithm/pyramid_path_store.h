@@ -67,10 +67,7 @@ public:
     Serialize(StreamWriter& writer) const;
 
     void
-    Deserialize(StreamReader& reader, uint64_t max_count);
-
-    [[nodiscard]] uint64_t
-    Size() const;
+    Deserialize(StreamReader& reader, uint64_t expected_count);
 
 private:
     mutable std::shared_mutex mutex_;

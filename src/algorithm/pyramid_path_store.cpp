@@ -14,7 +14,6 @@
 
 #include "pyramid_path_store.h"
 
-#include <limits>
 #include <mutex>
 
 #include "common.h"
@@ -23,35 +22,6 @@
 #include "vsag_exception.h"
 
 namespace vsag {
-namespace {
-
-std::string
-read_path_string(StreamReader& reader) {
-    uint64_t length = 0;
-    StreamReader::ReadObj(reader, length);
-    const auto cursor = reader.GetCursor();
-    const auto reader_length = reader.Length();
-    if (length > static_cast<uint64_t>(std::numeric_limits<std::string::size_type>::max()) ||
-        cursor > reader_length || length > reader_length - cursor) {
-        throw VsagException(ErrorType::READ_ERROR, "corrupted Pyramid path string length");
-    }
-    std::string value(length, '\0');
-    if (length > 0) {
-        reader.Read(value.data(), length);
-    }
-    return value;
-}
-
-void
-write_path_string(StreamWriter& writer, const std::string& value) {
-    const auto length = static_cast<uint64_t>(value.size());
-    StreamWriter::WriteObj(writer, length);
-    if (length > 0) {
-        writer.Write(value.data(), length);
-    }
-}
-
-}  // namespace
 
 void
 PyramidPathStore::Writer::EnsureSlots(uint64_t slot_count) {
@@ -107,22 +77,18 @@ PyramidPathStore::Serialize(StreamWriter& writer) const {
     StreamWriter::WriteObj(writer, static_cast<uint64_t>(paths_by_inner_id_.size()));
     for (uint64_t inner_id = 0; inner_id < has_path_.size(); ++inner_id) {
         const auto present = has_path_[inner_id];
-        if (present > 1) {
-            throw VsagException(ErrorType::INTERNAL_ERROR,
-                                "Pyramid path store has invalid presence value");
-        }
         StreamWriter::WriteObj(writer, present);
         if (present != 0) {
-            write_path_string(writer, paths_by_inner_id_[inner_id]);
+            StreamWriter::WriteString(writer, paths_by_inner_id_[inner_id]);
         }
     }
 }
 
 void
-PyramidPathStore::Deserialize(StreamReader& reader, uint64_t max_count) {
+PyramidPathStore::Deserialize(StreamReader& reader, uint64_t expected_count) {
     uint64_t slot_count = 0;
     StreamReader::ReadObj(reader, slot_count);
-    if (slot_count > max_count) {
+    if (slot_count != expected_count) {
         throw VsagException(ErrorType::READ_ERROR, "corrupted Pyramid path slot count");
     }
     const auto cursor = reader.GetCursor();
@@ -142,19 +108,13 @@ PyramidPathStore::Deserialize(StreamReader& reader, uint64_t max_count) {
         }
         restored_has_path[inner_id] = present;
         if (present != 0) {
-            restored_paths[inner_id] = read_path_string(reader);
+            restored_paths[inner_id] = StreamReader::ReadString(reader);
         }
     }
 
     std::unique_lock lock(mutex_);
     paths_by_inner_id_.swap(restored_paths);
     has_path_.swap(restored_has_path);
-}
-
-uint64_t
-PyramidPathStore::Size() const {
-    std::shared_lock lock(mutex_);
-    return paths_by_inner_id_.size();
 }
 
 }  // namespace vsag

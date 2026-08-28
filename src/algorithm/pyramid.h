@@ -208,10 +208,7 @@ private:
     serialize_paths(StreamWriter& writer) const;
 
     void
-    deserialize_paths(StreamReader& reader, uint64_t max_count);
-
-    void
-    validate_paths(uint64_t expected_count) const;
+    deserialize_paths(StreamReader& reader, uint64_t expected_count);
 
     void
     resize(int64_t new_max_capacity);

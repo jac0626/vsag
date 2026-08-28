@@ -28,18 +28,11 @@ Pyramid::serialize_paths(StreamWriter& writer) const {
 }
 
 void
-Pyramid::deserialize_paths(StreamReader& reader, uint64_t max_count) {
+Pyramid::deserialize_paths(StreamReader& reader, uint64_t expected_count) {
     if (path_store_ == nullptr) {
         throw VsagException(ErrorType::READ_ERROR, "Pyramid path storage is disabled");
     }
-    path_store_->Deserialize(reader, max_count);
-}
-
-void
-Pyramid::validate_paths(uint64_t expected_count) const {
-    if (path_store_ == nullptr || path_store_->Size() != expected_count) {
-        throw VsagException(ErrorType::READ_ERROR, "corrupted Pyramid path slot count");
-    }
+    path_store_->Deserialize(reader, expected_count);
 }
 
 DatasetPtr

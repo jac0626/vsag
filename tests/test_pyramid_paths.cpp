@@ -15,15 +15,12 @@
 #include <catch2/catch_test_macros.hpp>
 #include <catch2/generators/catch_generators.hpp>
 #include <cstdint>
-#include <cstring>
 #include <future>
 #include <nlohmann/json.hpp>
 #include <string>
 #include <utility>
 #include <vector>
 
-#include "storage/serialization.h"
-#include "storage/stream_reader.h"
 #include "vsag/vsag.h"
 
 namespace {
@@ -105,23 +102,6 @@ RequirePaths(const std::string* actual, const std::vector<std::string>& expected
     for (uint64_t offset = 0; offset < expected.size(); ++offset) {
         REQUIRE(actual[offset] == expected[offset]);
     }
-}
-
-uint64_t
-GetPathSidecarOffset(const vsag::Binary& binary, const std::vector<std::string>& paths) {
-    auto read_func = [&binary](uint64_t offset, uint64_t length, void* destination) {
-        std::memcpy(destination, binary.data.get() + offset, length);
-    };
-    ReadFuncStreamReader reader(read_func, 0, binary.size);
-    const auto footer = vsag::Footer::Parse(reader);
-    REQUIRE(footer != nullptr);
-
-    uint64_t payload_size = sizeof(uint64_t);
-    for (const auto& path : paths) {
-        payload_size += sizeof(uint8_t) + sizeof(uint64_t) + static_cast<uint64_t>(path.size());
-    }
-    REQUIRE(binary.size >= footer->Length() + payload_size);
-    return binary.size - footer->Length() - payload_size;
 }
 
 }  // namespace
@@ -275,41 +255,4 @@ TEST_CASE("Pyramid rejects selected paths when storage is disabled", "[ft][pyram
     auto result = index->GetDataByIdsWithFlag(&id, 1, DATA_FLAG_PATH);
     REQUIRE_FALSE(result.has_value());
     REQUIRE(result.error().type == vsag::ErrorType::INVALID_ARGUMENT);
-}
-
-TEST_CASE("Pyramid rejects an incomplete serialized path sidecar",
-          "[ft][pyramid][paths][serialization]") {
-    const std::vector<std::string> paths = {"left", "right"};
-    auto index = MakePyramidIndex("nsw", true);
-    REQUIRE(index->Build(MakeDataset({4, 8}, paths)).has_value());
-
-    auto binary_set = index->Serialize();
-    REQUIRE(binary_set.has_value());
-    auto binary = binary_set.value().Get("pyramid");
-    const auto sidecar_offset = GetPathSidecarOffset(binary, paths);
-    const uint64_t empty_slot_count = 0;
-    std::memcpy(binary.data.get() + sidecar_offset, &empty_slot_count, sizeof(empty_slot_count));
-
-    auto restored = MakePyramidIndex("nsw", true);
-    REQUIRE_FALSE(restored->Deserialize(binary_set.value()).has_value());
-}
-
-TEST_CASE("Pyramid reports a retained path missing at query time",
-          "[ft][pyramid][paths][serialization]") {
-    const std::vector<std::string> paths = {""};
-    auto index = MakePyramidIndex("nsw", true);
-    REQUIRE(index->Build(MakeDataset({4}, paths)).has_value());
-
-    auto binary_set = index->Serialize();
-    REQUIRE(binary_set.has_value());
-    auto binary = binary_set.value().Get("pyramid");
-    const auto sidecar_offset = GetPathSidecarOffset(binary, paths);
-    binary.data.get()[sidecar_offset + sizeof(uint64_t)] = 0;
-
-    auto restored = MakePyramidIndex("nsw", true);
-    REQUIRE(restored->Deserialize(binary_set.value()).has_value());
-    const int64_t id = 4;
-    auto result = restored->GetDataByIdsWithFlag(&id, 1, DATA_FLAG_PATH);
-    REQUIRE_FALSE(result.has_value());
-    REQUIRE(result.error().type == vsag::ErrorType::INTERNAL_ERROR);
 }

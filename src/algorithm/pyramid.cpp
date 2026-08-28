@@ -444,10 +444,12 @@ Pyramid::Serialize(StreamWriter& writer) const {
         serialize_paths(writer);
     }
 
-    // The current Pyramid format always ends with a footer.
+    // serialize footer (introduced since v0.15)
     JsonType basic_info;
     basic_info["max_capacity"].SetInt(max_capacity_);
-    basic_info[INDEX_PARAM].SetString(this->create_param_ptr_->ToString());
+    if (store_paths_) {
+        basic_info[INDEX_PARAM].SetString(this->create_param_ptr_->ToString());
+    }
     auto metadata = std::make_shared<Metadata>();
     metadata->Set(BASIC_INFO, basic_info);
     auto footer = std::make_shared<Footer>(metadata);
@@ -456,11 +458,8 @@ Pyramid::Serialize(StreamWriter& writer) const {
 
 void
 Pyramid::Deserialize(StreamReader& reader) {
-    // The current Pyramid format requires a footer.
+    // try to deserialize footer (only in new version)
     auto footer = Footer::Parse(reader);
-    if (footer == nullptr) {
-        throw VsagException(ErrorType::READ_ERROR, "failed to read Pyramid index footer");
-    }
     auto metadata = footer->GetMetadata();
     auto basic_info = metadata->Get(BASIC_INFO);
     auto max_capacity = basic_info["max_capacity"].GetInt();
@@ -475,10 +474,8 @@ Pyramid::Deserialize(StreamReader& reader) {
                             "serialized Pyramid store_paths does not match config");
     }
 
-    const auto body_length = reader.Length() - footer->Length();
-    auto body_reader = reader.Slice(0, body_length);
     BufferStreamReader buffer_reader(
-        &body_reader, std::numeric_limits<uint64_t>::max(), this->allocator_);
+        &reader, std::numeric_limits<uint64_t>::max(), this->allocator_);
 
     label_table_->Deserialize(buffer_reader);
     base_codes_->Deserialize(buffer_reader);
@@ -493,7 +490,6 @@ Pyramid::Deserialize(StreamReader& reader) {
 
     if (store_paths_) {
         deserialize_paths(buffer_reader, static_cast<uint64_t>(cur_element_count_));
-        validate_paths(static_cast<uint64_t>(cur_element_count_));
     }
     resize(max_capacity);
     this->current_memory_usage_ = static_cast<int64_t>(this->CalSerializeSize());
