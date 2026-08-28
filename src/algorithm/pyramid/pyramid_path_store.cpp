@@ -14,7 +14,6 @@
 
 #include "pyramid_path_store.h"
 
-#include <limits>
 #include <mutex>
 
 #include "common.h"
@@ -44,43 +43,27 @@ ReadPyramidPathString(StreamReader& reader) {
 }
 
 void
-PyramidPathStore::Record(const std::string* paths,
-                         const Vector<int64_t>& data_biases,
-                         int64_t first_inner_id) {
-    CHECK_ARGUMENT(paths != nullptr, "paths must not be null");
-    CHECK_ARGUMENT(first_inner_id >= 0, "first inner id must not be negative");
-    if (data_biases.empty()) {
-        return;
+PyramidPathStore::Writer::Insert(InnerIdType inner_id, const std::string& path) {
+    const auto slot = static_cast<uint64_t>(inner_id);
+    if (store_.paths_by_inner_id_.size() <= slot) {
+        const auto old_size = store_.paths_by_inner_id_.size();
+        try {
+            store_.paths_by_inner_id_.resize(slot + 1);
+            store_.has_path_.resize(slot + 1, 0);
+        } catch (...) {
+            store_.paths_by_inner_id_.resize(old_size);
+            store_.has_path_.resize(old_size);
+            throw;
+        }
     }
-
-    const auto begin = static_cast<uint64_t>(first_inner_id);
-    CHECK_ARGUMENT(begin <= std::numeric_limits<uint64_t>::max() - data_biases.size(),
-                   "Pyramid path count overflow");
-    const auto end = begin + data_biases.size();
-    std::unique_lock lock(mutex_);
-    if (paths_by_inner_id_.size() < end) {
-        paths_by_inner_id_.resize(end);
-        has_path_.resize(end, 0);
-    }
-    for (uint64_t offset = 0; offset < data_biases.size(); ++offset) {
-        const auto inner_id = begin + offset;
-        paths_by_inner_id_[inner_id] = paths[data_biases[offset]];
-        has_path_[inner_id] = 1;
-    }
+    CHECK_ARGUMENT(store_.has_path_[slot] == 0, "inner id already has a Pyramid path");
+    store_.paths_by_inner_id_[slot] = path;
+    store_.has_path_[slot] = 1;
 }
 
-void
-PyramidPathStore::Record(const std::string* paths, uint64_t count) {
-    CHECK_ARGUMENT(paths != nullptr, "paths must not be null");
-    std::unique_lock lock(mutex_);
-    CHECK_ARGUMENT(paths_by_inner_id_.empty() && has_path_.empty(),
-                   "Pyramid path store must be empty before full-build recording");
-    paths_by_inner_id_.resize(count);
-    has_path_.resize(count, 0);
-    for (uint64_t inner_id = 0; inner_id < count; ++inner_id) {
-        paths_by_inner_id_[inner_id] = paths[inner_id];
-        has_path_[inner_id] = 1;
-    }
+PyramidPathStore::Writer
+PyramidPathStore::AcquireWriter() {
+    return Writer(*this);
 }
 
 bool
