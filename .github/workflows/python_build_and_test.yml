@@ -32,8 +32,8 @@ jobs:
             sudo apt update
             sudo apt install -y python3-venv
             export CMAKE_GENERATOR="Ninja"
-            export TARGET=GENERIC
-            export CIBW_ENVIRONMENT="${CIBW_ENVIRONMENT:+$CIBW_ENVIRONMENT }TARGET=GENERIC"
+            export VSAG_OPENBLAS_TARGET=GENERIC
+            export CIBW_ENVIRONMENT="${CIBW_ENVIRONMENT:+$CIBW_ENVIRONMENT }VSAG_OPENBLAS_TARGET=GENERIC"
             make pyvsag
       - name: Save Wheel
         uses: actions/upload-artifact@v5

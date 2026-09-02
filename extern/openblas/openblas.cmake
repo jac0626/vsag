@@ -193,6 +193,11 @@ if (NOT OPENBLAS_FOUND)
     string (STRIP "${_openblas_c_flags}" _openblas_c_flags)
     string (STRIP "${_openblas_cxx_flags}" _openblas_cxx_flags)
 
+    set (_openblas_target_arg)
+    if (DEFINED ENV{VSAG_OPENBLAS_TARGET} AND NOT "$ENV{VSAG_OPENBLAS_TARGET}" STREQUAL "")
+        list (APPEND _openblas_target_arg "TARGET=$ENV{VSAG_OPENBLAS_TARGET}")
+    endif ()
+
     ExternalProject_Add (
         ${name}
         URL ${openblas_urls}
@@ -211,9 +216,11 @@ if (NOT OPENBLAS_FOUND)
             OMP_NUM_THREADS=1
             PATH=/usr/lib/ccache:$ENV{PATH}
             LD_LIBRARY_PATH=/opt/alibaba-cloud-compiler/lib64/:$ENV{LD_LIBRARY_PATH}
-            make USE_THREAD=0 USE_LOCKING=1 DYNAMIC_ARCH=1 NOFORTRAN=1 -j1
+            make USE_THREAD=0 USE_LOCKING=1 ${_openblas_target_arg} DYNAMIC_ARCH=1
+                 NOFORTRAN=1 -j1
         INSTALL_COMMAND
-            make DYNAMIC_ARCH=1 NOFORTRAN=1 PREFIX=${install_dir} install
+            make ${_openblas_target_arg} DYNAMIC_ARCH=1 NOFORTRAN=1 PREFIX=${install_dir}
+                 install
         BUILD_IN_SOURCE 1
         LOG_CONFIGURE TRUE
         LOG_BUILD TRUE
