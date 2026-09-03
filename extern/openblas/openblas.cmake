@@ -195,7 +195,13 @@ if (NOT OPENBLAS_FOUND)
 
     set (_openblas_target_arg)
     if (DEFINED ENV{VSAG_OPENBLAS_TARGET} AND NOT "$ENV{VSAG_OPENBLAS_TARGET}" STREQUAL "")
-        list (APPEND _openblas_target_arg "TARGET=$ENV{VSAG_OPENBLAS_TARGET}")
+        string (STRIP "$ENV{VSAG_OPENBLAS_TARGET}" _openblas_target)
+        if (NOT _openblas_target MATCHES "^[A-Za-z0-9_]+$")
+            message (FATAL_ERROR
+                     "VSAG_OPENBLAS_TARGET must contain only letters, digits, or underscores; "
+                     "got '$ENV{VSAG_OPENBLAS_TARGET}'.")
+        endif ()
+        list (APPEND _openblas_target_arg "TARGET=${_openblas_target}")
     endif ()
 
     ExternalProject_Add (
