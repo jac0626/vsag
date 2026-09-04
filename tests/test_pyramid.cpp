@@ -276,6 +276,31 @@ TEST_CASE_PERSISTENT_FIXTURE(fixtures::PyramidTestIndex,
 }
 
 TEST_CASE_PERSISTENT_FIXTURE(fixtures::PyramidTestIndex,
+                             "Pyramid PiPNN shares the supported NSW root contract",
+                             "[ft][build][pyramid][pipnn][pr]") {
+    const auto graph_type = GENERATE(std::string("nsw"), std::string("pipnn"));
+    const auto root_graph_type = GENERATE(std::string("single_layer"), std::string("multi_layer"));
+    CAPTURE(graph_type, root_graph_type);
+    PyramidParam pyramid_param;
+    pyramid_param.graph_type = graph_type;
+    pyramid_param.root_graph_type = root_graph_type;
+    pyramid_param.no_build_levels = {1, 2};
+    auto param_json =
+        vsag::JsonType::Parse(GeneratePyramidBuildParametersString("l2", 128, pyramid_param));
+    param_json["index_param"]["build_thread_count"].SetUint64(4);
+    const auto param = param_json.Dump();
+    auto index = TestFactory("pyramid", param, true);
+    auto dataset = pool.GetDatasetAndCreate(128, 1000, "l2", /*with_path=*/true);
+    const auto search_param = GeneratePyramidSearchParametersString(200);
+
+    TestContinueAdd(index, dataset, true);
+    TestKnnSearch(index, dataset, search_param, 0.94F, true);
+    TestFilterSearch(index, dataset, search_param, 0.94F, true);
+    TestRangeSearch(index, dataset, search_param, 0.94F, 10, true);
+    TestRangeSearch(index, dataset, search_param, 0.49F, 5, true);
+}
+
+TEST_CASE_PERSISTENT_FIXTURE(fixtures::PyramidTestIndex,
                              "Pyramid RangeSearch Returns Empty Result",
                              "[ft][pyramid]") {
     PyramidParam pyramid_param;
@@ -472,10 +497,13 @@ TEST_CASE_PERSISTENT_FIXTURE(fixtures::PyramidTestIndex,
 
 TEST_CASE_PERSISTENT_FIXTURE(fixtures::PyramidTestIndex,
                              "Pyramid Duplicate Path Semantics Same Path",
-                             "[ft][build][pyramid]") {
+                             "[ft][build][pyramid][pipnn]") {
+    const auto graph_type = GENERATE(std::string("nsw"), std::string("pipnn"));
+    CAPTURE(graph_type);
     PyramidParam pyramid_param;
     pyramid_param.no_build_levels = {0, 1, 2};
     pyramid_param.support_duplicate = true;
+    pyramid_param.graph_type = graph_type;
 
     const auto param = GeneratePyramidBuildParametersString("l2", 4, pyramid_param);
     auto index = TestFactory("pyramid", param, true);
@@ -501,10 +529,13 @@ TEST_CASE_PERSISTENT_FIXTURE(fixtures::PyramidTestIndex,
 
 TEST_CASE_PERSISTENT_FIXTURE(fixtures::PyramidTestIndex,
                              "Pyramid Duplicate Path Semantics Prefix Descendant",
-                             "[ft][build][pyramid]") {
+                             "[ft][build][pyramid][pipnn]") {
+    const auto graph_type = GENERATE(std::string("nsw"), std::string("pipnn"));
+    CAPTURE(graph_type);
     PyramidParam pyramid_param;
     pyramid_param.no_build_levels = {0, 1, 2};
     pyramid_param.support_duplicate = true;
+    pyramid_param.graph_type = graph_type;
 
     const auto param = GeneratePyramidBuildParametersString("l2", 4, pyramid_param);
     auto index = TestFactory("pyramid", param, true);
@@ -540,10 +571,13 @@ TEST_CASE_PERSISTENT_FIXTURE(fixtures::PyramidTestIndex,
 
 TEST_CASE_PERSISTENT_FIXTURE(fixtures::PyramidTestIndex,
                              "Pyramid Duplicate Path Semantics Shared Prefix Visibility",
-                             "[ft][build][pyramid]") {
+                             "[ft][build][pyramid][pipnn]") {
+    const auto graph_type = GENERATE(std::string("nsw"), std::string("pipnn"));
+    CAPTURE(graph_type);
     PyramidParam pyramid_param;
     pyramid_param.no_build_levels = {0, 1, 2};
     pyramid_param.support_duplicate = true;
+    pyramid_param.graph_type = graph_type;
 
     const auto param = GeneratePyramidBuildParametersString("l2", 4, pyramid_param);
     auto index = TestFactory("pyramid", param, true);
@@ -585,10 +619,13 @@ TEST_CASE_PERSISTENT_FIXTURE(fixtures::PyramidTestIndex,
 
 TEST_CASE_PERSISTENT_FIXTURE(fixtures::PyramidTestIndex,
                              "Pyramid Duplicate Path Semantics Negative Control",
-                             "[ft][build][pyramid]") {
+                             "[ft][build][pyramid][pipnn]") {
+    const auto graph_type = GENERATE(std::string("nsw"), std::string("pipnn"));
+    CAPTURE(graph_type);
     PyramidParam pyramid_param;
     pyramid_param.no_build_levels = {0, 1, 2};
     pyramid_param.support_duplicate = true;
+    pyramid_param.graph_type = graph_type;
 
     const auto param = GeneratePyramidBuildParametersString("l2", 4, pyramid_param);
     auto index = TestFactory("pyramid", param, true);
@@ -854,13 +891,15 @@ TEST_CASE_PERSISTENT_FIXTURE(fixtures::PyramidTestIndex,
 
 TEST_CASE_PERSISTENT_FIXTURE(fixtures::PyramidTestIndex,
                              "Pyramid multi-layer root streaming serialization",
-                             "[ft][pyramid][root_graph][streaming]") {
+                             "[ft][pyramid][root_graph][streaming][pipnn]") {
+    const auto graph_type = GENERATE(std::string("nsw"), std::string("pipnn"));
     const auto graph_storage_type = GENERATE(std::string("flat"), std::string("compressed"));
-    CAPTURE(graph_storage_type);
+    CAPTURE(graph_type, graph_storage_type);
     PyramidParam pyramid_param;
     pyramid_param.no_build_levels = {1, 2};
     pyramid_param.root_graph_type = "multi_layer";
     pyramid_param.graph_storage_type = graph_storage_type;
+    pyramid_param.graph_type = graph_type;
     const auto param = GeneratePyramidBuildParametersString("l2", 16, pyramid_param);
     auto index = TestFactory("pyramid", param, true);
     auto dataset = pool.GetDatasetAndCreate(16, 1000, "l2", /*with_path=*/true);
@@ -892,7 +931,9 @@ TEST_CASE_PERSISTENT_FIXTURE(fixtures::PyramidTestIndex,
 }
 
 TEST_CASE("Pyramid applies root graph type per hierarchy",
-          "[ft][pyramid][root_graph][multi_hierarchy]") {
+          "[ft][pyramid][root_graph][multi_hierarchy][pipnn]") {
+    const auto graph_type = GENERATE(std::string("nsw"), std::string("pipnn"));
+    CAPTURE(graph_type);
     constexpr int64_t dim = 16;
     constexpr int64_t count = 1000;
     std::vector<float> vectors(count * dim);
@@ -914,7 +955,9 @@ TEST_CASE("Pyramid applies root graph type per hierarchy",
             ]
         }
     })";
-    auto index = vsag::Factory::CreateIndex("pyramid", params);
+    auto params_json = nlohmann::json::parse(params);
+    params_json["index_param"]["graph_type"] = graph_type;
+    auto index = vsag::Factory::CreateIndex("pyramid", params_json.dump());
     REQUIRE(index.has_value());
     auto base = vsag::Dataset::Make()
                     ->NumElements(count)

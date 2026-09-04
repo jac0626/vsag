@@ -316,6 +316,17 @@ HGraph::build_by_batch_graph(const DatasetPtr& data, bool use_pipnn) {
                                         this->thread_pool_.get(),
                                         this->build_thread_count_);
         pipnn_builder.Build(bottom_graph_, inner_ids, pipnn_vectors);
+        if (this->support_duplicate_) {
+            entry_point_id_ = bottom_graph_->GetGroupId(entry_point_id_);
+            for (auto& route_graph_id : route_graph_ids) {
+                for (auto& id : route_graph_id) {
+                    id = bottom_graph_->GetGroupId(id);
+                }
+                std::sort(route_graph_id.begin(), route_graph_id.end());
+                route_graph_id.erase(std::unique(route_graph_id.begin(), route_graph_id.end()),
+                                     route_graph_id.end());
+            }
+        }
     } else {
         odescent_param_->max_degree = bottom_graph_->MaximumDegree();
         ODescent odescent_builder(
