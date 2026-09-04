@@ -345,10 +345,14 @@ private:
 
     /// Pre-create the IndexNode tree structure from the path labels.
     static void
-    populate_path_tree(Hierarchy& h, const std::string* paths, int64_t count);
+    populate_path_tree(Hierarchy& h,
+                       const std::string* paths,
+                       int64_t count,
+                       const Vector<int64_t>* input_indices = nullptr);
 
     void
-    populate_hierarchy_trees(const DatasetPtr& base);
+    populate_hierarchy_trees(const DatasetPtr& base,
+                             const Vector<int64_t>* input_indices = nullptr);
 
     /// Insert vectors and their path labels into the hierarchy tree.
     void
