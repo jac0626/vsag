@@ -641,7 +641,18 @@ Pyramid::build_by_batch_graph(const DatasetPtr& base) {
             GraphBuildFunc build_graph =
                 [&](GraphInterfacePtr& graph, const Vector<InnerIdType>& ids, uint32_t level) {
                     if (level == 0) {
+                        graph->SetMaxCapacity(static_cast<InnerIdType>(data_num));
                         pipnn_builder.Build(graph, ids, rows);
+                        return;
+                    }
+                    if (support_duplicate_) {
+                        Vector<const float*> node_rows(allocator_);
+                        node_rows.reserve(ids.size());
+                        for (const auto id : ids) {
+                            node_rows.emplace_back(data_vectors + id * dim_);
+                        }
+                        graph->SetMaxCapacity(static_cast<InnerIdType>(data_num));
+                        pipnn_builder.Build(graph, ids, node_rows);
                         return;
                     }
                     odescent_builder.SetMaxDegree(static_cast<int32_t>(graph->MaximumDegree()));
@@ -652,14 +663,22 @@ Pyramid::build_by_batch_graph(const DatasetPtr& base) {
 
             auto& root = *hierarchy->root;
             if (root.has_routing()) {
-                const auto route_levels =
-                    sample_route_levels(root, static_cast<uint64_t>(data_num));
+                auto route_levels = sample_route_levels(root, static_cast<uint64_t>(data_num));
+                if (support_duplicate_) {
+                    auto sampled_levels = route_levels;
+                    std::fill(route_levels.begin(), route_levels.end(), -1);
+                    for (InnerIdType id = 0; id < data_num; ++id) {
+                        const auto representative = root.graph_->GetGroupId(id);
+                        route_levels[representative] =
+                            std::max(route_levels[representative], sampled_levels[id]);
+                    }
+                }
                 const auto max_route = std::max_element(route_levels.begin(), route_levels.end());
                 const int max_route_level = max_route == route_levels.end() ? -1 : *max_route;
                 if (max_route != route_levels.end() and max_route_level >= 0) {
                     root.entry_point_ =
                         static_cast<InnerIdType>(std::distance(route_levels.begin(), max_route));
-                    root.routing_->graphs.reserve(static_cast<uint64_t>(max_route_level + 1));
+                    root.routing_->graphs.reserve(static_cast<uint64_t>(max_route_level) + 1);
                 }
                 for (int level = 0; level <= max_route_level; ++level) {
                     Vector<InnerIdType> route_ids(allocator_);

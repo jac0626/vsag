@@ -1471,6 +1471,124 @@ TestHGraphBuild(const fixtures::HGraphTestIndexPtr& test_index,
 }
 
 HGRAPH_PR_DAILY_CASE("HGraph Build Test", "[ft][build][hgraph]", TestHGraphBuild)
+
+TEST_CASE("HGraph PiPNN shares the supported NSW build contract",
+          "[ft][build][hgraph][pipnn][pr]") {
+    using namespace fixtures;
+    constexpr int64_t dim = 128;
+    constexpr uint64_t count = 600;
+    const auto quantization = GENERATE(
+        std::string("fp32"), std::string("sq8"), std::string("rabitq,sq8,block_memory_io,32,1"));
+    const auto graph_storage = GENERATE(std::string("flat"), std::string("compressed"));
+    CAPTURE(quantization, graph_storage);
+
+    HGraphTestIndex::HGraphBuildParam build_param("l2", dim, quantization);
+    build_param.graph_type = "pipnn";
+    build_param.graph_storage = graph_storage;
+    build_param.thread_count = 4;
+    build_param.store_raw_vector = true;
+    const auto param = HGraphTestIndex::GenerateHGraphBuildParametersString(build_param);
+    auto index = TestIndex::TestFactory(HGraphTestIndex::name, param, true);
+    auto dataset = HGraphTestIndex::pool.GetDatasetAndCreate(dim, count, "l2");
+    const auto search_param = fmt::format(fixtures::search_param_tmp, 200, false);
+
+    TestIndex::TestBuildIndex(index, dataset, true);
+    TestIndex::TestExportIDs(index, dataset);
+    const float recall = quantization == "fp32" ? 0.99F : quantization == "sq8" ? 0.95F : 0.3F;
+    HGraphTestIndex::TestGeneral(index, dataset, search_param, recall);
+
+    auto restored = TestIndex::TestFactory(HGraphTestIndex::name, param, true);
+    TestIndex::TestSerializeBinarySet(index, restored, dataset, search_param, true);
+}
+
+TEST_CASE("HGraph PiPNN retains metadata and mutation contracts", "[ft][hgraph][pipnn][pr]") {
+    using namespace fixtures;
+    constexpr int64_t dim = 128;
+    constexpr uint64_t count = 200;
+    const auto search_param = fmt::format(fixtures::search_param_tmp, 200, false);
+
+    SECTION("attribute filtering") {
+        HGraphTestIndex::HGraphBuildParam build_param("l2", dim, "fp32");
+        build_param.graph_type = "pipnn";
+        build_param.use_attr_filter = true;
+        build_param.thread_count = 4;
+        const auto param = HGraphTestIndex::GenerateHGraphBuildParametersString(build_param);
+        auto index = TestIndex::TestFactory(HGraphTestIndex::name, param, true);
+        auto dataset = HGraphTestIndex::pool.GetDatasetAndCreate(dim, count, "l2");
+        REQUIRE(index->Build(dataset->base_).has_value());
+        TestIndex::TestWithAttr(index, dataset, search_param, true);
+    }
+
+    SECTION("extra info") {
+        constexpr int64_t extra_info_size = 64;
+        HGraphTestIndex::HGraphBuildParam build_param("l2", dim, "fp32");
+        build_param.graph_type = "pipnn";
+        build_param.thread_count = 4;
+        build_param.extra_info_size = extra_info_size;
+        const auto param = HGraphTestIndex::GenerateHGraphBuildParametersString(build_param);
+        auto index = TestIndex::TestFactory(HGraphTestIndex::name, param, true);
+        auto dataset = HGraphTestIndex::pool.GetDatasetAndCreate(
+            dim, count, "l2", false, 0.8, extra_info_size);
+        REQUIRE(index->Build(dataset->base_).has_value());
+        TestIndex::TestGetExtraInfoById(index, dataset, extra_info_size);
+        TestIndex::TestUpdateExtraInfo(index, dataset, extra_info_size);
+    }
+
+    SECTION("remove after build") {
+        HGraphTestIndex::HGraphBuildParam build_param("l2", dim, "fp32");
+        build_param.graph_type = "pipnn";
+        build_param.support_remove = true;
+        build_param.thread_count = 4;
+        const auto param = HGraphTestIndex::GenerateHGraphBuildParametersString(build_param);
+        auto index = TestIndex::TestFactory(HGraphTestIndex::name, param, true);
+        auto dataset = HGraphTestIndex::pool.GetDatasetAndCreate(dim, count, "l2");
+        REQUIRE(index->Build(dataset->base_).has_value());
+        const auto removed_label = dataset->base_->GetIds()[0];
+        auto remove_result = index->Remove(removed_label, vsag::RemoveMode::MARK_REMOVE);
+        REQUIRE(remove_result.has_value());
+        REQUIRE(remove_result.value() == 1);
+        REQUIRE_FALSE(index->CheckIdExist(removed_label));
+    }
+
+    SECTION("concurrent add search remove") {
+        HGraphTestIndex::HGraphBuildParam build_param("l2", dim, "fp32");
+        build_param.graph_type = "pipnn";
+        build_param.support_remove = true;
+        build_param.thread_count = 4;
+        const auto param = HGraphTestIndex::GenerateHGraphBuildParametersString(build_param);
+        auto index = TestIndex::TestFactory(HGraphTestIndex::name, param, true);
+        auto dataset = HGraphTestIndex::pool.GetDatasetAndCreate(dim, count, "l2");
+        TestIndex::TestConcurrentAddSearchRemove(index, dataset, search_param, true);
+    }
+}
+
+TEST_CASE("HGraph PiPNN preserves duplicate-vector search quality",
+          "[ft][build][hgraph][duplicate][pipnn][pr]") {
+    using namespace fixtures;
+    constexpr int64_t dim = 128;
+    constexpr uint64_t count = 1000;
+    const auto graph_storage = GENERATE(std::string("flat"), std::string("compressed"));
+    const auto quantization = GENERATE(
+        std::string("fp32"), std::string("sq8"), std::string("rabitq,sq8,block_memory_io,32,1"));
+    CAPTURE(graph_storage, quantization);
+
+    HGraphTestIndex::HGraphBuildParam build_param("l2", dim, quantization);
+    build_param.graph_type = "pipnn";
+    build_param.graph_storage = graph_storage;
+    build_param.support_duplicate = true;
+    build_param.thread_count = 4;
+    const auto param = HGraphTestIndex::GenerateHGraphBuildParametersString(build_param);
+    auto index = TestIndex::TestFactory(HGraphTestIndex::name, param, true);
+    auto dataset = HGraphTestIndex::pool.GetDuplicateDataset(dim, count, "l2");
+    const auto search_param = fmt::format(fixtures::search_param_tmp, 200, false);
+
+    TestIndex::TestBuildDuplicateIndex(index, dataset, "prefix", true);
+    const float recall = quantization == "fp32" ? 0.99F : quantization == "sq8" ? 0.95F : 0.3F;
+    TestIndex::TestKnnSearch(index, dataset, search_param, recall, true);
+    auto restored = TestIndex::TestFactory(HGraphTestIndex::name, param, true);
+    TestIndex::TestSerializeBinarySet(index, restored, dataset, search_param, true);
+}
+
 static void
 TestHGraphWithAttr(const fixtures::HGraphTestIndexPtr& test_index,
                    const fixtures::HGraphResourcePtr& resource) {
