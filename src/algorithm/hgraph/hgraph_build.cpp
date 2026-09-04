@@ -340,16 +340,19 @@ HGraph::build_by_batch_graph(const DatasetPtr& data, bool use_pipnn) {
         route_odescent_param = std::make_shared<ODescentParameter>();
     }
     for (auto& route_graph_id : route_graph_ids) {
-        route_odescent_param->max_degree = bottom_graph_->MaximumDegree() / 2;
+        auto current_route_odescent_param =
+            use_pipnn ? std::make_shared<ODescentParameter>(*route_odescent_param)
+                      : route_odescent_param;
+        current_route_odescent_param->max_degree = bottom_graph_->MaximumDegree() / 2;
         if (use_pipnn and this->thread_pool_ != nullptr and this->build_thread_count_ > 1 and
             not route_graph_id.empty()) {
             const uint64_t worker_count =
                 std::min<uint64_t>(this->build_thread_count_, route_graph_id.size());
-            route_odescent_param->block_size =
+            current_route_odescent_param->block_size =
                 static_cast<int64_t>((route_graph_id.size() + worker_count - 1) / worker_count);
         }
         ODescent sparse_odescent_builder(
-            route_odescent_param, build_data, allocator_, this->thread_pool_.get());
+            current_route_odescent_param, build_data, allocator_, this->thread_pool_.get());
         auto graph = this->generate_one_route_graph();
         sparse_odescent_builder.Build(route_graph_id);
         sparse_odescent_builder.SaveGraph(graph);
