@@ -348,14 +348,16 @@ private:
     populate_path_tree(Hierarchy& h,
                        const DatasetPtr& dataset,
                        const std::string& hierarchy_name,
-                       int64_t count);
+                       int64_t count,
+                       const Vector<int64_t>* input_indices = nullptr);
 
     /// Resolve path strings to unique tree nodes, preserving first-seen order.
     static std::vector<IndexNode*>
     collect_path_nodes(Hierarchy& h, const std::string* paths, uint64_t path_count);
 
     void
-    populate_hierarchy_trees(const DatasetPtr& base);
+    populate_hierarchy_trees(const DatasetPtr& base,
+                             const Vector<int64_t>* input_indices = nullptr);
 
     /// Insert vectors and their path labels into the hierarchy tree.
     void
