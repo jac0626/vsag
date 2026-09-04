@@ -109,6 +109,7 @@ HGraphBuildTaskGuard::~HGraphBuildTaskGuard() {
 std::optional<std::vector<int64_t>>
 HGraph::try_optimized_build(const DatasetPtr& data) {
     if (graph_type_ == GRAPH_TYPE_VALUE_PIPNN) {
+        // PiPNN owns a one-shot parallel graph build and uses the normal flatten build path.
         return std::nullopt;
     }
 
