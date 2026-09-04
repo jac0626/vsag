@@ -268,6 +268,7 @@ private:
     uint64_t thread_count_;
 
     uint64_t dimensions_;
+    // Build() is synchronous, so the pipeline borrows rows only for its own lifetime.
     const Vector<const float*>& rows_;
     uint64_t reservoir_size_{0};
     Vector<InnerIdType> ids_;
@@ -392,6 +393,7 @@ PiPNNPipeline::partition() const {
             std::all_of(work.begin(), work.end(), [](const auto& item) {
                 return item.points.size() < MIN_PARALLEL_PARTITION_POINTS;
             });
+        // Use one pool level at a time: outer work-item fan-out disables inner stripe fan-out.
         const bool parallelize_work_items = thread_pool_ != nullptr and thread_count_ > 1 and
                                             work.size() > 1 and
                                             (work.size() >= thread_count_ or all_items_are_small);
