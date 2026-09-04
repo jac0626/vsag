@@ -31,6 +31,7 @@
 #include "impl/distance_provider_for_graph.h"
 #include "impl/heap/standard_heap.h"
 #include "impl/odescent/odescent_graph_builder.h"
+#include "impl/pipnn/pipnn_graph_builder.h"
 #include "impl/pruning_strategy.h"
 #include "impl/reasoning/search_reasoning.h"
 #include "io/common/io_parameter.h"
@@ -579,7 +580,7 @@ Pyramid::run_parallel_insertions(
 }
 
 std::vector<int64_t>
-Pyramid::build_by_odescent(const DatasetPtr& base) {
+Pyramid::build_by_batch_graph(const DatasetPtr& base) {
     int64_t data_num = base->GetNumElements();
     const auto* data_vectors = base->GetFloat32Vectors();
     const auto* data_ids = base->GetIds();
@@ -614,7 +615,69 @@ Pyramid::build_by_odescent(const DatasetPtr& base) {
     }
     auto codes = construction_codes();
 
-    if (thread_pool_ != nullptr && hierarchies_.size() > 1) {
+    if (graph_type_ == GRAPH_TYPE_VALUE_PIPNN) {
+        Vector<const float*> rows(allocator_);
+        rows.reserve(static_cast<uint64_t>(data_num));
+        for (int64_t i = 0; i < data_num; ++i) {
+            rows.emplace_back(data_vectors + i * dim_);
+        }
+        for (const auto& [hname, hierarchy] : hierarchies_) {
+            PiPNNGraphBuilderParameter pipnn_parameter;
+            pipnn_parameter.alpha = hierarchy->alpha;
+            PiPNNGraphBuilder pipnn_builder(pipnn_parameter,
+                                            static_cast<uint64_t>(dim_),
+                                            allocator_,
+                                            this->thread_pool_.get(),
+                                            this->build_thread_count_);
+            auto local_odescent_param = std::make_shared<ODescentParameter>(*odescent_param_);
+            local_odescent_param->alpha = hierarchy->alpha;
+            ODescent odescent_builder(local_odescent_param,
+                                      codes,
+                                      allocator_,
+                                      this->thread_pool_.get(),
+                                      true,
+                                      data_vectors,
+                                      data_num);
+            GraphBuildFunc build_graph =
+                [&](GraphInterfacePtr& graph, const Vector<InnerIdType>& ids, uint32_t level) {
+                    if (level == 0) {
+                        pipnn_builder.Build(graph, ids, rows);
+                        return;
+                    }
+                    odescent_builder.SetMaxDegree(static_cast<int32_t>(graph->MaximumDegree()));
+                    odescent_builder.Build(ids);
+                    odescent_builder.SaveGraph(graph);
+                };
+            hierarchy->root->Build(build_graph);
+
+            auto& root = *hierarchy->root;
+            if (root.has_routing()) {
+                const auto route_levels =
+                    sample_route_levels(root, static_cast<uint64_t>(data_num));
+                const auto max_route = std::max_element(route_levels.begin(), route_levels.end());
+                const int max_route_level = max_route == route_levels.end() ? -1 : *max_route;
+                if (max_route != route_levels.end() and max_route_level >= 0) {
+                    root.entry_point_ =
+                        static_cast<InnerIdType>(std::distance(route_levels.begin(), max_route));
+                    root.routing_->graphs.reserve(static_cast<uint64_t>(max_route_level + 1));
+                }
+                for (int level = 0; level <= max_route_level; ++level) {
+                    Vector<InnerIdType> route_ids(allocator_);
+                    Vector<const float*> route_rows(allocator_);
+                    for (InnerIdType id = 0; id < data_num; ++id) {
+                        if (route_levels[id] >= level) {
+                            route_ids.emplace_back(id);
+                            route_rows.emplace_back(data_vectors + id * dim_);
+                        }
+                    }
+                    auto route_graph = root.make_route_graph();
+                    route_graph->SetMaxCapacity(static_cast<InnerIdType>(data_num));
+                    pipnn_builder.Build(route_graph, route_ids, route_rows);
+                    root.routing_->graphs.emplace_back(std::move(route_graph));
+                }
+            }
+        }
+    } else if (thread_pool_ != nullptr && hierarchies_.size() > 1) {
         auto build_flatten = ODescent::CreateBuildFlatten(codes, data_vectors, data_num);
         Vector<std::future<void>> futures(allocator_);
         for (const auto& [hname, h_ptr] : hierarchies_) {
@@ -2014,7 +2077,7 @@ Pyramid::Build(const DatasetPtr& base) {
         return this->Add(base);
     }
     this->Train(base);
-    return this->build_by_odescent(base);
+    return this->build_by_batch_graph(base);
 }
 
 void

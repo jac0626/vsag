@@ -1359,3 +1359,52 @@ TEST_CASE("Pyramid applies hops limit to non-root graphs", "[ut][pyramid][hops_l
     REQUIRE(unlimited_stats["hops"].GetInt() > limited_stats["hops"].GetInt());
     REQUIRE(limited_stats["hops"].GetInt() <= 3);
 }
+
+TEST_CASE("Pyramid PiPNN multi-layer root supports RaBitQ with SQ8 reorder",
+          "[ut][pipnn][pyramid]") {
+    constexpr int64_t count = 48;
+    std::vector<float> vectors((count + 1) * PYRAMID_TEST_DIM);
+    FillRootVectors(vectors, count + 1);
+    std::vector<int64_t> ids(count + 1);
+    std::iota(ids.begin(), ids.end(), 1000);
+    std::vector<std::string> paths(count + 1, "tenant");
+
+    auto test_index = MakeRootPyramidIndex(vsag::PYRAMID_ROOT_GRAPH_TYPE_MULTI_LAYER,
+                                           false,
+                                           vsag::GRAPH_TYPE_VALUE_PIPNN,
+                                           false,
+                                           4,
+                                           true);
+    REQUIRE(
+        test_index.index->Build(MakePyramidDataset(vectors.data(), ids.data(), paths.data(), count))
+            .empty());
+    auto stats = vsag::JsonType::Parse(test_index.index->GetStats());
+    REQUIRE(stats["root_graphs"]["default"]["route_graph_count"].GetUint64() > 0);
+
+    auto added = MakePyramidDataset(
+        vectors.data() + count * PYRAMID_TEST_DIM, ids.data() + count, paths.data() + count, 1);
+    REQUIRE(test_index.index->Add(added).empty());
+
+    std::stringstream stream(std::ios::in | std::ios::out | std::ios::binary);
+    vsag::IOStreamWriter writer(stream);
+    test_index.index->Serialize(writer);
+    auto restored = MakeRootPyramidIndex(vsag::PYRAMID_ROOT_GRAPH_TYPE_MULTI_LAYER,
+                                         false,
+                                         vsag::GRAPH_TYPE_VALUE_PIPNN,
+                                         false,
+                                         4,
+                                         true);
+    stream.seekg(0);
+    vsag::IOStreamReader reader(stream);
+    restored.index->Deserialize(reader);
+
+    auto query = vsag::Dataset::Make()
+                     ->NumElements(1)
+                     ->Dim(PYRAMID_TEST_DIM)
+                     ->Float32Vectors(vectors.data() + count * PYRAMID_TEST_DIM)
+                     ->Owner(false);
+    auto result =
+        restored.index->KnnSearch(query, 5, R"({"pyramid":{"ef_search":64}})", vsag::FilterPtr{});
+    REQUIRE(std::find(result->GetIds(), result->GetIds() + result->GetDim(), ids[count]) !=
+            result->GetIds() + result->GetDim());
+}
