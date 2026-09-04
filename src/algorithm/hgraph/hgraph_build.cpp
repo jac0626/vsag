@@ -191,6 +191,11 @@ HGraph::build_by_odescent(const DatasetPtr& data) {
 std::vector<int64_t>
 HGraph::build_by_pipnn(const DatasetPtr& data) {
     this->validate_add_data(data);
+    if (this->extra_infos_ != nullptr) {
+        CHECK_ARGUMENT(data->GetExtraInfos() != nullptr, "extra_infos is nullptr");
+        CHECK_ARGUMENT(data->GetExtraInfoSize() == static_cast<int64_t>(this->extra_info_size_),
+                       "extra_infos size mismatch");
+    }
     return this->build_by_batch_graph(data, true);
 }
 
@@ -279,8 +284,7 @@ HGraph::build_by_batch_graph(const DatasetPtr& data, bool use_pipnn) {
             temporary_sq8_build_data->InsertVector(get_data(data, i), inner_id);
         }
         if (use_pipnn and this->extra_infos_ != nullptr) {
-            const auto* extra_info =
-                extra_infos == nullptr ? nullptr : extra_infos + i * extra_info_size_;
+            const auto* extra_info = extra_infos + i * extra_info_size_;
             this->extra_infos_->InsertExtraInfo(extra_info, inner_id);
         }
         if (use_pipnn and attr_sets != nullptr and this->use_attribute_filter_) {

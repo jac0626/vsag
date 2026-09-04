@@ -32,7 +32,7 @@ struct PiPNNGraphBuilderParameter {
     uint64_t min_leaf_size{64};
     float leader_sample_rate{0.005F};
     std::vector<uint64_t> fanout{10, 2};
-    uint64_t leaf_neighbor_count{3};
+    uint64_t leaf_neighbor_count{4};
     uint64_t hash_plane_count{12};
     uint64_t reservoir_size{64};
     float alpha{1.0F};
