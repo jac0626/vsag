@@ -66,11 +66,15 @@ MakeRows(const std::vector<float>& vectors,
 }
 
 vsag::GraphInterfacePtr
-MakeGraph(const vsag::IndexCommonParam& common_param, uint64_t count, uint64_t max_degree) {
+MakeGraph(const vsag::IndexCommonParam& common_param,
+          uint64_t count,
+          uint64_t max_degree,
+          bool support_duplicate = false) {
     const auto graph_json = vsag::JsonType::Parse(fmt::format(
-        R"({{"io_params": {{"type": "block_memory_io"}}, "max_degree": {}, "init_capacity": {}}})",
+        R"({{"io_params": {{"type": "block_memory_io"}}, "max_degree": {}, "init_capacity": {}, "support_duplicate": {}}})",
         max_degree,
-        std::max<uint64_t>(count, 1)));
+        std::max<uint64_t>(count, 1),
+        support_duplicate));
     const auto graph_param = vsag::GraphInterfaceParameter::GetGraphParameterByJson(
         vsag::GraphStorageTypes::GRAPH_STORAGE_TYPE_VALUE_FLAT, graph_json);
     auto graph = vsag::GraphInterface::MakeInstance(graph_param, common_param);
@@ -234,6 +238,35 @@ TEST_CASE("PiPNN keeps identical vectors reachable across fallback leaves", "[ut
         }
     }
     REQUIRE(visited.size() == count);
+}
+
+TEST_CASE("PiPNN registers exact duplicate rows instead of building duplicate vertices",
+          "[ut][pipnn][duplicate]") {
+    constexpr uint64_t dimensions = 4;
+    constexpr uint64_t count = 6;
+    auto common_param = MakeCommonParam(dimensions);
+    auto vectors = MakeVectors(count, dimensions);
+    std::copy(vectors.begin() + dimensions,
+              vectors.begin() + 2 * dimensions,
+              vectors.begin() + 4 * dimensions);
+    std::copy(vectors.begin() + dimensions,
+              vectors.begin() + 2 * dimensions,
+              vectors.begin() + 5 * dimensions);
+    vsag::Vector<vsag::InnerIdType> ids(common_param.allocator_.get());
+    for (uint64_t id = 0; id < count; ++id) {
+        ids.emplace_back(static_cast<vsag::InnerIdType>(id));
+    }
+    auto rows = MakeRows(vectors, ids, dimensions, common_param.allocator_.get());
+    auto graph = MakeGraph(common_param, count, 4, true);
+
+    vsag::PiPNNGraphBuilder({}, dimensions, common_param.allocator_.get()).Build(graph, ids, rows);
+
+    REQUIRE(graph->GetGroupId(4) == 1);
+    REQUIRE(graph->GetGroupId(5) == 1);
+    auto duplicates = graph->GetDuplicateIds(1);
+    std::sort(duplicates.begin(), duplicates.end());
+    REQUIRE(duplicates == std::vector<vsag::InnerIdType>{4, 5});
+    REQUIRE(graph->TotalCount() == 4);
 }
 
 TEST_CASE("PiPNN graph builder validates structural parameters", "[ut][pipnn]") {
