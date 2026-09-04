@@ -20,6 +20,7 @@
 
 #include "hgraph.h"
 #include "impl/allocator/safe_allocator.h"
+#include "impl/odescent/odescent_graph_parameter.h"
 #include "index/index_impl.h"
 #include "index_common_param.h"
 #include "unittest.h"
@@ -103,6 +104,35 @@ TEST_CASE("HGraph PiPNN builds and searches", "[ut][pipnn][hgraph]") {
         REQUIRE(std::find(labels.begin(), labels.end(), search_result.value()->GetIds()[result]) !=
                 labels.end());
     }
+}
+
+TEST_CASE("HGraph PiPNN keeps configured ODescent routing parameters", "[ut][pipnn][hgraph]") {
+    constexpr int64_t dimensions = 4;
+    constexpr int64_t count = 32;
+    auto common_param = MakePiPNNCommonParam(dimensions);
+    auto parameter = MakePiPNNHGraphParam();
+    parameter["max_degree"].SetInt(4);
+    parameter["build_thread_count"].SetInt(4);
+    parameter["build_block_size"].SetInt(73);
+    auto mapped = vsag::HGraph::CheckAndMappingExternalParam(parameter, common_param);
+    auto typed = std::dynamic_pointer_cast<vsag::HGraphParameter>(mapped);
+    REQUIRE(typed != nullptr);
+    REQUIRE(typed->odescent_param != nullptr);
+
+    auto inner = std::make_shared<vsag::HGraph>(mapped, common_param);
+    auto index = std::make_shared<vsag::IndexImpl<vsag::HGraph>>(inner, common_param);
+    std::vector<float> vectors(static_cast<uint64_t>(count * dimensions));
+    std::vector<int64_t> labels(static_cast<uint64_t>(count));
+    for (int64_t point = 0; point < count; ++point) {
+        labels[point] = point;
+        for (int64_t dim = 0; dim < dimensions; ++dim) {
+            vectors[point * dimensions + dim] = static_cast<float>(point + dim);
+        }
+    }
+
+    REQUIRE(index->Build(MakeDataset(vectors, labels, dimensions, count)).has_value());
+    REQUIRE(typed->odescent_param->max_degree == 4);
+    REQUIRE(typed->odescent_param->block_size == 73);
 }
 
 TEST_CASE("HGraph PiPNN keeps duplicate-label and entry-point semantics", "[ut][pipnn][hgraph]") {
