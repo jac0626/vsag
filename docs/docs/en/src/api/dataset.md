@@ -89,17 +89,17 @@ For documents that hold several dense sub-vectors each:
 | `ExtraInfoSize(int64_t)` | `GetExtraInfoSize()` | `int64_t` | Bytes per extra-info blob. |
 | `Paths(const std::string*)` | `GetPaths()` | `const std::string*` | Hierarchy paths (Pyramid). Default hierarchy. |
 | `Paths(const std::string& hierarchy, const std::string*)` | `GetPaths(const std::string& hierarchy)` | `const std::string*` | Paths for a named hierarchy. |
-| `Paths(const std::string& hierarchy, std::vector<std::vector<std::string>>)` | — | structured paths | Zero, one, or multiple Pyramid paths per element. |
+| `Paths(const std::string& hierarchy, std::vector<std::vector<std::string>>)` | `GetPaths(const std::string& hierarchy, std::vector<std::vector<std::string>>& paths)` | structured paths | One or multiple Pyramid paths per element. |
 | `SourceID(const std::string*)` | `GetSourceID()` | `const std::string*` | Optional stable source identifier per element; HGraph uses it to match build-cache entries across snapshots. |
 
 For the structured `Paths` overload, the outer vector must have exactly `NumElements()` entries and
-each inner vector lists the independent paths for that element. An empty inner vector means that the
-element does not enter that hierarchy; an inner vector containing one empty string (`{""}`) assigns
-the element to the hierarchy root. Repeated or shared-prefix paths do not duplicate the vector in a
-node or in search results.
+each inner vector must list at least one independent path for that element. An empty inner vector is
+invalid; an inner vector containing one empty string (`{""}`) assigns the element to the hierarchy
+root. Repeated or shared-prefix paths do not duplicate the vector in a node or in search results.
 
 The structured container is copied or moved into `Dataset`, so its lifetime is independent of
-`Owner()`.
+`Owner()`. The structured `GetPaths` overload copies either representation into the output container
+and returns `false` after clearing the output when the hierarchy is absent.
 
 See [Attribute Filter (Hybrid Search)](../advanced/attribute_filter.md),
 [Extra Info](../advanced/extra_info.md), and

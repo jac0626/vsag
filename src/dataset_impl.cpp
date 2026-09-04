@@ -42,6 +42,29 @@ Dataset::Paths(const std::string& hierarchy_name, std::vector<std::vector<std::s
     return dataset->Paths(hierarchy_name, std::move(paths));
 }
 
+bool
+Dataset::GetPaths(const std::string& hierarchy_name,
+                  std::vector<std::vector<std::string>>& paths) const {
+    if (const auto* dataset = dynamic_cast<const DatasetImpl*>(this)) {
+        return dataset->CopyPaths(hierarchy_name, paths);
+    }
+
+    paths.clear();
+    const auto* legacy_paths = GetPaths(hierarchy_name);
+    if (legacy_paths == nullptr) {
+        return false;
+    }
+    const auto num_elements = GetNumElements();
+    if (num_elements < 0) {
+        throw VsagException(ErrorType::INVALID_ARGUMENT, "NumElements() must not be negative");
+    }
+    paths.reserve(static_cast<uint64_t>(num_elements));
+    for (int64_t i = 0; i < num_elements; ++i) {
+        paths.push_back({legacy_paths[i]});
+    }
+    return true;
+}
+
 const std::string*
 GetDatasetPaths(const Dataset& dataset,
                 const std::string& hierarchy_name,
@@ -118,6 +141,12 @@ DatasetImpl::ReplacePaths(const std::string& key, var paths) {
 
 DatasetPtr
 DatasetImpl::Paths(const std::string& hierarchy_name, MultiPaths paths) {
+    for (const auto& element_paths : paths) {
+        if (element_paths.empty()) {
+            throw VsagException(ErrorType::INVALID_ARGUMENT,
+                                "Each element must have at least one hierarchy path");
+        }
+    }
     if (auto iter = data_.find(NUM_ELEMENTS); iter != data_.end()) {
         const auto num_elements = std::get<int64_t>(iter->second);
         if (num_elements < 0 || paths.size() != static_cast<uint64_t>(num_elements)) {
@@ -165,7 +194,7 @@ DatasetImpl::GetPaths(const std::string& hierarchy_name,
 
     const auto& element_paths = paths[element_index];
     path_count = element_paths.size();
-    return element_paths.empty() ? &EmptyPathsSentinel() : element_paths.data();
+    return element_paths.data();
 }
 
 bool
@@ -177,6 +206,38 @@ DatasetImpl::HasPaths(const std::string& hierarchy_name) const {
     if (const auto* paths = std::get_if<const std::string*>(value)) {
         return *paths != nullptr;
     }
+    return true;
+}
+
+bool
+DatasetImpl::CopyPaths(const std::string& hierarchy_name, MultiPaths& paths) const {
+    paths.clear();
+    const auto* value = FindPaths(hierarchy_name);
+    if (value == nullptr) {
+        return false;
+    }
+    if (const auto* legacy_paths = std::get_if<const std::string*>(value)) {
+        if (*legacy_paths == nullptr) {
+            return false;
+        }
+        const auto num_elements = GetNumElements();
+        if (num_elements < 0) {
+            throw VsagException(ErrorType::INVALID_ARGUMENT, "NumElements() must not be negative");
+        }
+        paths.reserve(static_cast<uint64_t>(num_elements));
+        for (int64_t i = 0; i < num_elements; ++i) {
+            paths.push_back({(*legacy_paths)[i]});
+        }
+        return true;
+    }
+
+    const auto& multi_paths = std::get<MultiPaths>(*value);
+    const auto num_elements = GetNumElements();
+    if (num_elements < 0 || multi_paths.size() != static_cast<uint64_t>(num_elements)) {
+        throw VsagException(ErrorType::INVALID_ARGUMENT,
+                            "The multi-path outer vector must match NumElements()");
+    }
+    paths = multi_paths;
     return true;
 }
 

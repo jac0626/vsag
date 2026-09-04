@@ -246,6 +246,9 @@ public:
     const std::string*
     GetPaths(const std::string& hierarchy_name, uint64_t element_index, uint64_t& path_count) const;
 
+    bool
+    CopyPaths(const std::string& hierarchy_name, MultiPaths& paths) const;
+
     DatasetPtr
     UInt32Metadata(const std::string& name, const uint32_t* values) override {
         this->data_[UInt32MetadataKey(name)] = values;
@@ -417,12 +420,6 @@ private:
     static bool
     IsPathsKey(const std::string& key) {
         return key == DATASET_PATHS || IsHierarchyPathsKey(key);
-    }
-
-    static const std::string&
-    EmptyPathsSentinel() {
-        static const std::string sentinel;
-        return sentinel;
     }
 
     const var*

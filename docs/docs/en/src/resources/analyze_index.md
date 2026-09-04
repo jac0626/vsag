@@ -30,7 +30,7 @@ hierarchy, attach paths with `Dataset::Paths`. For a named hierarchy, use
 `Dataset::Paths(hierarchy_name, paths)` and select that hierarchy in the Pyramid search parameters.
 A path is required when the selected hierarchy's root is `NO_INDEX`. In a batched query dataset,
 the outer path collection has one row per query. The legacy overload stores one path string per
-row and interprets `|` as a union; the structured overload stores zero, one, or many atomic paths
+row and interprets `|` as a union; the structured overload stores one or many atomic paths
 per row and treats `|` as an ordinary path character. Pyramid calculates ground truth only from
 vectors eligible for each query's hierarchy and path union, excluding mark-removed vectors.
 Pyramid query analysis currently supports KNN requests only and uses `query_`, `topk_`, and

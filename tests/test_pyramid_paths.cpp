@@ -117,6 +117,15 @@ RequirePaths(const std::string* actual, const std::vector<std::string>& expected
     }
 }
 
+void
+RequirePathRows(const vsag::DatasetPtr& dataset,
+                const std::string& hierarchy_name,
+                const std::vector<std::vector<std::string>>& expected) {
+    std::vector<std::vector<std::string>> actual;
+    REQUIRE(dataset->GetPaths(hierarchy_name, actual));
+    REQUIRE(actual == expected);
+}
+
 }  // namespace
 
 TEST_CASE("Pyramid does not retain paths by default", "[ft][pyramid][paths]") {
@@ -162,18 +171,32 @@ TEST_CASE("Pyramid stores structured path rows", "[ft][pyramid][paths][multi_pat
     for (const std::string graph_type : {"nsw", "odescent"}) {
         auto index = MakePyramidIndex(graph_type, true);
         auto base = MakeDataset({1, 2, 3}, {});
-        base->Paths("", std::vector<std::vector<std::string>>{{"left", "right"}, {"single"}, {}});
+        base->Paths("", std::vector<std::vector<std::string>>{{"left", "right"}, {"single"}, {""}});
 
         REQUIRE(index->Build(base).has_value());
-        RequirePaths(GetDataWithFlag(index, {2}, DATA_FLAG_PATH)->GetPaths(), {"single"});
-        REQUIRE(GetDataWithFlag(index, {1}, DATA_FLAG_PATH)->GetPaths() == nullptr);
-        REQUIRE(GetDataWithFlag(index, {3}, DATA_FLAG_PATH)->GetPaths() == nullptr);
+        const auto single = GetDataWithFlag(index, {2}, DATA_FLAG_PATH);
+        RequirePaths(single->GetPaths(), {"single"});
+        RequirePathRows(single, "", {{"single"}});
+
+        const auto multiple = GetDataWithFlag(index, {1}, DATA_FLAG_PATH);
+        REQUIRE(multiple->GetPaths() == nullptr);
+        RequirePathRows(multiple, "", {{"left", "right"}});
+
+        const auto root = GetDataWithFlag(index, {3}, DATA_FLAG_PATH);
+        RequirePaths(root->GetPaths(), {""});
+        RequirePathRows(root, "", {{""}});
+
+        const auto all = GetDataWithFlag(index, {3, 1, 2}, DATA_FLAG_PATH);
+        REQUIRE(all->GetPaths() == nullptr);
+        RequirePathRows(all, "", {{""}, {"left", "right"}, {"single"}});
 
         auto added = MakeDataset({4, 5}, {});
         added->Paths("", std::vector<std::vector<std::string>>{{"added"}, {"added/a", "added/b"}});
         REQUIRE(index->Add(added).has_value());
         RequirePaths(GetDataWithFlag(index, {4}, DATA_FLAG_PATH)->GetPaths(), {"added"});
-        REQUIRE(GetDataWithFlag(index, {5}, DATA_FLAG_PATH)->GetPaths() == nullptr);
+        const auto added_multiple = GetDataWithFlag(index, {5}, DATA_FLAG_PATH);
+        REQUIRE(added_multiple->GetPaths() == nullptr);
+        RequirePathRows(added_multiple, "", {{"added/a", "added/b"}});
     }
 }
 
