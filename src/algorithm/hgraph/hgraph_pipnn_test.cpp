@@ -187,9 +187,37 @@ TEST_CASE("HGraph validates PiPNN graph type and data boundary", "[ut][pipnn][hg
         parameter["precise_quantization_type"].SetString("fp32");
         REQUIRE_NOTHROW(MakePiPNNIndex(parameter, common_param));
     }
-    SECTION("extra info") {
+    SECTION("extra info configuration") {
         common_param.extra_info_size_ = 4;
         REQUIRE_NOTHROW(MakePiPNNIndex(MakePiPNNHGraphParam(), common_param));
+    }
+    SECTION("missing extra info payload") {
+        constexpr int64_t count = 4;
+        common_param.extra_info_size_ = 4;
+        auto index = MakePiPNNIndex(MakePiPNNHGraphParam(), common_param);
+        std::vector<float> vectors(static_cast<uint64_t>(count * dimensions), 1.0F);
+        std::vector<int64_t> labels = {10, 20, 30, 40};
+
+        auto result = index->Build(MakeDataset(vectors, labels, dimensions, count));
+        REQUIRE_FALSE(result.has_value());
+        REQUIRE(result.error().type == vsag::ErrorType::INVALID_ARGUMENT);
+        REQUIRE(index->GetNumElements() == 0);
+    }
+    SECTION("mismatched extra info size") {
+        constexpr int64_t count = 4;
+        common_param.extra_info_size_ = 4;
+        auto index = MakePiPNNIndex(MakePiPNNHGraphParam(), common_param);
+        std::vector<float> vectors(static_cast<uint64_t>(count * dimensions), 1.0F);
+        std::vector<int64_t> labels = {10, 20, 30, 40};
+        std::vector<char> extra_infos(static_cast<uint64_t>(count * 2), 'x');
+        auto base = MakeDataset(vectors, labels, dimensions, count)
+                        ->ExtraInfoSize(2)
+                        ->ExtraInfos(extra_infos.data());
+
+        auto result = index->Build(base);
+        REQUIRE_FALSE(result.has_value());
+        REQUIRE(result.error().type == vsag::ErrorType::INVALID_ARGUMENT);
+        REQUIRE(index->GetNumElements() == 0);
     }
     SECTION("attribute filtering") {
         auto parameter = MakePiPNNHGraphParam();

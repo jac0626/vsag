@@ -760,9 +760,7 @@ PiPNNPipeline::build_leaf(const Leaf& leaf) {
             }
             const float distance = normalized_distance(distances[source * point_count + target] +
                                                        norms_[leaf[source]] + norms_[leaf[target]]);
-            if (std::isfinite(distance)) {
-                candidates.emplace_back(distance, static_cast<uint32_t>(target));
-            }
+            candidates.emplace_back(distance, static_cast<uint32_t>(target));
         }
 
         const uint64_t retained = std::min<uint64_t>(neighbor_count, candidates.size());
@@ -814,7 +812,7 @@ PiPNNPipeline::relative_hash(uint32_t source, uint32_t target) const {
 
 void
 PiPNNPipeline::insert_candidate(uint32_t source, uint32_t target, float distance) {
-    if (source == target or not std::isfinite(distance)) {
+    if (source == target) {
         return;
     }
 
@@ -914,13 +912,17 @@ PiPNNPipeline::robust_prune(uint32_t source, const ReservoirEntry* row, uint16_t
     ordered.reserve(candidate_ids.size());
     for (const auto candidate : candidate_ids) {
         const float distance = pair_distance(source, candidate);
-        if (std::isfinite(distance)) {
-            ordered.emplace_back(distance, candidate);
-        }
+        ordered.emplace_back(distance, candidate);
     }
     std::sort(ordered.begin(), ordered.end(), [&](const auto& lhs, const auto& rhs) {
         if (lhs.first != rhs.first) {
             return lhs.first < rhs.first;
+        }
+        const auto source_id = ids_[source];
+        const auto lhs_gap = id_gap(source_id, ids_[lhs.second]);
+        const auto rhs_gap = id_gap(source_id, ids_[rhs.second]);
+        if (lhs_gap != rhs_gap) {
+            return lhs_gap < rhs_gap;
         }
         return ids_[lhs.second] < ids_[rhs.second];
     });
@@ -1066,12 +1068,11 @@ PiPNNGraphBuilder::PiPNNGraphBuilder(PiPNNGraphBuilderParameter parameter,
       dimensions_(dimensions),
       allocator_(allocator),
       thread_pool_(thread_pool),
-      thread_count_(thread_count) {
+      thread_count_(std::max<uint64_t>(1, thread_count)) {
     require_argument(dimensions_ > 0, "PiPNN dimensions must be positive");
     require_argument(dimensions_ <= static_cast<uint64_t>(std::numeric_limits<int32_t>::max()),
                      "PiPNN dimensions exceed the BLAS limit");
     require_argument(allocator_ != nullptr, "PiPNN allocator must not be null");
-    require_argument(thread_count_ > 0, "PiPNN thread_count must be positive");
 }
 
 void
