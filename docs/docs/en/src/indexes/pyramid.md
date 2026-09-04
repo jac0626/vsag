@@ -3,7 +3,7 @@
 ![Pyramid: a tree of per-node proximity sub-graphs keyed by path strings; vectors can belong to multiple paths and search walks the requested path prefixes](../figures/indexes/pyramid-overview.svg)
 
 Pyramid is VSAG's **hierarchical, path-partitioned** graph index. A vector can be
-tagged with zero, one, or multiple path strings such as `"a/d/f"`, and Pyramid
+tagged with one or multiple path strings such as `"a/d/f"`, and Pyramid
 builds a graph per node in those path trees. At query time you supply one or more
 path prefixes, and Pyramid restricts the search to the corresponding sub-trees.
 
@@ -274,19 +274,28 @@ const std::string* category_paths = data->GetPaths("category");
 `GetDataByIds` and `GetDataByIdsWithFlag` calls without `DATA_FLAG_PATH` do not attach path arrays.
 Selecting `DATA_FLAG_PATH` while `store_paths` is `false` returns an invalid-argument error. When
 path storage is enabled, these legacy getters include a hierarchy only if every requested ID has
-exactly one recorded path in that hierarchy. If any requested ID has zero or multiple paths, its
-getter returns `nullptr`; other hierarchies whose requested paths are complete are still returned.
+exactly one recorded path in that hierarchy. If any requested ID has no recorded path or multiple
+paths, its getter returns `nullptr`; other hierarchies whose requested paths are complete are returned.
 In single-hierarchy mode, the same rule applies to `GetPaths()`.
+
+Use the structured overload to retrieve every path regardless of the stored representation:
+
+```cpp
+std::vector<std::vector<std::string>> tag_paths;
+if (data->GetPaths("tag", tag_paths)) {
+    // tag_paths[i] contains every path for requested_ids[i].
+}
+```
 
 To assign multiple independent paths to one vector in the same hierarchy, pass
 a nested vector. The outer vector has one entry per dataset element; each inner
-vector has zero, one, or multiple paths:
+vector has one or multiple paths:
 
 ```cpp
 std::vector<std::vector<std::string>> tag_paths = {
     {"technology", "military"}, // vector 0 belongs to both paths
     {"sports"},                  // vector 1 belongs to one path
-    {},                          // vector 2 does not enter the tag hierarchy
+    {""},                        // vector 2 belongs to the hierarchy root
 };
 
 auto base = vsag::Dataset::Make();
@@ -300,9 +309,8 @@ base->NumElements(3)
 index->Build(base);
 ```
 
-An empty inner vector means no membership in that hierarchy. An inner vector
-containing `""` explicitly assigns the vector to the root. Duplicate paths and
-shared prefixes are inserted once per tree node. `Add()` accepts the same form,
+An empty inner vector is invalid. An inner vector containing `""` assigns the vector to the root.
+Duplicate paths and shared prefixes are inserted once per tree node. `Add()` accepts the same form,
 and serialization preserves every resulting path assignment.
 
 ### Searching a specific hierarchy
@@ -402,7 +410,7 @@ For each hierarchy, `root_graphs` reports `root_graph_type`, `bottom_graph_stora
 is enabled, quantization metrics. Its query dataset must carry the same default or named-hierarchy
 paths required by `KnnSearch`. For a batched dataset, the outer path collection has one row per
 query: the legacy overload supplies one path string per row (and uses `|` for a union), while the
-structured overload supplies zero, one, or many atomic paths per row and permits literal `|`
+structured overload supplies one or many atomic paths per row and permits literal `|`
 characters. The `analyze_index` tool cannot currently load hierarchy paths from its dense query
 file, so use the C++ API for path-scoped dynamic analysis.
 

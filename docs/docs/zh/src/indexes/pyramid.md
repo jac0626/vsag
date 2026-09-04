@@ -261,18 +261,27 @@ const std::string* category_paths = data->GetPaths("category");
 `GetDataByIds` 以及未选择 `DATA_FLAG_PATH` 的 `GetDataByIdsWithFlag` 都不会附带路径
 数组。`store_paths` 为 `false` 时选择 `DATA_FLAG_PATH` 会返回参数错误。开启路径存储
 后，只有当所有请求 ID 在某个 hierarchy 中都恰好有一条已记录路径时，这些旧 getter
-才会返回该 hierarchy。只要其中一个 ID 有零条或多条路径，对应 getter 就返回
+才会返回该 hierarchy。只要其中一个 ID 没有已记录路径或有多条路径，对应 getter 就返回
 `nullptr`；其他路径完整的 hierarchy 仍会正常返回。单 hierarchy 模式下，
 `GetPaths()` 遵循相同规则。
 
+使用结构化重载可以统一取回旧表示或新表示中的全部路径：
+
+```cpp
+std::vector<std::vector<std::string>> tag_paths;
+if (data->GetPaths("tag", tag_paths)) {
+    // tag_paths[i] 包含 requested_ids[i] 的全部路径。
+}
+```
+
 若要让同一条向量在同一个层级中属于多条独立路径，请传入嵌套 vector。外层 vector
-与 dataset 元素一一对应，每个内层 vector 可以包含零条、一条或多条路径：
+与 dataset 元素一一对应，每个内层 vector 可以包含一条或多条路径：
 
 ```cpp
 std::vector<std::vector<std::string>> tag_paths = {
     {"technology", "military"}, // 向量 0 同时属于两条路径
     {"sports"},                  // 向量 1 属于一条路径
-    {},                          // 向量 2 不进入 tag 层级
+    {""},                        // 向量 2 属于层级根节点
 };
 
 auto base = vsag::Dataset::Make();
@@ -286,7 +295,7 @@ base->NumElements(3)
 index->Build(base);
 ```
 
-空的内层 vector 表示不属于该层级；只包含 `""` 的内层 vector 表示显式挂到根节点。
+空的内层 vector 非法；只包含 `""` 的内层 vector 表示挂到根节点。
 重复路径和共享前缀在同一个树节点内只插入一次。`Add()` 支持相同形式，序列化会保留
 最终形成的全部路径归属。
 
@@ -380,7 +389,7 @@ new_index->Deserialize(binary_set);
 query 召回率、距离、耗时，以及开启 reorder 时的量化指标。query 数据集必须包含与
 `KnnSearch` 相同的默认或命名 hierarchy 路径。对于批量数据集，外层路径集合的每一行对应
 一条 query：旧重载每行提供一个路径字符串（并用 `|` 表示并集），结构化重载则可为每行提供
-零条、一条或多条原子路径，并允许路径中包含字面量 `|`。`analyze_index` 工具当前无法从
+一条或多条原子路径，并允许路径中包含字面量 `|`。`analyze_index` 工具当前无法从
 dense query 文件加载 hierarchy 路径，因此按路径执行动态分析时请使用 C++ 接口。
 
 ## 标记删除
