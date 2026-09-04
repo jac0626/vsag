@@ -92,7 +92,7 @@ Build-time parameters live under `index_param`.
 | `tq_chain` | string | — | Transform chain used when `base_quantization_type` is `tq`, for example `"mrle, rabitq"`. |
 | `mrle_dim` | int | `0` | Prefix dimension retained by MRLE; `0` keeps the input dimension. |
 | `max_degree` | int | `64` | Maximum out-degree per node within a sub-graph. |
-| `graph_type` | string | `"nsw"` | `nsw`, `odescent`, or `pipnn`. PiPNN builds hierarchy roots; descendants use ODescent. |
+| `graph_type` | string | `"nsw"` | `nsw`, `odescent`, or `pipnn`. PiPNN builds hierarchy roots; descendants normally use ODescent. With duplicate support enabled, descendant graphs use the shared PiPNN builder to preserve duplicate groups. |
 | `graph_storage_type` | string | `"flat"` | Bottom-graph storage for a `multi_layer` root: `flat` favors construction and search speed, while `compressed` reduces graph memory. Compressed storage requires `max_degree <= 255`. Single-layer roots, routing graphs, and child graphs remain sparse. |
 | `ef_construction` | int | `400` | Candidate list size for `nsw` builds. |
 | `alpha` | float | `1.2` | Pruning factor during graph construction. |
@@ -118,8 +118,10 @@ Build-time parameters live under `index_param`.
 PiPNN supports Pyramid builds with `dtype: "float32"` and `metric_type: "l2"`. It builds level 0
 of each hierarchy with the shared PiPNN builder; with `root_graph_type: "multi_layer"`, PiPNN also
 batch-builds every root routing layer. Descendant path-node graphs continue to use ODescent.
-Search, incremental `Add`, removal, reorder, and serialization retain the standard Pyramid
-behavior. Levels in `no_build_levels` are still skipped.
+When `support_duplicate` is enabled, descendant graph construction also uses the shared PiPNN
+builder so duplicate groups retain the standard path visibility semantics. Search, incremental
+`Add`, removal, reorder, and serialization retain the standard Pyramid behavior. Levels in
+`no_build_levels` are still skipped.
 
 ### RaBitQ split configuration
 
