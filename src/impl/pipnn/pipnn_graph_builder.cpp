@@ -602,6 +602,10 @@ PiPNNPipeline::assign_to_leaders(const WorkItem& item,
         return clusters;
     }
 
+    Vector<float> point_values(allocator_);
+    Vector<float> dots(allocator_);
+    Vector<std::pair<float, uint32_t>> candidates(allocator_);
+    candidates.reserve(leaders.size());
     for (uint64_t begin = 0; begin < item.points.size(); begin += PARTITION_STRIPE_SIZE) {
         const uint64_t stripe_size =
             std::min<uint64_t>(PARTITION_STRIPE_SIZE, item.points.size() - begin);
@@ -609,8 +613,8 @@ PiPNNPipeline::assign_to_leaders(const WorkItem& item,
             checked_product(stripe_size, dimensions_, "partition stripe");
         const uint64_t dot_count =
             checked_product(stripe_size, leaders.size(), "partition distances");
-        Vector<float> point_values(point_value_count, allocator_);
-        Vector<float> dots(dot_count, allocator_);
+        point_values.resize(point_value_count);
+        dots.resize(dot_count);
 
         for (uint64_t point = 0; point < stripe_size; ++point) {
             const auto* source = vector_by_local_id(item.points[begin + point]);
@@ -634,8 +638,6 @@ PiPNNPipeline::assign_to_leaders(const WorkItem& item,
                             dots.data(),
                             static_cast<int32_t>(leaders.size()));
 
-        Vector<std::pair<float, uint32_t>> candidates(allocator_);
-        candidates.reserve(leaders.size());
         for (uint64_t point = 0; point < stripe_size; ++point) {
             const uint32_t local_id = item.points[begin + point];
             candidates.clear();
@@ -814,12 +816,12 @@ PiPNNPipeline::insert_candidate(uint32_t source, uint32_t target, float distance
         return;
     }
 
-    auto& state = reservoir_states_[source];
-    auto* row = reservoirs_.data() + static_cast<uint64_t>(source) * reservoir_size_;
     const uint16_t hash = relative_hash(source, target);
     const uint16_t distance_key = generic::FloatToBF16(normalized_distance(distance));
     const auto incoming_key = std::make_tuple(distance_key, ids_[target], hash);
     PointLockGuard lock(point_locks_.get(), source);
+    auto& state = reservoir_states_[source];
+    auto* row = reservoirs_.data() + static_cast<uint64_t>(source) * reservoir_size_;
 
     if (state.size == reservoir_size_) {
         const auto& farthest = row[state.farthest];
