@@ -1429,7 +1429,7 @@ struct MultiPathFixture {
             ->Paths("host", host_paths)
             ->Paths("tag",
                     std::vector<std::vector<std::string>>{
-                        {"a/x", "a/y", "a/x", "literal|pipe"}, {"a/x"}, {}, {""}})
+                        {"a/x", "a/y", "a/x", "literal|pipe"}, {"a/x"}, {"other"}, {""}})
             ->Owner(true);
         return dataset;
     }
@@ -1664,10 +1664,7 @@ TEST_CASE("Multi-Hierarchy: Multiple paths per vector",
 
     REQUIRE(MultiPathFixture::search(index.value(),
                                      MultiPathFixture::make_structured_query({""}),
-                                     "tag") == std::vector<int64_t>{10, 11, 13});
-    REQUIRE(
-        MultiPathFixture::search(index.value(), MultiPathFixture::make_structured_query({}), "tag")
-            .empty());
+                                     "tag") == std::vector<int64_t>{10, 11, 12, 13});
 
     REQUIRE(MultiPathFixture::search(index.value(),
                                      MultiPathFixture::make_legacy_query("host", "host/three"),

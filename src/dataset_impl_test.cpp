@@ -374,11 +374,8 @@ GetElementPaths(const vsag::DatasetPtr& dataset,
                 uint64_t element_index) {
     uint64_t path_count = 0;
     const auto* paths = vsag::GetDatasetPaths(*dataset, hierarchy_name, element_index, path_count);
-    if (path_count == 0) {
-        REQUIRE(paths != nullptr);
-        return {};
-    }
     REQUIRE(paths != nullptr);
+    REQUIRE(path_count > 0);
     return {paths, paths + path_count};
 }
 
@@ -544,8 +541,8 @@ TEST_CASE("Dataset Named Paths Test", "[ut][dataset]") {
         REQUIRE(dataset->GetPaths("taxonomy")[2] == "taxonomy/c");
     }
 
-    SECTION("structured paths represent zero one or many paths") {
-        std::vector<std::vector<std::string>> paths = {{"tag/a", "tag/b"}, {"tag/c"}, {}};
+    SECTION("structured paths represent one or many paths") {
+        std::vector<std::vector<std::string>> paths = {{"tag/a", "tag/b"}, {"tag/c"}, {""}};
         auto dataset = vsag::Dataset::Make();
         dataset->NumElements(3)->Dim(1)->Paths("tag", paths);
         paths[0][0] = "changed";
@@ -553,11 +550,18 @@ TEST_CASE("Dataset Named Paths Test", "[ut][dataset]") {
         REQUIRE(dataset->GetPaths("tag") == nullptr);
         REQUIRE(GetElementPaths(dataset, "tag", 0) == std::vector<std::string>{"tag/a", "tag/b"});
         REQUIRE(GetElementPaths(dataset, "tag", 1) == std::vector<std::string>{"tag/c"});
-        REQUIRE(GetElementPaths(dataset, "tag", 2).empty());
+        REQUIRE(GetElementPaths(dataset, "tag", 2) == std::vector<std::string>{""});
+
+        std::vector<std::vector<std::string>> copied_paths;
+        REQUIRE(dataset->GetPaths("tag", copied_paths));
+        REQUIRE(copied_paths ==
+                std::vector<std::vector<std::string>>{{"tag/a", "tag/b"}, {"tag/c"}, {""}});
 
         uint64_t path_count = 1;
         REQUIRE(vsag::GetDatasetPaths(*dataset, "missing", 0, path_count) == nullptr);
         REQUIRE(path_count == 0);
+        REQUIRE_FALSE(dataset->GetPaths("missing", copied_paths));
+        REQUIRE(copied_paths.empty());
     }
 
     SECTION("common getter preserves legacy empty path semantics") {
@@ -567,9 +571,18 @@ TEST_CASE("Dataset Named Paths Test", "[ut][dataset]") {
 
         REQUIRE(GetElementPaths(dataset, "tag", 0) == std::vector<std::string>{"tag/a"});
         REQUIRE(GetElementPaths(dataset, "tag", 1) == std::vector<std::string>{""});
+
+        std::vector<std::vector<std::string>> copied_paths;
+        REQUIRE(dataset->GetPaths("tag", copied_paths));
+        REQUIRE(copied_paths == std::vector<std::vector<std::string>>{{"tag/a"}, {""}});
     }
 
-    SECTION("structured paths validate the outer size in either fluent order") {
+    SECTION("structured paths validate row and outer sizes") {
+        auto empty_row = vsag::Dataset::Make();
+        empty_row->NumElements(2);
+        REQUIRE_THROWS(
+            empty_row->Paths("tag", std::vector<std::vector<std::string>>{{"tag/a"}, {}}));
+
         auto after_count = vsag::Dataset::Make();
         after_count->NumElements(2);
         REQUIRE_THROWS(after_count->Paths("tag", std::vector<std::vector<std::string>>{{"tag/a"}}));
@@ -587,9 +600,9 @@ TEST_CASE("Dataset Named Paths Test", "[ut][dataset]") {
         dataset->NumElements(3);
         uint64_t path_count = 0;
         REQUIRE_THROWS(vsag::GetDatasetPaths(*dataset, "tag", 0, path_count));
-        dataset->Paths("tag", std::vector<std::vector<std::string>>{{"tag/a"}, {"tag/b"}, {}});
+        dataset->Paths("tag", std::vector<std::vector<std::string>>{{"tag/a"}, {"tag/b"}, {""}});
 
-        REQUIRE(GetElementPaths(dataset, "tag", 2).empty());
+        REQUIRE(GetElementPaths(dataset, "tag", 2) == std::vector<std::string>{""});
     }
 
     SECTION("structured paths replace an owned legacy buffer") {
@@ -597,28 +610,28 @@ TEST_CASE("Dataset Named Paths Test", "[ut][dataset]") {
         auto dataset = vsag::Dataset::Make();
         dataset->NumElements(2)->Paths("tag", legacy_paths)->Owner(true);
 
-        dataset->Paths("tag", std::vector<std::vector<std::string>>{{"tag/c", "tag/d"}, {}});
+        dataset->Paths("tag", std::vector<std::vector<std::string>>{{"tag/c", "tag/d"}, {""}});
 
         REQUIRE(GetElementPaths(dataset, "tag", 0) == std::vector<std::string>{"tag/c", "tag/d"});
-        REQUIRE(GetElementPaths(dataset, "tag", 1).empty());
+        REQUIRE(GetElementPaths(dataset, "tag", 1) == std::vector<std::string>{""});
     }
 
     SECTION("deep copy preserves structured paths") {
         auto original = vsag::Dataset::Make();
         original->NumElements(2)->Dim(1)->Paths(
-            "tag", std::vector<std::vector<std::string>>{{"tag/a", "tag/b"}, {}});
+            "tag", std::vector<std::vector<std::string>>{{"tag/a", "tag/b"}, {""}});
 
         auto copy = original->DeepCopy();
         original->Paths("tag", std::vector<std::vector<std::string>>{{"replacement"}, {"other"}});
 
         REQUIRE(GetElementPaths(copy, "tag", 0) == std::vector<std::string>{"tag/a", "tag/b"});
-        REQUIRE(GetElementPaths(copy, "tag", 1).empty());
+        REQUIRE(GetElementPaths(copy, "tag", 1) == std::vector<std::string>{""});
     }
 
     SECTION("append combines structured paths") {
         auto dataset = vsag::Dataset::Make();
         dataset->NumElements(2)->Dim(1)->Paths(
-            "tag", std::vector<std::vector<std::string>>{{"tag/a", "tag/b"}, {}});
+            "tag", std::vector<std::vector<std::string>>{{"tag/a", "tag/b"}, {""}});
         auto appended = vsag::Dataset::Make();
         appended->NumElements(1)->Dim(1)->Paths("tag",
                                                 std::vector<std::vector<std::string>>{{"tag/c"}});
@@ -627,7 +640,7 @@ TEST_CASE("Dataset Named Paths Test", "[ut][dataset]") {
 
         REQUIRE(dataset->GetNumElements() == 3);
         REQUIRE(GetElementPaths(dataset, "tag", 0) == std::vector<std::string>{"tag/a", "tag/b"});
-        REQUIRE(GetElementPaths(dataset, "tag", 1).empty());
+        REQUIRE(GetElementPaths(dataset, "tag", 1) == std::vector<std::string>{""});
         REQUIRE(GetElementPaths(dataset, "tag", 2) == std::vector<std::string>{"tag/c"});
     }
 
@@ -650,7 +663,7 @@ TEST_CASE("Dataset Named Paths Test", "[ut][dataset]") {
     SECTION("append promotes structured and legacy paths in reverse order") {
         auto dataset = vsag::Dataset::Make();
         dataset->NumElements(2)->Dim(1)->Paths(
-            "tag", std::vector<std::vector<std::string>>{{"tag/a", "tag/b"}, {}});
+            "tag", std::vector<std::vector<std::string>>{{"tag/a", "tag/b"}, {""}});
         auto* legacy_paths = CopyPathArray({"tag/c"});
         auto appended = vsag::Dataset::Make();
         appended->NumElements(1)->Dim(1)->Paths("tag", legacy_paths)->Owner(true);
@@ -658,7 +671,7 @@ TEST_CASE("Dataset Named Paths Test", "[ut][dataset]") {
         dataset->Append(appended);
 
         REQUIRE(GetElementPaths(dataset, "tag", 0) == std::vector<std::string>{"tag/a", "tag/b"});
-        REQUIRE(GetElementPaths(dataset, "tag", 1).empty());
+        REQUIRE(GetElementPaths(dataset, "tag", 1) == std::vector<std::string>{""});
         REQUIRE(GetElementPaths(dataset, "tag", 2) == std::vector<std::string>{"tag/c"});
     }
 }
