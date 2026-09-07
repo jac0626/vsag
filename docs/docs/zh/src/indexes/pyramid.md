@@ -110,11 +110,11 @@ auto result = index->KnnSearch(
 | `build_thread_count` | int | `1` | 构建阶段并发线程数 |
 | `hierarchies` | array | `[]` | 命名层级定义。每个元素可以是字符串（继承全部顶层参数）或对象（含 `name` 及可选覆盖参数：`max_degree`、`ef_construction`、`alpha`、`no_build_levels`、`index_min_size`、`root_graph_type`）。设置后激活多层级模式，每个层级维护独立的路径树。 |
 
-PiPNN 支持 `dtype: "float32"`、`metric_type: "l2"` 的 Pyramid 构建。它使用共享 PiPNN
-构建器生成每棵 hierarchy 的第 0 层图；设置 `root_graph_type: "multi_layer"` 时，所有 root
-routing 层也由 PiPNN 批量构建。后代路径节点图继续使用 ODescent。搜索、增量 `Add`、删除、
-开启 `support_duplicate` 时，后代图也使用共享 PiPNN 构建器，从而保持标准的路径重复组
-可见性语义。搜索、增量 `Add`、删除、精排和序列化保持标准 Pyramid 行为；
+PiPNN 支持 `dtype: "float32"`，并支持 `metric_type: "l2"`、`"ip"` 或 `"cosine"` 的 Pyramid
+构建。它使用共享 PiPNN 构建器生成每棵 hierarchy 的第 0 层图；设置
+`root_graph_type: "multi_layer"` 时，所有 root routing 层也由 PiPNN 批量构建。后代路径节点图
+继续使用 ODescent。开启 `support_duplicate` 时，后代图也使用共享 PiPNN 构建器，从而保持
+标准的路径重复组可见性语义。搜索、增量 `Add`、删除、精排和序列化保持标准 Pyramid 行为；
 `no_build_levels` 中列出的层级仍会跳过构图。
 
 ### RaBitQ split 配置

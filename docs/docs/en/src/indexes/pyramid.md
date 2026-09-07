@@ -115,13 +115,13 @@ Build-time parameters live under `index_param`.
 | `build_thread_count` | int | `1` | Threads used for parallel build. |
 | `hierarchies` | array | `[]` | Named hierarchy definitions. Each element is either a string (inherits all top-level params) or an object with `name` and optional overrides (`max_degree`, `ef_construction`, `alpha`, `no_build_levels`, `index_min_size`, `root_graph_type`). When present, multi-hierarchy mode is activated and each hierarchy maintains its own independent path tree. |
 
-PiPNN supports Pyramid builds with `dtype: "float32"` and `metric_type: "l2"`. It builds level 0
-of each hierarchy with the shared PiPNN builder; with `root_graph_type: "multi_layer"`, PiPNN also
-batch-builds every root routing layer. Descendant path-node graphs continue to use ODescent.
-When `support_duplicate` is enabled, descendant graph construction also uses the shared PiPNN
-builder so duplicate groups retain the standard path visibility semantics. Search, incremental
-`Add`, removal, reorder, and serialization retain the standard Pyramid behavior. Levels in
-`no_build_levels` are still skipped.
+PiPNN supports Pyramid builds with `dtype: "float32"` and `metric_type` set to `"l2"`, `"ip"`, or
+`"cosine"`. It builds level 0 of each hierarchy with the shared PiPNN builder; with
+`root_graph_type: "multi_layer"`, PiPNN also batch-builds every root routing layer. Descendant
+path-node graphs continue to use ODescent. When `support_duplicate` is enabled, descendant graph
+construction also uses the shared PiPNN builder so duplicate groups retain the standard path
+visibility semantics. Search, incremental `Add`, removal, reorder, and serialization retain the
+standard Pyramid behavior. Levels in `no_build_levels` are still skipped.
 
 ### RaBitQ split configuration
 

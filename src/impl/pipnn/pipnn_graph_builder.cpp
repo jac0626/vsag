@@ -70,11 +70,20 @@ mix_seed(uint64_t seed, uint64_t salt) {
 }
 
 float
-normalized_distance(float distance) {
+sanitize_distance(float distance) {
     if (not std::isfinite(distance)) {
         return std::numeric_limits<float>::infinity();
     }
-    return std::max(0.0F, distance);
+    return distance == 0.0F ? 0.0F : distance;
+}
+
+uint16_t
+distance_order_key(float distance) {
+    const uint16_t bits = generic::FloatToBF16(sanitize_distance(distance));
+    if ((bits & 0x8000U) != 0) {
+        return static_cast<uint16_t>(~bits);
+    }
+    return static_cast<uint16_t>(bits ^ 0x8000U);
 }
 
 uint64_t
@@ -179,6 +188,7 @@ class PiPNNPipeline {
 public:
     PiPNNPipeline(const PiPNNGraphBuilderParameter& parameter,
                   uint64_t dimensions,
+                  MetricType metric,
                   Allocator* allocator,
                   SafeThreadPool* thread_pool,
                   uint64_t thread_count,
@@ -190,6 +200,7 @@ public:
           thread_pool_(thread_pool),
           thread_count_(thread_count),
           dimensions_(dimensions),
+          metric_(metric),
           rows_(rows),
           ids_(allocator),
           norms_(allocator),
@@ -244,6 +255,9 @@ private:
     [[nodiscard]] float
     pair_distance(uint32_t lhs, uint32_t rhs) const;
 
+    [[nodiscard]] float
+    distance_from_dot(uint32_t lhs, uint32_t rhs, float dot) const;
+
     Vector<InnerIdType>
     robust_prune(uint32_t source, const ReservoirEntry* row, uint16_t size) const;
 
@@ -268,6 +282,7 @@ private:
     uint64_t thread_count_;
 
     uint64_t dimensions_;
+    MetricType metric_;
     // Build() is synchronous, so the pipeline borrows rows only for its own lifetime.
     const Vector<const float*>& rows_;
     uint64_t reservoir_size_{0};
@@ -322,17 +337,21 @@ PiPNNPipeline::prepare(const Vector<InnerIdType>& ids_sequence) {
     require_argument(reservoir_count <= reservoirs_.max_size(),
                      "PiPNN reservoir exceeds the allocator limit");
 
-    norms_.resize(ids_.size(), 0.0F);
-    parallel_for(ids_.size(), 256, [&](uint64_t begin, uint64_t end) {
-        for (uint64_t local_id = begin; local_id < end; ++local_id) {
-            const auto* vector = vector_by_local_id(static_cast<uint32_t>(local_id));
-            float norm = 0.0F;
-            for (uint64_t dim = 0; dim < dimensions_; ++dim) {
-                norm += vector[dim] * vector[dim];
+    if (metric_ != MetricType::METRIC_TYPE_IP) {
+        norms_.resize(ids_.size(), 0.0F);
+        parallel_for(ids_.size(), 256, [&](uint64_t begin, uint64_t end) {
+            for (uint64_t local_id = begin; local_id < end; ++local_id) {
+                const auto* vector = vector_by_local_id(static_cast<uint32_t>(local_id));
+                float norm = 0.0F;
+                for (uint64_t dim = 0; dim < dimensions_; ++dim) {
+                    norm += vector[dim] * vector[dim];
+                }
+                norms_[local_id] = metric_ == MetricType::METRIC_TYPE_COSINE
+                                       ? std::sqrt(std::max(0.0F, norm))
+                                       : norm;
             }
-            norms_[local_id] = norm;
-        }
-    });
+        });
+    }
     reservoirs_.resize(reservoir_count);
     reservoir_states_.resize(ids_.size());
     if (thread_pool_ != nullptr and thread_count_ > 1) {
@@ -364,6 +383,9 @@ PiPNNPipeline::prepare_sketches() {
                 float dot = 0.0F;
                 for (uint64_t dim = 0; dim < dimensions_; ++dim) {
                     dot += vector[dim] * hyperplane[dim];
+                }
+                if (metric_ == MetricType::METRIC_TYPE_COSINE and norms_[local_id] > 0.0F) {
+                    dot /= norms_[local_id];
                 }
                 sketches_[local_id * parameter_.hash_plane_count + plane] = dot;
             }
@@ -574,9 +596,8 @@ PiPNNPipeline::assign_to_leaders(const WorkItem& item,
                     const uint32_t local_id = item.points[point_index];
                     candidates.clear();
                     for (uint64_t leader = 0; leader < leaders.size(); ++leader) {
-                        const float distance =
-                            normalized_distance(norms_[local_id] + norms_[leaders[leader]] -
-                                                2.0F * dots[point * leaders.size() + leader]);
+                        const float distance = distance_from_dot(
+                            local_id, leaders[leader], dots[point * leaders.size() + leader]);
                         candidates.emplace_back(distance, static_cast<uint32_t>(leader));
                     }
                     auto comparator = [&](const auto& lhs, const auto& rhs) {
@@ -644,9 +665,8 @@ PiPNNPipeline::assign_to_leaders(const WorkItem& item,
             const uint32_t local_id = item.points[begin + point];
             candidates.clear();
             for (uint64_t leader = 0; leader < leaders.size(); ++leader) {
-                const float distance =
-                    normalized_distance(norms_[local_id] + norms_[leaders[leader]] -
-                                        2.0F * dots[point * leaders.size() + leader]);
+                const float distance = distance_from_dot(
+                    local_id, leaders[leader], dots[point * leaders.size() + leader]);
                 candidates.emplace_back(distance, static_cast<uint32_t>(leader));
             }
             auto comparator = [&](const auto& lhs, const auto& rhs) {
@@ -739,7 +759,7 @@ PiPNNPipeline::build_leaf(const Leaf& leaf) {
                         static_cast<int32_t>(point_count),
                         static_cast<int32_t>(point_count),
                         static_cast<int32_t>(dimensions_),
-                        -2.0F,
+                        1.0F,
                         matrix.data(),
                         static_cast<int32_t>(dimensions_),
                         matrix.data(),
@@ -758,8 +778,8 @@ PiPNNPipeline::build_leaf(const Leaf& leaf) {
             if (source == target) {
                 continue;
             }
-            const float distance = normalized_distance(distances[source * point_count + target] +
-                                                       norms_[leaf[source]] + norms_[leaf[target]]);
+            const float distance = distance_from_dot(
+                leaf[source], leaf[target], distances[source * point_count + target]);
             candidates.emplace_back(distance, static_cast<uint32_t>(target));
         }
 
@@ -817,7 +837,7 @@ PiPNNPipeline::insert_candidate(uint32_t source, uint32_t target, float distance
     }
 
     const uint16_t hash = relative_hash(source, target);
-    const uint16_t distance_key = generic::FloatToBF16(normalized_distance(distance));
+    const uint16_t distance_key = distance_order_key(distance);
     const auto incoming_key = std::make_tuple(distance_key, ids_[target], hash);
     PointLockGuard lock(point_locks_.get(), source);
     auto& state = reservoir_states_[source];
@@ -887,12 +907,27 @@ float
 PiPNNPipeline::pair_distance(uint32_t lhs, uint32_t rhs) const {
     const auto* left = vector_by_local_id(lhs);
     const auto* right = vector_by_local_id(rhs);
-    float distance = 0.0F;
+    float dot = 0.0F;
     for (uint64_t dim = 0; dim < dimensions_; ++dim) {
-        const float delta = left[dim] - right[dim];
-        distance += delta * delta;
+        dot += left[dim] * right[dim];
     }
-    return normalized_distance(distance);
+    return distance_from_dot(lhs, rhs, dot);
+}
+
+float
+PiPNNPipeline::distance_from_dot(uint32_t lhs, uint32_t rhs, float dot) const {
+    if (metric_ == MetricType::METRIC_TYPE_L2SQR) {
+        return std::max(0.0F, sanitize_distance(norms_[lhs] + norms_[rhs] - 2.0F * dot));
+    }
+    if (metric_ == MetricType::METRIC_TYPE_IP) {
+        return sanitize_distance(1.0F - dot);
+    }
+    const float norm_product = norms_[lhs] * norms_[rhs];
+    if (norm_product <= 0.0F or not std::isfinite(norm_product)) {
+        return 1.0F;
+    }
+    const float similarity = std::clamp(dot / norm_product, -1.0F, 1.0F);
+    return sanitize_distance(1.0F - similarity);
 }
 
 Vector<InnerIdType>
@@ -1061,17 +1096,23 @@ PiPNNGraphBuilderParameter::Validate(uint64_t max_degree) const {
 
 PiPNNGraphBuilder::PiPNNGraphBuilder(PiPNNGraphBuilderParameter parameter,
                                      uint64_t dimensions,
+                                     MetricType metric,
                                      Allocator* allocator,
                                      SafeThreadPool* thread_pool,
                                      uint64_t thread_count)
     : parameter_(std::move(parameter)),
       dimensions_(dimensions),
+      metric_(metric),
       allocator_(allocator),
       thread_pool_(thread_pool),
       thread_count_(std::max<uint64_t>(1, thread_count)) {
     require_argument(dimensions_ > 0, "PiPNN dimensions must be positive");
     require_argument(dimensions_ <= static_cast<uint64_t>(std::numeric_limits<int32_t>::max()),
                      "PiPNN dimensions exceed the BLAS limit");
+    require_argument(metric_ == MetricType::METRIC_TYPE_L2SQR or
+                         metric_ == MetricType::METRIC_TYPE_IP or
+                         metric_ == MetricType::METRIC_TYPE_COSINE,
+                     "PiPNN metric is not supported");
     require_argument(allocator_ != nullptr, "PiPNN allocator must not be null");
 }
 
@@ -1082,7 +1123,8 @@ PiPNNGraphBuilder::Build(const GraphInterfacePtr& graph,
     require_argument(graph != nullptr, "PiPNN graph must not be null");
     parameter_.Validate(graph->MaximumDegree());
     if (graph->GetDuplicateTracker() == nullptr) {
-        PiPNNPipeline(parameter_, dimensions_, allocator_, thread_pool_, thread_count_, graph, rows)
+        PiPNNPipeline(
+            parameter_, dimensions_, metric_, allocator_, thread_pool_, thread_count_, graph, rows)
             .Build(ids_sequence);
         return;
     }
@@ -1112,6 +1154,7 @@ PiPNNGraphBuilder::Build(const GraphInterfacePtr& graph,
                          duplicates);
     PiPNNPipeline(parameter_,
                   dimensions_,
+                  metric_,
                   allocator_,
                   thread_pool_,
                   thread_count_,

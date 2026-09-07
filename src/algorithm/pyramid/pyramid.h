@@ -76,10 +76,9 @@ public:
           store_paths_(pyramid_param->store_paths),
           cache_(std::make_unique<PyramidBuildCache>(common_param.allocator_.get())) {
         if (graph_type_ == GRAPH_TYPE_VALUE_PIPNN and
-            (common_param.data_type_ != DataTypes::DATA_TYPE_FLOAT or
-             common_param.metric_ != MetricType::METRIC_TYPE_L2SQR)) {
+            common_param.data_type_ != DataTypes::DATA_TYPE_FLOAT) {
             throw VsagException(ErrorType::INVALID_ARGUMENT,
-                                "Pyramid PiPNN only supports float32 L2 indexes");
+                                "Pyramid PiPNN only supports float32 indexes");
         }
         base_codes_ = FlattenInterface::MakeInstance(pyramid_param->base_codes_param, common_param);
         if (pyramid_param->has_hierarchies) {

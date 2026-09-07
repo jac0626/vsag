@@ -1533,16 +1533,17 @@ TEST_CASE("HGraph PiPNN reuses core HGraph build checks", "[ft][build][hgraph][p
     const auto quantization = GENERATE(
         std::string("fp32"), std::string("sq8"), std::string("rabitq,sq8,block_memory_io,32,1"));
     const auto graph_storage = GENERATE(std::string("flat"), std::string("compressed"));
-    CAPTURE(quantization, graph_storage);
+    const auto metric_type = GENERATE(std::string("l2"), std::string("ip"), std::string("cosine"));
+    CAPTURE(quantization, graph_storage, metric_type);
 
-    HGraphTestIndex::HGraphBuildParam build_param("l2", dim, quantization);
+    HGraphTestIndex::HGraphBuildParam build_param(metric_type, dim, quantization);
     build_param.graph_type = "pipnn";
     build_param.graph_storage = graph_storage;
     build_param.thread_count = 4;
     build_param.store_raw_vector = true;
     const auto param = HGraphTestIndex::GenerateHGraphBuildParametersString(build_param);
     auto index = TestIndex::TestFactory(HGraphTestIndex::name, param, true);
-    auto dataset = HGraphTestIndex::pool.GetDatasetAndCreate(dim, count, "l2");
+    auto dataset = HGraphTestIndex::pool.GetDatasetAndCreate(dim, count, metric_type);
     const auto search_param = fmt::format(fixtures::search_param_tmp, 200, false);
 
     TestIndex::TestBuildIndex(index, dataset, true);
