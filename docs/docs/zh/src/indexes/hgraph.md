@@ -97,10 +97,10 @@ auto result = index->KnnSearch(
 
 设置 `graph_type: "pipnn"` 可让初次全量 `Build` 使用
 [PiPNN](https://arxiv.org/abs/2602.21247)。PiPNN 构建器接收 `dtype: "float32"`、
-`metric_type: "l2"` 的稠密向量输入，从原始构建向量生成底层图，并复用 HGraph 现有的路由层、
-向量存储、搜索、过滤、精排、增量 `Add`、删除和序列化路径。持久化底层存储可以使用 `sq8`
-等受支持的量化器，包括 RaBitQ 配合 SQ8 精排。缓存辅助构建和向量存储去重暂不支持 PiPNN。
-PiPNN 调优参数目前为内部配置；`ef_construction` 不调节该构建器。
+`metric_type: "l2"`、`"ip"` 或 `"cosine"` 的稠密向量输入，从原始构建向量生成底层图，并复用
+HGraph 现有的路由层、向量存储、搜索、过滤、精排、增量 `Add`、删除和序列化路径。持久化底层
+存储可以使用 `sq8` 等受支持的量化器，包括 RaBitQ 配合 SQ8 精排。缓存辅助构建和向量存储去重
+暂不支持 PiPNN。PiPNN 调优参数目前为内部配置；`ef_construction` 不调节该构建器。
 
 `build_thread_count` 会并行化向量预处理、分区、候选边生成和最终剪枝。性能测试时应固定
 `OPENBLAS_NUM_THREADS=1`，避免 BLAS 线程影响构建线程扩展性。可复现配置

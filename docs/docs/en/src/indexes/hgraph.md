@@ -104,12 +104,13 @@ before changing it.
 ### PiPNN build boundary
 
 Set `graph_type: "pipnn"` to use [PiPNN](https://arxiv.org/abs/2602.21247) for the initial,
-full `Build`. The PiPNN builder accepts dense `float32` input with `metric_type: "l2"`. It
-builds the bottom graph from the original build vectors, then reuses HGraph's route layers,
-storage, search, filtering, reordering, incremental `Add`, removal, and serialization paths.
-The persistent base storage may use a supported quantizer such as `sq8`, including RaBitQ with
-SQ8 reorder. Cache-assisted build and deduplicated vector storage are not supported with PiPNN.
-PiPNN tuning values are currently internal; `ef_construction` does not tune this builder.
+full `Build`. The PiPNN builder accepts dense `float32` input with `metric_type` set to `"l2"`,
+`"ip"`, or `"cosine"`. It builds the bottom graph from the original build vectors, then reuses
+HGraph's route layers, storage, search, filtering, reordering, incremental `Add`, removal, and
+serialization paths. The persistent base storage may use a supported quantizer such as `sq8`,
+including RaBitQ with SQ8 reorder. Cache-assisted build and deduplicated vector storage are not
+supported with PiPNN. PiPNN tuning values are currently internal; `ef_construction` does not tune
+this builder.
 
 `build_thread_count` parallelizes vector preparation, partitioning, candidate generation, and
 final pruning. Keep `OPENBLAS_NUM_THREADS=1` when benchmarking so BLAS threads do not obscure

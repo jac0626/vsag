@@ -246,7 +246,9 @@ TEST_CASE_PERSISTENT_FIXTURE(fixtures::PyramidTestIndex,
                                      std::make_pair(std::string("l2"), std::string("odescent")),
                                      std::make_pair(std::string("ip"), std::string("odescent")),
                                      std::make_pair(std::string("cosine"), std::string("odescent")),
-                                     std::make_pair(std::string("l2"), std::string("pipnn")));
+                                     std::make_pair(std::string("l2"), std::string("pipnn")),
+                                     std::make_pair(std::string("ip"), std::string("pipnn")),
+                                     std::make_pair(std::string("cosine"), std::string("pipnn")));
     const auto& [metric_type, graph_type] = build_case;
     auto use_reorder = GENERATE(true, false);
     auto immutable = GENERATE(true, false);
@@ -287,17 +289,18 @@ TEST_CASE_PERSISTENT_FIXTURE(fixtures::PyramidTestIndex,
                              "[ft][build][pyramid][pipnn][pr]") {
     const auto graph_type = GENERATE(std::string("nsw"), std::string("pipnn"));
     const auto root_graph_type = GENERATE(std::string("single_layer"), std::string("multi_layer"));
-    CAPTURE(graph_type, root_graph_type);
+    const auto metric_type = GENERATE(std::string("l2"), std::string("ip"), std::string("cosine"));
+    CAPTURE(graph_type, root_graph_type, metric_type);
     PyramidParam pyramid_param;
     pyramid_param.graph_type = graph_type;
     pyramid_param.root_graph_type = root_graph_type;
     pyramid_param.no_build_levels = {1, 2};
-    auto param_json =
-        vsag::JsonType::Parse(GeneratePyramidBuildParametersString("l2", 128, pyramid_param));
+    auto param_json = vsag::JsonType::Parse(
+        GeneratePyramidBuildParametersString(metric_type, 128, pyramid_param));
     param_json["index_param"]["build_thread_count"].SetUint64(4);
     const auto param = param_json.Dump();
     auto index = TestFactory("pyramid", param, true);
-    auto dataset = pool.GetDatasetAndCreate(128, 1000, "l2", /*with_path=*/true);
+    auto dataset = pool.GetDatasetAndCreate(128, 1000, metric_type, /*with_path=*/true);
     const auto search_param = GeneratePyramidSearchParametersString(200);
 
     TestContinueAdd(index, dataset, true);
@@ -1118,7 +1121,9 @@ TEST_CASE_PERSISTENT_FIXTURE(fixtures::PyramidTestIndex,
     const auto build_case = GENERATE(std::make_pair(std::string("l2"), std::string("nsw")),
                                      std::make_pair(std::string("ip"), std::string("nsw")),
                                      std::make_pair(std::string("cosine"), std::string("nsw")),
-                                     std::make_pair(std::string("l2"), std::string("pipnn")));
+                                     std::make_pair(std::string("l2"), std::string("pipnn")),
+                                     std::make_pair(std::string("ip"), std::string("pipnn")),
+                                     std::make_pair(std::string("cosine"), std::string("pipnn")));
     const auto& [metric_type, graph_type] = build_case;
     PyramidParam pyramid_param;
     pyramid_param.graph_type = graph_type;

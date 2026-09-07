@@ -28,10 +28,11 @@
 namespace {
 
 vsag::IndexCommonParam
-MakePiPNNCommonParam(int64_t dimensions) {
+MakePiPNNCommonParam(int64_t dimensions,
+                     vsag::MetricType metric = vsag::MetricType::METRIC_TYPE_L2SQR) {
     vsag::IndexCommonParam common_param;
     common_param.dim_ = dimensions;
-    common_param.metric_ = vsag::MetricType::METRIC_TYPE_L2SQR;
+    common_param.metric_ = metric;
     common_param.data_type_ = vsag::DataTypes::DATA_TYPE_FLOAT;
     common_param.allocator_ = vsag::SafeAllocator::FactoryDefaultAllocator();
     return common_param;
@@ -71,10 +72,14 @@ MakeDataset(std::vector<float>& vectors,
 
 }  // namespace
 
-TEST_CASE("HGraph PiPNN builds and searches", "[ut][pipnn][hgraph]") {
+TEST_CASE("HGraph PiPNN builds and searches with all supported metrics",
+          "[ut][pipnn][hgraph][metric]") {
     constexpr int64_t dimensions = 8;
     constexpr int64_t count = 48;
-    auto common_param = MakePiPNNCommonParam(dimensions);
+    const auto metric = GENERATE(vsag::MetricType::METRIC_TYPE_L2SQR,
+                                 vsag::MetricType::METRIC_TYPE_IP,
+                                 vsag::MetricType::METRIC_TYPE_COSINE);
+    auto common_param = MakePiPNNCommonParam(dimensions, metric);
     auto index = MakePiPNNIndex(MakePiPNNHGraphParam(), common_param);
 
     std::vector<float> vectors(static_cast<uint64_t>(count * dimensions));
@@ -83,7 +88,18 @@ TEST_CASE("HGraph PiPNN builds and searches", "[ut][pipnn][hgraph]") {
         labels[point] = 1000 + point * 7;
         for (int64_t dim = 0; dim < dimensions; ++dim) {
             vectors[point * dimensions + dim] =
-                static_cast<float>((point * 13 + dim * 5) % 37) + point * 0.001F;
+                std::sin(static_cast<float>(point * 13 + dim * 5)) + point * 0.001F;
+        }
+        if (metric != vsag::MetricType::METRIC_TYPE_L2SQR) {
+            float norm = 0.0F;
+            for (int64_t dim = 0; dim < dimensions; ++dim) {
+                const float value = vectors[point * dimensions + dim];
+                norm += value * value;
+            }
+            norm = std::sqrt(norm);
+            for (int64_t dim = 0; dim < dimensions; ++dim) {
+                vectors[point * dimensions + dim] /= norm;
+            }
         }
     }
     auto base = MakeDataset(vectors, labels, dimensions, count);
@@ -100,10 +116,7 @@ TEST_CASE("HGraph PiPNN builds and searches", "[ut][pipnn][hgraph]") {
     auto search_result = index->KnnSearch(query, 3, R"({"hgraph": {"ef_search": 64}})");
     REQUIRE(search_result.has_value());
     REQUIRE(search_result.value()->GetDim() == 3);
-    for (int64_t result = 0; result < search_result.value()->GetDim(); ++result) {
-        REQUIRE(std::find(labels.begin(), labels.end(), search_result.value()->GetIds()[result]) !=
-                labels.end());
-    }
+    REQUIRE(search_result.value()->GetIds()[0] == labels[0]);
 }
 
 TEST_CASE("HGraph PiPNN keeps configured ODescent routing parameters", "[ut][pipnn][hgraph]") {
@@ -166,9 +179,13 @@ TEST_CASE("HGraph validates PiPNN graph type and data boundary", "[ut][pipnn][hg
         parameter["graph_type"].SetString("unknown");
         REQUIRE_THROWS(MakePiPNNIndex(parameter, common_param));
     }
-    SECTION("non L2 metric") {
+    SECTION("inner product metric") {
         common_param.metric_ = vsag::MetricType::METRIC_TYPE_IP;
-        REQUIRE_THROWS(MakePiPNNIndex(MakePiPNNHGraphParam(), common_param));
+        REQUIRE_NOTHROW(MakePiPNNIndex(MakePiPNNHGraphParam(), common_param));
+    }
+    SECTION("cosine metric") {
+        common_param.metric_ = vsag::MetricType::METRIC_TYPE_COSINE;
+        REQUIRE_NOTHROW(MakePiPNNIndex(MakePiPNNHGraphParam(), common_param));
     }
     SECTION("deduplicated storage") {
         auto parameter = MakePiPNNHGraphParam();

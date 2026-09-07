@@ -655,6 +655,7 @@ Pyramid::build_by_batch_graph(const DatasetPtr& base) {
             pipnn_parameter.alpha = hierarchy->alpha;
             PiPNNGraphBuilder pipnn_builder(pipnn_parameter,
                                             static_cast<uint64_t>(dim_),
+                                            common_param_.metric_,
                                             allocator_,
                                             this->thread_pool_.get(),
                                             this->build_thread_count_);

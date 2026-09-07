@@ -316,6 +316,7 @@ HGraph::build_by_batch_graph(const DatasetPtr& data, bool use_pipnn) {
     if (use_pipnn) {
         PiPNNGraphBuilder pipnn_builder(pipnn_parameter,
                                         static_cast<uint64_t>(this->dim_),
+                                        this->metric_,
                                         this->allocator_,
                                         this->thread_pool_.get(),
                                         this->build_thread_count_);

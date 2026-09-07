@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "metric_type.h"
 #include "typing.h"
 #include "utils/pointer_define.h"
 
@@ -55,6 +56,7 @@ class PiPNNGraphBuilder {
 public:
     PiPNNGraphBuilder(PiPNNGraphBuilderParameter parameter,
                       uint64_t dimensions,
+                      MetricType metric,
                       Allocator* allocator,
                       SafeThreadPool* thread_pool = nullptr,
                       uint64_t thread_count = 1);
@@ -67,6 +69,7 @@ public:
 private:
     PiPNNGraphBuilderParameter parameter_;
     uint64_t dimensions_;
+    MetricType metric_;
     Allocator* allocator_;
     SafeThreadPool* thread_pool_;
     uint64_t thread_count_;
