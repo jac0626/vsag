@@ -18,6 +18,7 @@
 #include <algorithm>
 #include <array>
 #include <atomic>
+#include <chrono>
 #include <cmath>
 #include <future>
 #include <numeric>
@@ -1358,4 +1359,29 @@ TEST_CASE("Pyramid applies hops limit to non-root graphs", "[ut][pyramid][hops_l
     const auto limited_stats = vsag::JsonType::Parse(limited->GetStatistics());
     REQUIRE(unlimited_stats["hops"].GetInt() > limited_stats["hops"].GetInt());
     REQUIRE(limited_stats["hops"].GetInt() <= 3);
+}
+
+TEST_CASE("Pyramid IndexNode allows concurrent existing-child lookup",
+          "[ut][pyramid][index_node]") {
+    vsag::IndexCommonParam common_param;
+    auto allocator = vsag::SafeAllocator::FactoryDefaultAllocator();
+    common_param.allocator_ = allocator;
+    auto graph_param = std::make_shared<vsag::SparseGraphDatacellParameter>();
+    vsag::IndexNode node(allocator.get(), graph_param, 1, common_param, graph_param);
+    auto* expected = node.GetChild("existing", true);
+
+    std::shared_lock node_lock(node.mutex_);
+    std::promise<void> started;
+    auto started_future = started.get_future();
+    auto lookup = std::async(std::launch::async, [&]() {
+        started.set_value();
+        return node.GetChild("existing", true);
+    });
+    started_future.wait();
+    const bool completed_while_shared =
+        lookup.wait_for(std::chrono::seconds(1)) == std::future_status::ready;
+    node_lock.unlock();
+
+    REQUIRE(lookup.get() == expected);
+    REQUIRE(completed_while_shared);
 }
