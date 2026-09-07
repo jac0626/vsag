@@ -31,10 +31,11 @@
 namespace {
 
 vsag::IndexCommonParam
-MakeCommonParam(uint64_t dimensions) {
+MakeCommonParam(uint64_t dimensions,
+                vsag::MetricType metric = vsag::MetricType::METRIC_TYPE_L2SQR) {
     vsag::IndexCommonParam common_param;
     common_param.dim_ = static_cast<int64_t>(dimensions);
-    common_param.metric_ = vsag::MetricType::METRIC_TYPE_L2SQR;
+    common_param.metric_ = metric;
     common_param.data_type_ = vsag::DataTypes::DATA_TYPE_FLOAT;
     common_param.allocator_ = vsag::SafeAllocator::FactoryDefaultAllocator();
     return common_param;
@@ -128,7 +129,8 @@ TEST_CASE("PiPNN graph builder preserves adjacency invariants and determinism", 
 
     auto first = MakeGraph(common_param, count, max_degree);
     auto second = MakeGraph(common_param, count, max_degree);
-    vsag::PiPNNGraphBuilder builder(parameter, dimensions, common_param.allocator_.get());
+    vsag::PiPNNGraphBuilder builder(
+        parameter, dimensions, common_param.metric_, common_param.allocator_.get());
     builder.Build(first, ids, rows);
     builder.Build(second, ids, rows);
 
@@ -151,7 +153,8 @@ TEST_CASE("PiPNN graph builder writes an empty row for one point", "[ut][pipnn]"
     ids.emplace_back(0);
     auto rows = MakeRows(vectors, ids, dimensions, common_param.allocator_.get());
 
-    vsag::PiPNNGraphBuilder({}, dimensions, common_param.allocator_.get()).Build(graph, ids, rows);
+    vsag::PiPNNGraphBuilder({}, dimensions, common_param.metric_, common_param.allocator_.get())
+        .Build(graph, ids, rows);
 
     vsag::Vector<vsag::InnerIdType> neighbors(common_param.allocator_.get());
     graph->GetNeighbors(0, neighbors);
@@ -179,12 +182,17 @@ TEST_CASE("PiPNN graph builder runs overlapping leaves in parallel", "[ut][pipnn
     parameter.leader_sample_rate = 0.25F;
     parameter.fanout = {3, 2};
     parameter.reservoir_size = 16;
-    vsag::PiPNNGraphBuilder(parameter, dimensions, common_param.allocator_.get())
+    vsag::PiPNNGraphBuilder(
+        parameter, dimensions, common_param.metric_, common_param.allocator_.get())
         .Build(serial, ids, rows);
     auto thread_pool = vsag::SafeThreadPool::FactoryDefaultThreadPool();
     thread_pool->SetPoolSize(4);
-    vsag::PiPNNGraphBuilder builder(
-        parameter, dimensions, common_param.allocator_.get(), thread_pool.get(), 4);
+    vsag::PiPNNGraphBuilder builder(parameter,
+                                    dimensions,
+                                    common_param.metric_,
+                                    common_param.allocator_.get(),
+                                    thread_pool.get(),
+                                    4);
     builder.Build(first, ids, rows);
     builder.Build(second, ids, rows);
 
@@ -222,7 +230,8 @@ TEST_CASE("PiPNN keeps identical vectors reachable across fallback leaves", "[ut
     parameter.fanout = {2, 1};
     parameter.hash_plane_count = 3;
     parameter.reservoir_size = 8;
-    vsag::PiPNNGraphBuilder(parameter, dimensions, common_param.allocator_.get())
+    vsag::PiPNNGraphBuilder(
+        parameter, dimensions, common_param.metric_, common_param.allocator_.get())
         .Build(graph, ids, rows);
 
     RequireGraphInvariants(graph, ids, max_degree, common_param.allocator_.get());
@@ -259,7 +268,8 @@ TEST_CASE("PiPNN registers exact duplicate rows instead of building duplicate ve
     auto rows = MakeRows(vectors, ids, dimensions, common_param.allocator_.get());
     auto graph = MakeGraph(common_param, count, 4, true);
 
-    vsag::PiPNNGraphBuilder({}, dimensions, common_param.allocator_.get()).Build(graph, ids, rows);
+    vsag::PiPNNGraphBuilder({}, dimensions, common_param.metric_, common_param.allocator_.get())
+        .Build(graph, ids, rows);
 
     REQUIRE(graph->GetGroupId(4) == 1);
     REQUIRE(graph->GetGroupId(5) == 1);
@@ -301,4 +311,30 @@ TEST_CASE("PiPNN graph builder validates structural parameters", "[ut][pipnn]") 
     SECTION("zero graph degree") {
         REQUIRE_THROWS(parameter.Validate(0));
     }
+}
+
+TEST_CASE("PiPNN graph builder applies all supported metrics", "[ut][pipnn][metric]") {
+    constexpr uint64_t dimensions = 2;
+    constexpr uint64_t count = 3;
+    const std::vector<float> vectors = {1.0F, 0.0F, 2.0F, 0.0F, 0.8F, 0.6F};
+
+    const auto metric = GENERATE(vsag::MetricType::METRIC_TYPE_L2SQR,
+                                 vsag::MetricType::METRIC_TYPE_IP,
+                                 vsag::MetricType::METRIC_TYPE_COSINE);
+    auto common_param = MakeCommonParam(dimensions, metric);
+    vsag::Vector<vsag::InnerIdType> ids(common_param.allocator_.get());
+    ids = {0, 1, 2};
+    auto rows = MakeRows(vectors, ids, dimensions, common_param.allocator_.get());
+    auto graph = MakeGraph(common_param, count, 1);
+
+    vsag::PiPNNGraphBuilderParameter parameter;
+    parameter.leaf_neighbor_count = count - 1;
+    vsag::PiPNNGraphBuilder(parameter, dimensions, metric, common_param.allocator_.get())
+        .Build(graph, ids, rows);
+
+    vsag::Vector<vsag::InnerIdType> neighbors(common_param.allocator_.get());
+    graph->GetNeighbors(0, neighbors);
+    REQUIRE(neighbors.size() == 1);
+    const auto expected = metric == vsag::MetricType::METRIC_TYPE_L2SQR ? 2 : 1;
+    REQUIRE(neighbors.front() == expected);
 }
