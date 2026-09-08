@@ -144,10 +144,10 @@ BasicSearcher::search_impl(const GraphInterfacePtr& graph,
         if constexpr (mode != InnerSearchMode::KNN_SEARCH) {
             return;
         }
-        if (not is_result_distance_eligible(duplicate_dist) or
-            not inner_search_param.consider_duplicate or
+        if (not inner_search_param.consider_duplicate or
             inner_search_param.max_duplicates_per_group == 0 or label_table == nullptr or
             not label_table->CompressDuplicateData() or
+            not is_result_distance_eligible(duplicate_dist) or
             duplicate_dist <= inner_search_param.min_distance + THRESHOLD_ERROR) {
             return;
         }
@@ -363,9 +363,9 @@ BasicSearcher::search_impl(const GraphInterfacePtr& graph,
     };
 
     auto add_duplicate_results = [&](float duplicate_dist, InnerIdType group_head_id) {
-        if (not is_result_distance_eligible(duplicate_dist) or
-            not inner_search_param.consider_duplicate or label_table == nullptr or
+        if (not inner_search_param.consider_duplicate or label_table == nullptr or
             not label_table->CompressDuplicateData() or
+            not is_result_distance_eligible(duplicate_dist) or
             duplicate_dist <= inner_search_param.min_distance + THRESHOLD_ERROR) {
             return;
         }
@@ -509,9 +509,20 @@ BasicSearcher::search_impl(const GraphInterfacePtr& graph,
             if (min_distance <= inner_search_param.duplicate_distance_threshold) {
                 inner_search_param.duplicate_id = min_index;
             }
-        } else if (inner_search_param.duplicate_query_id < flatten->TotalCount() &&
-                   flatten->CompareVectors(inner_search_param.duplicate_query_id, min_index)) {
-            inner_search_param.duplicate_id = min_index;
+        } else if (inner_search_param.duplicate_query_id < flatten->TotalCount()) {
+            if (flatten->CompareVectors(inner_search_param.duplicate_query_id, min_index)) {
+                inner_search_param.duplicate_id = min_index;
+            } else {
+                // Quantization can rank a different code ahead of an identical one.
+                for (uint32_t i = 0; i < top_candidates->Size(); ++i) {
+                    if (data[i].second != min_index &&
+                        flatten->CompareVectors(inner_search_param.duplicate_query_id,
+                                                data[i].second)) {
+                        inner_search_param.duplicate_id = data[i].second;
+                        break;
+                    }
+                }
+            }
         }
     }
 

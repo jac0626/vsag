@@ -141,10 +141,10 @@ ParallelSearcher::search_impl(const GraphInterfacePtr& graph,
         inner_search_param.skip_ratio);
 
     auto add_knn_duplicate_results = [&](float duplicate_dist, InnerIdType group_head_id) {
-        if (not is_result_distance_eligible(duplicate_dist) or
-            not inner_search_param.consider_duplicate or label_table == nullptr or
+        if (not inner_search_param.consider_duplicate or label_table == nullptr or
             not label_table->CompressDuplicateData() or
             inner_search_param.max_duplicates_per_group == 0 or
+            not is_result_distance_eligible(duplicate_dist) or
             duplicate_dist <= inner_search_param.min_distance + THRESHOLD_ERROR) {
             return;
         }

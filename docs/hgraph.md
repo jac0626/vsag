@@ -169,7 +169,7 @@ For examples, refer to [103_index_hgraph.cpp](https://github.com/antgroup/vsag/b
 
 ### duplicate_distance_threshold
 - **Parameter Type**: float
-- **Parameter Description**: Duplicate-detection distance threshold. When greater than 0, the nearest candidate is treated as the duplicate owner if its distance is within the threshold; when 0, duplicate detection falls back to code memcmp with the nearest candidate
+- **Parameter Description**: Duplicate-detection distance threshold. When greater than 0, the nearest candidate is treated as the duplicate owner if its distance is within the threshold; when 0, compare codes with the nearest candidate first, then check the remaining returned build candidates until a match is found.
 - **Optional Values**: Any non-negative float
 - **Default Value**: 0.0
 
