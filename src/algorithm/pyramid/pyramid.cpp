@@ -27,6 +27,7 @@
 #include "algorithm/inner_index_interface.h"
 #include "analyzer/analyzer.h"
 #include "datacell/compressed_graph_datacell_parameter.h"
+#include "datacell/flatten_build_utils.h"
 #include "datacell/flatten_datacell_parameter.h"
 #include "datacell/flatten_interface.h"
 #include "datacell/graph_datacell_parameter.h"
@@ -635,7 +636,14 @@ Pyramid::build_by_batch_graph(const DatasetPtr& base) {
 
     const auto insert_codes = [&](const FlattenInterfacePtr& codes) {
         if (data_num == input_count) {
-            codes->BatchInsertVector(data_vectors, data_num);
+            ParallelBatchInsertVector(codes,
+                                      static_cast<InnerIdType>(data_num),
+                                      nullptr,
+                                      this->thread_pool_.get(),
+                                      this->build_thread_count_,
+                                      [=](InnerIdType begin) {
+                                          return data_vectors + static_cast<uint64_t>(begin) * dim_;
+                                      });
             return;
         }
         for (InnerIdType inner_id = 0; inner_id < data_num; ++inner_id) {
