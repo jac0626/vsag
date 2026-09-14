@@ -23,6 +23,7 @@
 #include <unordered_map>
 #include <unordered_set>
 
+#include "datacell/flatten_build_utils.h"
 #include "datacell/flatten_datacell_parameter.h"
 #include "datacell/hgraph_rabitq_fused_datacell.h"
 #include "datacell/rabitq_split_datacell.h"
@@ -233,14 +234,22 @@ HGraph::build_by_batch_graph(const DatasetPtr& data, bool use_pipnn) {
     const auto* attr_sets = data->GetAttributeSets();
     const auto* source_id = data->GetSourceID();
     Vector<int64_t> valid_indices(allocator_);
+    const bool labels_are_strictly_increasing =
+        total <= 1 or std::adjacent_find(labels, labels + total, [](LabelType lhs, LabelType rhs) {
+                          return lhs >= rhs;
+                      }) == labels + total;
     UnorderedSet<LabelType> seen_labels(allocator_);
+    if (not labels_are_strictly_increasing) {
+        seen_labels.reserve(static_cast<uint64_t>(total));
+    }
     for (int64_t i = 0; i < total; ++i) {
         auto label = labels[i];
-        if (this->label_table_->CheckLabel(label) or seen_labels.find(label) != seen_labels.end()) {
+        const bool is_duplicate =
+            not labels_are_strictly_increasing and not seen_labels.emplace(label).second;
+        if (this->label_table_->CheckLabel(label) or is_duplicate) {
             failed_ids.emplace_back(label);
             continue;
         }
-        seen_labels.insert(label);
         valid_indices.emplace_back(i);
     }
     if (use_pipnn) {
@@ -279,6 +288,38 @@ HGraph::build_by_batch_graph(const DatasetPtr& data, bool use_pipnn) {
                                        static_cast<uint64_t>(total));
     this->resize(current_count + new_ids_count);
     this->total_count_ += new_ids_count;
+    const bool all_rows_are_valid =
+        valid_indices.size() == static_cast<uint64_t>(total) and not this->using_dedup_storage();
+    auto batch_insert_flatten_codes = [&](const FlattenInterfacePtr& flatten) {
+        if (flatten == nullptr) {
+            return;
+        }
+        ParallelBatchInsertVector(flatten,
+                                  static_cast<InnerIdType>(total),
+                                  inner_ids.data(),
+                                  this->thread_pool_.get(),
+                                  this->build_thread_count_,
+                                  [&](InnerIdType begin) { return get_data(data, begin); });
+    };
+    auto batch_insert_persistent_codes = [&]() {
+        batch_insert_flatten_codes(this->basic_flatten_codes_);
+        if (has_precise_reorder()) {
+            batch_insert_flatten_codes(this->high_precise_codes_);
+        }
+        if (create_new_raw_vector_) {
+            batch_insert_flatten_codes(this->raw_vector_);
+        }
+    };
+    bool persistent_codes_batched = false;
+    if (not defer_persistent_codes and all_rows_are_valid) {
+        batch_insert_persistent_codes();
+        persistent_codes_batched = true;
+    }
+    bool temporary_codes_batched = false;
+    if (temporary_sq8_build_data != nullptr and all_rows_are_valid) {
+        batch_insert_flatten_codes(temporary_sq8_build_data);
+        temporary_codes_batched = true;
+    }
     Vector<std::pair<InnerIdType, int64_t>> deferred_code_ids(allocator_);
     Vector<const float*> pipnn_vectors(allocator_);
     if (use_pipnn) {
@@ -294,12 +335,12 @@ HGraph::build_by_batch_graph(const DatasetPtr& data, bool use_pipnn) {
         if (source_id != nullptr && not source_id[i].empty()) {
             this->label_table_->InsertSourceId(inner_id, source_id[i]);
         }
-        if (not defer_persistent_codes) {
-            this->insert_persistent_codes(get_data(data, i), inner_id);
-        } else {
+        if (defer_persistent_codes) {
             deferred_code_ids.emplace_back(inner_id, i);
+        } else if (not persistent_codes_batched) {
+            this->insert_persistent_codes(get_data(data, i), inner_id);
         }
-        if (temporary_sq8_build_data != nullptr) {
+        if (temporary_sq8_build_data != nullptr and not temporary_codes_batched) {
             temporary_sq8_build_data->InsertVector(get_data(data, i), inner_id);
         }
         if (use_pipnn and this->extra_infos_ != nullptr) {
@@ -392,8 +433,12 @@ HGraph::build_by_batch_graph(const DatasetPtr& data, bool use_pipnn) {
         if (this->rabitq_fused_datacell_ == nullptr) {
             this->train_codes_with_dataset(this->sample_train_dataset(data));
         }
-        for (const auto& [inner_id, local_idx] : deferred_code_ids) {
-            this->insert_persistent_codes(get_data(data, local_idx), inner_id);
+        if (all_rows_are_valid) {
+            batch_insert_persistent_codes();
+        } else {
+            for (const auto& [inner_id, local_idx] : deferred_code_ids) {
+                this->insert_persistent_codes(get_data(data, local_idx), inner_id);
+            }
         }
     }
     return failed_ids;
