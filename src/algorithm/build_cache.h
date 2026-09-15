@@ -16,7 +16,9 @@
 
 #include <memory>
 #include <string>
+#include <vector>
 
+#include "datacell/flatten_interface.h"
 #include "storage/serialization.h"
 #include "typing.h"
 #include "vsag/allocator.h"
@@ -52,5 +54,29 @@ public:
     // neighbors_[source_id][1...] are neighbor inner_ids
     UnorderedMap<std::string, Vector<InnerIdType>> neighbors_;
 };
+
+// Serialize the quantizer model and encoded rows of a small, ordered set of flatten data cells.
+// The payload is length-delimited so an importer with a different quantization configuration can
+// skip it and fall back to normal training/encoding.
+void
+SerializeBuildCacheCodes(StreamWriter& writer,
+                         const std::vector<FlattenInterfacePtr>& codes,
+                         uint64_t expected_count);
+
+bool
+DeserializeBuildCacheCodes(StreamReader& reader,
+                           const std::vector<FlattenInterfacePtr>& codes,
+                           uint64_t expected_count);
+
+void
+SerializeBuildCacheSourceIds(StreamWriter& writer, const Vector<std::string>& source_ids);
+
+void
+DeserializeBuildCacheSourceIds(StreamReader& reader, Vector<std::string>& source_ids);
+
+bool
+BuildCacheSourceIdsMatch(const Vector<std::string>& cached_source_ids,
+                         const std::string* source_ids,
+                         uint64_t count);
 
 }  // namespace vsag

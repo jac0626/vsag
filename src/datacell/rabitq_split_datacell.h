@@ -855,6 +855,32 @@ public:
     }
 
     bool
+    InsertEncodedCode(const uint8_t* codes, InnerIdType idx) override {
+        if (codes == nullptr || this->fused_code_storage_ != nullptr ||
+            this->optimized_build_active_ || idx >= this->total_count_) {
+            return false;
+        }
+        ByteBuffer one_bit_code(one_bit_code_size_, allocator_);
+        ByteBuffer supplement_code(supplement_code_size_, allocator_);
+        this->bottom_quantizer().SplitCode(codes, one_bit_code.data, supplement_code.data);
+        this->x_bit_layout_->Write(idx, one_bit_code.data);
+        this->supplement_layout_->Write(idx, supplement_code.data);
+        return true;
+    }
+
+    bool
+    PrepareEncodedCodeInsertion(InnerIdType capacity) override {
+        if (this->fused_code_storage_ != nullptr || this->optimized_build_active_) {
+            return false;
+        }
+        this->x_bit_layout_->Resize(capacity);
+        this->supplement_layout_->Resize(capacity);
+        this->max_capacity_ = std::max(this->max_capacity_, capacity);
+        this->total_count_ = std::max(this->total_count_, capacity);
+        return true;
+    }
+
+    bool
     UpdateVector(const void* vector,
                  InnerIdType idx = std::numeric_limits<InnerIdType>::max()) override {
         if (idx >= this->total_count_) {

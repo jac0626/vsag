@@ -4399,9 +4399,8 @@ TEST_CASE("HGraph ExportCache + ImportCache + Build acceleration smoke test",
     // End-to-end smoke test for the cache-accelerated Build path:
     //   (1) Build a baseline HGraph with N points carrying source_id.
     //   (2) ExportCache to an in-memory stream.
-    //   (3) Create a fresh HGraph, ImportCache, then Build the same dataset.
-    //       Build() should automatically take the warm-start + two-phase
-    //       refine path because cache_ has been populated.
+    //   (3) Create a fresh HGraph, ImportCache, then Build a dataset with
+    //       controlled source-id overlap.
     //   (4) Verify the warmed index returns reasonable knn results on a few
     //       random queries (we don't compare absolute recall against the
     //       baseline, only that the index is non-empty, searchable, and
@@ -4409,19 +4408,43 @@ TEST_CASE("HGraph ExportCache + ImportCache + Build acceleration smoke test",
     constexpr int64_t TEST_DIM = 32;
     constexpr int64_t TEST_COUNT = 200;
     constexpr int64_t TOPK = 10;
+    const auto graph_type = GENERATE(std::string("nsw"), std::string("pipnn"));
+    const auto quantization =
+        GENERATE(std::string("fp32"), std::string("rabitq_sq8"), std::string("rabitq_split"));
+    const int cache_overlap_percent = GENERATE(100, 95, 90, 80);
+    CAPTURE(graph_type);
+    CAPTURE(quantization);
+    CAPTURE(cache_overlap_percent);
+    const bool use_reorder = quantization == "rabitq_sq8";
+    const bool use_split_codes = quantization == "rabitq_split";
+    const auto base_quantization = use_reorder || use_split_codes ? "rabitq" : "fp32";
 
-    const auto* param = R"(
-    {
+    const auto param = fmt::format(R"(
+    {{
         "dtype": "float32",
         "metric_type": "l2",
         "dim": 32,
-        "index_param": {
-            "base_quantization_type": "fp32",
+        "index_param": {{
+            "base_quantization_type": "{}",
+            "use_reorder": {},
+            "precise_quantization_type": "sq8",
+            "rabitq_bits_per_dim_base": 3,
             "max_degree": 16,
-            "ef_construction": 50
-        }
+            "ef_construction": 50,
+            "graph_type": "{}"
+        }}
+    }}
+    )",
+                                   base_quantization,
+                                   use_reorder || use_split_codes,
+                                   graph_type);
+    auto param_json = vsag::JsonType::Parse(param);
+    if (use_split_codes) {
+        param_json["index_param"]["precise_quantization_type"].SetString("rabitq");
+        param_json["index_param"]["rabitq_bits_per_dim_precise"].SetInt(5);
+        param_json["index_param"]["build_by_base"].SetBool(true);
     }
-    )";
+    const auto effective_param = param_json.Dump();
 
     // Prepare deterministic data and source_ids.
     std::mt19937 rng(42);
@@ -4438,21 +4461,40 @@ TEST_CASE("HGraph ExportCache + ImportCache + Build acceleration smoke test",
     for (int64_t i = 0; i < TEST_COUNT; ++i) {
         source_ids[i] = fmt::format("sid_{}", i);
     }
+    auto warm_source_ids = source_ids;
+    for (int64_t i = TEST_COUNT * cache_overlap_percent / 100; i < TEST_COUNT; ++i) {
+        warm_source_ids[i] = fmt::format("new_sid_{}", i);
+    }
 
-    auto make_dataset = [&]() {
+    auto warm_vectors = vectors;
+    auto warm_ids = ids;
+    if (cache_overlap_percent == 95) {
+        constexpr int64_t reorder_offset = 37;
+        std::rotate(warm_vectors.begin(),
+                    warm_vectors.begin() + reorder_offset * TEST_DIM,
+                    warm_vectors.end());
+        std::rotate(warm_ids.begin(), warm_ids.begin() + reorder_offset, warm_ids.end());
+        std::rotate(warm_source_ids.begin(),
+                    warm_source_ids.begin() + reorder_offset,
+                    warm_source_ids.end());
+    }
+
+    auto make_dataset = [&](std::vector<float>& dataset_vectors,
+                            std::vector<int64_t>& dataset_ids,
+                            std::vector<std::string>& dataset_source_ids) {
         auto base = vsag::Dataset::Make();
         base->NumElements(TEST_COUNT)
             ->Dim(TEST_DIM)
-            ->Ids(ids.data())
-            ->Float32Vectors(vectors.data())
-            ->SourceID(source_ids.data())
+            ->Ids(dataset_ids.data())
+            ->Float32Vectors(dataset_vectors.data())
+            ->SourceID(dataset_source_ids.data())
             ->Owner(false);
         return base;
     };
 
     // ---- (1) baseline build ----
-    auto baseline = vsag::Factory::CreateIndex("hgraph", param).value();
-    auto baseline_build = baseline->Build(make_dataset());
+    auto baseline = vsag::Factory::CreateIndex("hgraph", effective_param).value();
+    auto baseline_build = baseline->Build(make_dataset(vectors, ids, source_ids));
     REQUIRE(baseline_build.has_value());
     REQUIRE(baseline->GetNumElements() == TEST_COUNT);
 
@@ -4463,19 +4505,31 @@ TEST_CASE("HGraph ExportCache + ImportCache + Build acceleration smoke test",
     REQUIRE(cache_buf.tellp() > 0);
 
     // ---- (3) fresh index, import cache, build again ----
-    auto warmed = vsag::Factory::CreateIndex("hgraph", param).value();
+    auto warmed = vsag::Factory::CreateIndex("hgraph", effective_param).value();
     auto import_result = warmed->ImportCache(cache_buf);
     REQUIRE(import_result.has_value());
     auto* logger_ptr = vsag::Options::Instance().logger();
     if (logger_ptr != nullptr) {
         logger_ptr->SetLevel(vsag::Logger::Level::kINFO);
     }
-    auto warmed_build = warmed->Build(make_dataset());
+    auto warmed_build = warmed->Build(make_dataset(warm_vectors, warm_ids, warm_source_ids));
     if (logger_ptr != nullptr) {
         logger_ptr->SetLevel(vsag::Logger::Level::kWARN);
     }
     REQUIRE(warmed_build.has_value());
     REQUIRE(warmed->GetNumElements() == TEST_COUNT);
+    const auto warm_stats = vsag::JsonType::Parse(warmed->GetStats());
+    const bool cache_expected = graph_type == "nsw" || cache_overlap_percent >= 95;
+    if (cache_expected) {
+        const auto hit_nodes = warm_stats["build_cache_hit_nodes"].GetInt();
+        const auto missed_nodes = warm_stats["build_cache_missed_nodes"].GetInt();
+        REQUIRE(hit_nodes + missed_nodes == TEST_COUNT);
+        REQUIRE(hit_nodes >= TEST_COUNT * cache_overlap_percent / 100 - 2);
+        REQUIRE(warm_stats["build_cache_codes_reused"].GetBool() ==
+                (graph_type == "pipnn" && quantization != "fp32"));
+    } else {
+        REQUIRE(warm_stats["build_cache_hit_rate"].Contains("skipped_reason"));
+    }
 
     // ---- (4) sanity-check knn search on the warmed index ----
     std::vector<float> query_vec(TEST_DIM);
@@ -4496,7 +4550,8 @@ TEST_CASE("HGraph ExportCache + ImportCache + Build acceleration smoke test",
     for (int64_t i = 0; i < knn->GetDim(); ++i) {
         if (knn->GetIds()[i] == ids[0]) {
             found_self = true;
-            REQUIRE(knn->GetDistances()[i] < 1e-4F);
+            const float tolerance = use_reorder || use_split_codes ? 1e-2F : 1e-4F;
+            REQUIRE(knn->GetDistances()[i] < tolerance);
             break;
         }
     }

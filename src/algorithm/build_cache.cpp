@@ -59,6 +59,12 @@ read_neighbors(StreamReader& reader, Vector<InnerIdType>& neighbors) {
     reader.Read(reinterpret_cast<char*>(neighbors.data()), size * sizeof(InnerIdType));
 }
 
+struct CachedCodeDescriptor {
+    std::string quantizer_name;
+    uint64_t code_size{0};
+    uint64_t payload_size{0};
+};
+
 }  // namespace
 
 BuildCache::BuildCache(Allocator* allocator)
@@ -128,6 +134,133 @@ BuildCache::GetNeighbors(const std::string& source_id) const {
         }
     }
     return result;
+}
+
+void
+SerializeBuildCacheCodes(StreamWriter& writer,
+                         const std::vector<FlattenInterfacePtr>& codes,
+                         uint64_t expected_count) {
+    bool valid = not codes.empty();
+    for (const auto& cell : codes) {
+        valid = valid && cell != nullptr && cell->TotalCount() == expected_count;
+    }
+
+    const uint64_t cell_count = valid ? codes.size() : 0;
+    StreamWriter::WriteObj(writer, cell_count);
+    if (not valid) {
+        return;
+    }
+
+    std::vector<uint64_t> payload_sizes;
+    payload_sizes.reserve(codes.size());
+    for (const auto& cell : codes) {
+        StreamWriter::WriteString(writer, cell->GetQuantizerName());
+        StreamWriter::WriteObj(writer, cell->GetQuantizerCodeSize());
+        const auto payload_size = cell->CalcSerializeSize();
+        StreamWriter::WriteObj(writer, payload_size);
+        payload_sizes.push_back(payload_size);
+    }
+    for (uint64_t i = 0; i < codes.size(); ++i) {
+        const auto begin = writer.GetCursor();
+        codes[i]->Serialize(writer);
+        if (writer.GetCursor() - begin != payload_sizes[i]) {
+            throw VsagException(ErrorType::INVALID_BINARY,
+                                "build cache code serialization size changed");
+        }
+    }
+}
+
+bool
+DeserializeBuildCacheCodes(StreamReader& reader,
+                           const std::vector<FlattenInterfacePtr>& codes,
+                           uint64_t expected_count) {
+    uint64_t cell_count = 0;
+    StreamReader::ReadObj(reader, cell_count);
+    if (cell_count > 16) {
+        throw VsagException(ErrorType::INVALID_BINARY, "corrupted build cache code-cell count");
+    }
+
+    std::vector<CachedCodeDescriptor> descriptors;
+    descriptors.reserve(cell_count);
+    for (uint64_t i = 0; i < cell_count; ++i) {
+        CachedCodeDescriptor descriptor;
+        descriptor.quantizer_name = read_string(reader);
+        StreamReader::ReadObj(reader, descriptor.code_size);
+        StreamReader::ReadObj(reader, descriptor.payload_size);
+        descriptors.emplace_back(std::move(descriptor));
+    }
+
+    bool compatible = cell_count > 0 && cell_count == codes.size();
+    if (compatible) {
+        for (uint64_t i = 0; i < cell_count; ++i) {
+            compatible = compatible && codes[i] != nullptr &&
+                         descriptors[i].quantizer_name == codes[i]->GetQuantizerName() &&
+                         descriptors[i].code_size == codes[i]->GetQuantizerCodeSize();
+        }
+    }
+
+    for (uint64_t i = 0; i < cell_count; ++i) {
+        const auto payload_size = descriptors[i].payload_size;
+        require_remaining(reader, payload_size, "code payload");
+        if (not compatible) {
+            SkipForward(reader, payload_size);
+            continue;
+        }
+        auto payload = reader.Slice(payload_size);
+        codes[i]->Deserialize(payload);
+        if (payload.GetCursor() != payload.Length()) {
+            throw VsagException(ErrorType::INVALID_BINARY,
+                                "build cache code payload was not fully consumed");
+        }
+    }
+
+    if (compatible) {
+        for (const auto& cell : codes) {
+            if (cell->TotalCount() != expected_count) {
+                throw VsagException(ErrorType::INVALID_BINARY,
+                                    "build cache code count does not match source ids");
+            }
+        }
+    }
+    return compatible;
+}
+
+void
+SerializeBuildCacheSourceIds(StreamWriter& writer, const Vector<std::string>& source_ids) {
+    const uint64_t count = source_ids.size();
+    StreamWriter::WriteObj(writer, count);
+    for (const auto& source_id : source_ids) {
+        StreamWriter::WriteString(writer, source_id);
+    }
+}
+
+void
+DeserializeBuildCacheSourceIds(StreamReader& reader, Vector<std::string>& source_ids) {
+    uint64_t count = 0;
+    StreamReader::ReadObj(reader, count);
+    if (count > remaining_bytes(reader) / sizeof(uint64_t)) {
+        throw VsagException(ErrorType::INVALID_BINARY, "corrupted build cache source-id count");
+    }
+    source_ids.clear();
+    source_ids.reserve(count);
+    for (uint64_t i = 0; i < count; ++i) {
+        source_ids.emplace_back(read_string(reader));
+    }
+}
+
+bool
+BuildCacheSourceIdsMatch(const Vector<std::string>& cached_source_ids,
+                         const std::string* source_ids,
+                         uint64_t count) {
+    if (source_ids == nullptr || cached_source_ids.size() != count) {
+        return false;
+    }
+    for (uint64_t i = 0; i < count; ++i) {
+        if (cached_source_ids[i].empty() || cached_source_ids[i] != source_ids[i]) {
+            return false;
+        }
+    }
+    return true;
 }
 
 }  // namespace vsag

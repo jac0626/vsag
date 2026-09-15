@@ -249,6 +249,40 @@ TEST_CASE("PiPNN keeps identical vectors reachable across fallback leaves", "[ut
     REQUIRE(visited.size() == count);
 }
 
+TEST_CASE("PiPNN terminates partitioning for a dominant near-duplicate cluster", "[ut][pipnn]") {
+    constexpr uint64_t dimensions = 4;
+    constexpr uint64_t count = 2049;
+    constexpr uint64_t max_degree = 8;
+    auto common_param = MakeCommonParam(dimensions);
+    std::vector<float> vectors(count * dimensions, 1.0F);
+    for (uint64_t point = 0; point < count; ++point) {
+        const float perturbation = static_cast<float>(point % 97) * 1e-7F;
+        vectors[point * dimensions + point % dimensions] += perturbation;
+    }
+    for (uint64_t point = count * 9 / 10; point < count; ++point) {
+        vectors[point * dimensions] += static_cast<float>(point) * 0.01F;
+    }
+
+    vsag::Vector<vsag::InnerIdType> ids(common_param.allocator_.get());
+    for (uint64_t id = 0; id < count; ++id) {
+        ids.emplace_back(static_cast<vsag::InnerIdType>(id));
+    }
+    auto rows = MakeRows(vectors, ids, dimensions, common_param.allocator_.get());
+    auto graph = MakeGraph(common_param, count, max_degree);
+
+    vsag::PiPNNGraphBuilderParameter parameter;
+    parameter.max_leaf_size = 32;
+    parameter.min_leaf_size = 2;
+    parameter.leader_sample_rate = 0.001F;
+    parameter.fanout = {2, 1};
+    parameter.reservoir_size = 16;
+    vsag::PiPNNGraphBuilder(
+        parameter, dimensions, common_param.metric_, common_param.allocator_.get())
+        .Build(graph, ids, rows);
+
+    RequireGraphInvariants(graph, ids, max_degree, common_param.allocator_.get());
+}
+
 TEST_CASE("PiPNN registers exact duplicate rows instead of building duplicate vertices",
           "[ut][pipnn][duplicate]") {
     constexpr uint64_t dimensions = 4;

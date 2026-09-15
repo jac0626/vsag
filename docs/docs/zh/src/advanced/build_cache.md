@@ -65,7 +65,13 @@ next_index->Build(next_base).value();
 ```
 
 调用 `ImportCache()` 后，`Build()` 会自动进入缓存辅助路径。两个快照中都存在的
-Source ID 使用缓存邻居 warm-start；未匹配记录作为 cache miss 走正常构建 refine。
+Source ID 使用缓存邻居 warm-start，未匹配记录作为 cache miss。使用
+`graph_type: "nsw"` 时，命中和未命中节点继续使用现有 refine 路径。使用
+`graph_type: "pipnn"` 时，至少 95% 的 Source ID 必须命中缓存；PiPNN 会保留恢复后的
+命中邻居行，以最高两倍 `max_degree` 的搜索预算连接未命中节点，并使用 PiPNN 批量重建路由图。
+重合率不足时自动回退到普通 PiPNN 冷构建。对于未单独保存原始向量的量化 PiPNN 索引，缓存还会
+保存量化模型和编码行；即使输入顺序变化，相同 Source ID 仍可直接复用旧编码，仅未命中向量需要编码。
+这会增大缓存文件；`GetStats()` 中的 `build_cache_codes_reused` 表示本次构建是否复用了编码行。
 缓存辅助 `Build()` 未设置 `Dataset::SourceID` 时会返回参数错误。
 
 ## 随索引持久化 Source ID
@@ -99,6 +105,7 @@ warm-start 构建完成后调用 `GetStats()`，检查：
 | `build_cache_hit_rate` | 构建节点中成功匹配并从导入缓存 warm-start 的比例 |
 | `build_cache_hit_nodes` | 成功匹配的节点数量 |
 | `build_cache_missed_nodes` | 没有匹配缓存条目、按正常路径构建的节点数量 |
+| `build_cache_codes_reused` | 本次构建是否复用了任意缓存编码行 |
 
 如果上一次构建没有使用导入缓存，统计会输出 `skipped_reason`。其他 HGraph
 指标见[索引分析](../resources/analyze_index.md)。

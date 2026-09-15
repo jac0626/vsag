@@ -153,6 +153,24 @@ public:
     virtual void
     InsertVector(const void* vector, InnerIdType idx = std::numeric_limits<InnerIdType>::max()) = 0;
 
+    // Inserts a code produced by the same serialized quantizer model after
+    // PrepareEncodedCodeInsertion(). This internal build-cache hook avoids decoding and
+    // re-encoding unchanged vectors. Data cells with composite layouts must split the canonical
+    // code into their physical layout before writing it.
+    virtual bool
+    InsertEncodedCode(const uint8_t* codes, InnerIdType idx) {
+        return false;
+    }
+
+    // Publishes the final row count and ensures disjoint InsertEncodedCode calls can write
+    // concurrently without count updates or layout growth. Unlike Resize(), this cannot rely on
+    // max_capacity_, whose default value may describe a logical capacity that has not been
+    // allocated by an in-memory backend yet.
+    virtual bool
+    PrepareEncodedCodeInsertion(InnerIdType capacity) {
+        return false;
+    }
+
     virtual bool
     UpdateVector(const void* vector, InnerIdType idx = std::numeric_limits<InnerIdType>::max()) {
         throw VsagException(ErrorType::INTERNAL_ERROR,

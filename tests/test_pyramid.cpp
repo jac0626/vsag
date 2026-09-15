@@ -2308,15 +2308,25 @@ TEST_CASE("Pyramid ExportCache + ImportCache + Build acceleration smoke test",
     // GRAPH that fulfill_cache() walks.
     //   (1) Build a baseline Pyramid with N points carrying source_id.
     //   (2) ExportCache to an in-memory stream.
-    //   (3) Fresh Pyramid, ImportCache, then Build the same dataset — Build
-    //       should automatically take the build_with_cache() warm-start path.
+    //   (3) Fresh Pyramid, ImportCache, then Build a dataset with controlled
+    //       source-id overlap.
     //   (4) Verify the warmed index is searchable and the first inserted
     //       vector (query == vectors[0]) is returned with ~0 distance.
     constexpr int64_t TEST_DIM = 32;
     constexpr int64_t TEST_COUNT = 200;
     constexpr int64_t TOPK = 10;
     const auto graph_storage_type = GENERATE(std::string("flat"), std::string("compressed"));
+    const auto graph_type = GENERATE(std::string("nsw"), std::string("pipnn"));
+    const auto quantization =
+        GENERATE(std::string("fp32"), std::string("rabitq_sq8"), std::string("rabitq_split"));
+    const int cache_overlap_percent = GENERATE(100, 90, 80);
     CAPTURE(graph_storage_type);
+    CAPTURE(graph_type);
+    CAPTURE(quantization);
+    CAPTURE(cache_overlap_percent);
+    const bool use_reorder = quantization == "rabitq_sq8";
+    const bool use_split_codes = quantization == "rabitq_split";
+    const auto base_quantization = use_reorder || use_split_codes ? "rabitq" : "fp32";
 
     // params must include persist_source_id: true so ExportCache produces a
     // usable cache after a Build that recorded source_ids. ef_construction equals
@@ -2327,10 +2337,14 @@ TEST_CASE("Pyramid ExportCache + ImportCache + Build acceleration smoke test",
         "metric_type": "l2",
         "dim": 32,
         "index_param": {{
-            "base_quantization_type": "fp32",
+            "base_quantization_type": "{}",
+            "use_reorder": {},
+            "precise_quantization_type": "sq8",
+            "rabitq_bits_per_dim_base": 3,
             "max_degree": 16,
             "ef_construction": 16,
             "build_thread_count": 8,
+            "graph_type": "{}",
             "root_graph_type": "multi_layer",
             "graph_storage_type": "{}",
             "no_build_levels": [1, 2],
@@ -2340,7 +2354,16 @@ TEST_CASE("Pyramid ExportCache + ImportCache + Build acceleration smoke test",
         }}
     }}
     )",
+                                   base_quantization,
+                                   use_reorder || use_split_codes,
+                                   graph_type,
                                    graph_storage_type);
+    auto param_json = vsag::JsonType::Parse(param);
+    if (use_split_codes) {
+        param_json["index_param"]["precise_quantization_type"].SetString("rabitq");
+        param_json["index_param"]["rabitq_bits_per_dim_precise"].SetInt(5);
+    }
+    const auto effective_param = param_json.Dump();
 
     std::mt19937 rng(42);
     std::uniform_real_distribution<float> dist(-1.0F, 1.0F);
@@ -2359,21 +2382,44 @@ TEST_CASE("Pyramid ExportCache + ImportCache + Build acceleration smoke test",
     for (int64_t i = 0; i < TEST_COUNT; ++i) {
         source_ids[i] = fmt::format("pyr_sid_{}", i);
     }
+    auto warm_source_ids = source_ids;
+    for (int64_t i = TEST_COUNT * cache_overlap_percent / 100; i < TEST_COUNT; ++i) {
+        warm_source_ids[i] = fmt::format("new_pyr_sid_{}", i);
+    }
 
-    auto make_dataset = [&]() {
-        return MakePyramidCacheDataset(TEST_COUNT, TEST_DIM, vectors, ids, paths, source_ids);
+    auto warm_vectors = vectors;
+    auto warm_ids = ids;
+    auto warm_paths = paths;
+    if (cache_overlap_percent == 90) {
+        constexpr int64_t reorder_offset = 37;
+        std::rotate(warm_vectors.begin(),
+                    warm_vectors.begin() + reorder_offset * TEST_DIM,
+                    warm_vectors.end());
+        std::rotate(warm_ids.begin(), warm_ids.begin() + reorder_offset, warm_ids.end());
+        std::rotate(warm_paths.begin(), warm_paths.begin() + reorder_offset, warm_paths.end());
+        std::rotate(warm_source_ids.begin(),
+                    warm_source_ids.begin() + reorder_offset,
+                    warm_source_ids.end());
+    }
+
+    auto make_dataset = [&](std::vector<float>& dataset_vectors,
+                            std::vector<int64_t>& dataset_ids,
+                            std::vector<std::string>& dataset_paths,
+                            std::vector<std::string>& dataset_source_ids) {
+        return MakePyramidCacheDataset(
+            TEST_COUNT, TEST_DIM, dataset_vectors, dataset_ids, dataset_paths, dataset_source_ids);
     };
 
     // ---- (1) baseline build ----
-    auto baseline = vsag::Factory::CreateIndex("pyramid", param).value();
-    auto baseline_build = baseline->Build(make_dataset());
+    auto baseline = vsag::Factory::CreateIndex("pyramid", effective_param).value();
+    auto baseline_build = baseline->Build(make_dataset(vectors, ids, paths, source_ids));
     REQUIRE(baseline_build.has_value());
     REQUIRE(baseline->GetNumElements() == TEST_COUNT);
 
     // ---- (2) preserve SourceID in the all-in-one module section ----
     auto binary = baseline->Serialize();
     REQUIRE(binary.has_value());
-    auto all_in_one = vsag::Factory::CreateIndex("pyramid", param).value();
+    auto all_in_one = vsag::Factory::CreateIndex("pyramid", effective_param).value();
     REQUIRE(all_in_one->Deserialize(binary.value()).has_value());
 
     // ---- (3) export cache from the footer-deserialized index ----
@@ -2384,10 +2430,14 @@ TEST_CASE("Pyramid ExportCache + ImportCache + Build acceleration smoke test",
 
     // ---- (4) fresh index, import cache, build again ----
     cache_buf.seekg(0);
-    auto warmed = vsag::Factory::CreateIndex("pyramid", param).value();
+    auto warmed = vsag::Factory::CreateIndex("pyramid", effective_param).value();
     auto import_result = warmed->ImportCache(cache_buf);
     REQUIRE(import_result.has_value());
-    auto warmed_build = warmed->Build(make_dataset());
+    auto warmed_build =
+        warmed->Build(make_dataset(warm_vectors, warm_ids, warm_paths, warm_source_ids));
+    if (not warmed_build.has_value()) {
+        INFO(warmed_build.error().message);
+    }
     REQUIRE(warmed_build.has_value());
     REQUIRE(warmed->GetNumElements() == TEST_COUNT);
     auto restored_data = warmed->GetDataByIdsWithFlag(ids.data(), 1, DATA_FLAG_ID | DATA_FLAG_PATH);
@@ -2395,9 +2445,18 @@ TEST_CASE("Pyramid ExportCache + ImportCache + Build acceleration smoke test",
     REQUIRE(restored_data.value()->GetPaths() != nullptr);
     REQUIRE(restored_data.value()->GetPaths()[0] == "a/b/c");
     auto warm_stats = vsag::JsonType::Parse(warmed->GetStats());
-    REQUIRE(warm_stats["build_cache_hit_nodes"].GetInt() > 0);
-    REQUIRE(warm_stats["build_cache_hit_memberships"].GetInt() > 0);
-    REQUIRE(warm_stats["build_cache_restored_edges"].GetInt() > 0);
+    const bool cache_expected = graph_type == "nsw" || cache_overlap_percent >= 90;
+    if (cache_expected) {
+        REQUIRE(warm_stats["build_cache_hit_nodes"].GetInt() > 0);
+        REQUIRE(warm_stats["build_cache_missed_nodes"].GetInt() ==
+                TEST_COUNT * (100 - cache_overlap_percent) / 100);
+        REQUIRE(warm_stats["build_cache_hit_memberships"].GetInt() > 0);
+        REQUIRE(warm_stats["build_cache_restored_edges"].GetInt() > 0);
+        REQUIRE(warm_stats["build_cache_codes_reused"].GetBool() ==
+                (graph_type == "pipnn" && quantization != "fp32"));
+    } else {
+        REQUIRE(warm_stats["build_cache_hit_rate"].Contains("skipped_reason"));
+    }
     REQUIRE(warm_stats["root_graphs"]["default"]["route_graph_count"].GetInt() > 0);
     std::vector<float> query_vec(TEST_DIM);
     std::copy(vectors.begin(), vectors.begin() + TEST_DIM, query_vec.begin());
@@ -2415,7 +2474,8 @@ TEST_CASE("Pyramid ExportCache + ImportCache + Build acceleration smoke test",
     for (int64_t i = 0; i < knn->GetDim(); ++i) {
         if (knn->GetIds()[i] == ids[0]) {
             found_self = true;
-            REQUIRE(knn->GetDistances()[i] < 1e-4F);
+            const float tolerance = use_reorder || use_split_codes ? 1e-2F : 1e-4F;
+            REQUIRE(knn->GetDistances()[i] < tolerance);
             break;
         }
     }

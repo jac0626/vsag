@@ -45,6 +45,13 @@
 
 namespace vsag {
 
+namespace {
+
+constexpr uint64_t HGRAPH_BUILD_CACHE_MAGIC = 0x4847434143484532ULL;
+constexpr uint32_t HGRAPH_BUILD_CACHE_VERSION = 1;
+
+}  // namespace
+
 static FlattenInterfacePtr
 make_temporary_sq8_flatten(MetricType metric,
                            DataTypes data_type,
@@ -162,11 +169,27 @@ HGraph::Build(const DatasetPtr& data) {
     this->build_cache_hit_rate_ = -1.0F;
     this->build_cache_hit_nodes_ = 0;
     this->build_cache_missed_nodes_ = 0;
+    this->build_cache_codes_reused_ = false;
     std::vector<int64_t> ret;
-    const bool using_build_cache = this->has_loaded_cache();
-    if (using_build_cache and graph_type_ == GRAPH_TYPE_VALUE_PIPNN) {
-        throw VsagException(ErrorType::INVALID_ARGUMENT,
-                            "HGraph PiPNN does not support build_with_cache");
+    bool using_build_cache = this->has_loaded_cache();
+    if (using_build_cache && graph_type_ == GRAPH_TYPE_VALUE_PIPNN &&
+        data->GetSourceID() != nullptr) {
+        constexpr uint64_t minimum_pipnn_cache_hit_percent = 95;
+        const auto data_num = static_cast<uint64_t>(data->GetNumElements());
+        uint64_t matched = 0;
+        const auto* source_ids = data->GetSourceID();
+        for (uint64_t offset = 0; offset < data_num; ++offset) {
+            if (cache_->neighbors_.find(source_ids[offset]) != cache_->neighbors_.end()) {
+                ++matched;
+            }
+        }
+        if (matched * 100 < data_num * minimum_pipnn_cache_hit_percent) {
+            logger::info(
+                "[hgraph_build_cache] PiPNN source-id overlap below {}%; falling back to cold "
+                "build",
+                minimum_pipnn_cache_hit_percent);
+            using_build_cache = false;
+        }
     }
     if (using_build_cache) {
         this->check_fused_mutation_supported("Build with imported cache");
@@ -175,10 +198,15 @@ HGraph::Build(const DatasetPtr& data) {
                                 "HGraph deduplicate_storage does not support build_with_cache");
         }
         // A previously exported cache has been imported via ImportCache().
-        // Take the accelerated build path that warm-starts neighbours from
-        // the cache and refines them, instead of building from scratch.
+        // Take the accelerated build path that restores cached neighbours
+        // and repairs misses instead of building from scratch.
         ret = this->build_with_cache(data);
     } else {
+        // Imported code rows are no longer useful once the cache path is rejected. Release them
+        // before a cold build allocates the new encoded storage, otherwise fallback temporarily
+        // retains both snapshots in memory.
+        this->cached_basic_flatten_codes_.reset();
+        this->cached_high_precise_codes_.reset();
         auto optimized_result = this->try_optimized_build(data);
         if (optimized_result.has_value()) {
             ret = std::move(optimized_result.value());
@@ -1328,14 +1356,98 @@ HGraph::ExportCache(std::ostream& out_stream) const {
     this->check_fused_mutation_supported("ExportCache");
     IOStreamWriter writer(out_stream);
     this->fullfill_cache();
+    StreamWriter::WriteObj(writer, HGRAPH_BUILD_CACHE_MAGIC);
+    StreamWriter::WriteObj(writer, HGRAPH_BUILD_CACHE_VERSION);
     this->cache_->Serialize(writer);
+    SerializeBuildCacheCodes(
+        writer, this->current_build_cache_codes(), this->cache_->source_ids_.size());
 }
 
 void
 HGraph::ImportCache(std::istream& in_stream) {
     this->check_fused_mutation_supported("ImportCache");
     IOStreamReader reader(in_stream);
+    const auto begin = reader.GetCursor();
+    uint64_t magic = 0;
+    StreamReader::ReadObj(reader, magic);
+    if (magic != HGRAPH_BUILD_CACHE_MAGIC) {
+        reader.Seek(begin);
+        this->cache_->Deserialize(reader);
+        this->cached_basic_flatten_codes_.reset();
+        this->cached_high_precise_codes_.reset();
+        return;
+    }
+
+    uint32_t version = 0;
+    StreamReader::ReadObj(reader, version);
+    CHECK_ARGUMENT(version == HGRAPH_BUILD_CACHE_VERSION, "unsupported HGraph build cache version");
     this->cache_->Deserialize(reader);
+    auto cached_codes = this->create_build_cache_codes();
+    const bool loaded = DeserializeBuildCacheCodes(
+        reader, cached_codes, static_cast<uint64_t>(this->cache_->source_ids_.size()));
+    if (loaded) {
+        this->cached_basic_flatten_codes_ = cached_codes[0];
+        this->cached_high_precise_codes_ = cached_codes.size() > 1 ? cached_codes[1] : nullptr;
+    } else {
+        this->cached_basic_flatten_codes_.reset();
+        this->cached_high_precise_codes_.reset();
+    }
+}
+
+bool
+HGraph::supports_encoded_build_cache() const {
+    return graph_type_ == GRAPH_TYPE_VALUE_PIPNN && basic_flatten_codes_ != nullptr &&
+           basic_flatten_codes_->GetQuantizerName() != QUANTIZATION_TYPE_VALUE_FP32 &&
+           not create_new_raw_vector_;
+}
+
+std::vector<FlattenInterfacePtr>
+HGraph::current_build_cache_codes() const {
+    if (not supports_encoded_build_cache()) {
+        return {};
+    }
+    std::vector<FlattenInterfacePtr> result{basic_flatten_codes_};
+    if (has_precise_reorder()) {
+        result.push_back(high_precise_codes_);
+    }
+    return result;
+}
+
+std::vector<FlattenInterfacePtr>
+HGraph::create_build_cache_codes() const {
+    if (not supports_encoded_build_cache()) {
+        return {};
+    }
+    const auto hgraph_param = std::dynamic_pointer_cast<HGraphParameter>(create_param_ptr_);
+    CHECK_ARGUMENT(hgraph_param != nullptr, "invalid HGraph build cache parameters");
+    std::vector<FlattenInterfacePtr> result;
+    result.push_back(FlattenInterface::MakeInstance(hgraph_param->base_codes_param,
+                                                    basic_flatten_codes_->ExportCommonParam()));
+    if (has_precise_reorder()) {
+        result.push_back(FlattenInterface::MakeInstance(hgraph_param->precise_codes_param,
+                                                        high_precise_codes_->ExportCommonParam()));
+    }
+    return result;
+}
+
+void
+HGraph::adopt_build_cache_codes() {
+    CHECK_ARGUMENT(cached_basic_flatten_codes_ != nullptr,
+                   "HGraph encoded build cache is not loaded");
+    const bool raw_is_base = raw_vector_ == basic_flatten_codes_;
+    const bool raw_is_precise = raw_vector_ == high_precise_codes_;
+    basic_flatten_codes_ = std::move(cached_basic_flatten_codes_);
+    if (has_precise_reorder()) {
+        CHECK_ARGUMENT(cached_high_precise_codes_ != nullptr,
+                       "HGraph precise encoded build cache is not loaded");
+        high_precise_codes_ = std::move(cached_high_precise_codes_);
+    }
+    if (raw_is_base) {
+        raw_vector_ = basic_flatten_codes_;
+    } else if (raw_is_precise) {
+        raw_vector_ = high_precise_codes_;
+    }
+    init_resize_bit_and_reorder();
 }
 
 void
@@ -1501,15 +1613,14 @@ HGraph::select_refine_neighbors_with_distances(const DatasetPtr& data,
 }
 
 void
-HGraph::refine_nodes_two_phase(
-    const DatasetPtr& data,
-    const std::vector<InnerIdType>& ids_to_refine,
-    std::string_view phase_name,
-    uint32_t rounds,
-    uint32_t refine_ef,
-    bool use_self_as_entry,
-    const FlattenInterfacePtr& flatten_codes,
-    const std::unordered_map<InnerIdType, uint32_t>& inner_id_to_input_idx) {
+HGraph::refine_nodes_two_phase(const DatasetPtr& data,
+                               const std::vector<InnerIdType>& ids_to_refine,
+                               std::string_view phase_name,
+                               uint32_t rounds,
+                               uint32_t refine_ef,
+                               bool use_self_as_entry,
+                               const FlattenInterfacePtr& flatten_codes,
+                               const Vector<uint32_t>& inner_id_to_input_idx) {
     if (ids_to_refine.empty() || rounds == 0) {
         return;
     }
@@ -1547,10 +1658,11 @@ HGraph::refine_nodes_two_phase(
                             effective_refine_ef,
                             use_self_as_entry,
                             max_degree](InnerIdType inner_id) {
-        auto data_iter = inner_id_to_input_idx.find(inner_id);
-        CHECK_ARGUMENT(data_iter != inner_id_to_input_idx.end(),
+        CHECK_ARGUMENT(static_cast<uint64_t>(inner_id) < inner_id_to_input_idx.size(),
                        fmt::format("missing input row for inner_id {}", inner_id));
-        const uint32_t input_idx = data_iter->second;
+        const uint32_t input_idx = inner_id_to_input_idx[inner_id];
+        CHECK_ARGUMENT(input_idx != std::numeric_limits<uint32_t>::max(),
+                       fmt::format("missing input row for inner_id {}", inner_id));
 
         // Step 1: search for candidates and select neighbors via heuristic
         auto candidates = this->collect_refine_candidates(
@@ -1723,15 +1835,55 @@ HGraph::build_with_cache(const DatasetPtr& data) {
                    "build_with_cache requires Dataset::SourceID to be set");
 
     const auto build_begin = build_cache_now_us();
-    this->Train(data);
+    const auto data_num = static_cast<uint64_t>(data->GetNumElements());
+    bool reuse_cached_codes =
+        cached_basic_flatten_codes_ != nullptr &&
+        BuildCacheSourceIdsMatch(cache_->source_ids_, data->GetSourceID(), data_num);
+    if (reuse_cached_codes) {
+        UnorderedSet<LabelType> unique_labels(allocator_);
+        unique_labels.reserve(data_num);
+        const auto* labels = data->GetIds();
+        for (uint64_t i = 0; reuse_cached_codes && i < data_num; ++i) {
+            reuse_cached_codes = unique_labels.emplace(labels[i]).second;
+        }
+    }
+    if (reuse_cached_codes) {
+        this->adopt_build_cache_codes();
+        build_cache_codes_reused_ = true;
+    }
+
+    bool copy_cached_code_rows = cached_basic_flatten_codes_ != nullptr && not reuse_cached_codes;
+    if (copy_cached_code_rows) {
+        cached_basic_flatten_codes_->ExportModel(basic_flatten_codes_);
+        copy_cached_code_rows = basic_flatten_codes_->PrepareEncodedCodeInsertion(data_num);
+        if (copy_cached_code_rows && has_precise_reorder()) {
+            cached_high_precise_codes_->ExportModel(high_precise_codes_);
+            copy_cached_code_rows = high_precise_codes_->PrepareEncodedCodeInsertion(data_num);
+        }
+    }
+    if (not reuse_cached_codes && not copy_cached_code_rows) {
+        this->Train(data);
+        cached_basic_flatten_codes_.reset();
+        cached_high_precise_codes_.reset();
+    }
 
     BuildCachePlan plan(allocator_);
     this->cache_collect_valid_indices(data, plan);
+    const bool valid_code_row_count =
+        not reuse_cached_codes || plan.valid_indices.size() == data_num;
+    CHECK_ARGUMENT(valid_code_row_count,
+                   "exact HGraph code cache reuse requires one inner id per input row");
+    plan.reuse_cached_codes = reuse_cached_codes;
+    plan.reuse_cached_code_rows = copy_cached_code_rows;
     this->cache_setup_metadata_serial(data, plan);
     this->cache_encode_codes_parallel(data, plan);
+    if (plan.reuse_cached_code_rows) {
+        cached_basic_flatten_codes_.reset();
+        cached_high_precise_codes_.reset();
+    }
     this->cache_warm_start_and_classify(plan);
     this->cache_run_refine_two_phase(data, plan);
-    this->cache_rebuild_route_graphs(plan);
+    this->cache_rebuild_route_graphs(data, plan);
 
     const auto build_total_elapsed = build_cache_now_us() - build_begin;
     logger::info("[hgraph_build_cache] build_with_cache total elapsed {:.3f}s",
@@ -1768,8 +1920,11 @@ HGraph::cache_collect_valid_indices(const DatasetPtr& data, BuildCachePlan& plan
     this->resize(current_count + new_ids_count);
     this->total_count_ += new_ids_count;
     plan.inserted_inner_ids.reserve(static_cast<uint64_t>(plan.valid_indices.size()));
-    plan.inner_id_to_input_idx.reserve(static_cast<uint64_t>(plan.valid_indices.size()));
-    plan.source_id_to_new_inner.reserve(static_cast<uint64_t>(plan.valid_indices.size()));
+    plan.inner_id_to_input_idx.assign(static_cast<uint64_t>(current_count + new_ids_count),
+                                      std::numeric_limits<uint32_t>::max());
+    plan.old_to_new_inner.assign(this->cache_->source_ids_.size(),
+                                 std::numeric_limits<InnerIdType>::max());
+    plan.cached_neighbor_rows.assign(plan.valid_indices.size(), nullptr);
 }
 
 // Step 1a: serial setup of label_table / source_id_table / route_graph_ids
@@ -1780,6 +1935,8 @@ void
 HGraph::cache_setup_metadata_serial(const DatasetPtr& data, BuildCachePlan& plan) {
     const auto* labels = data->GetIds();
     const auto* source_ids = data->GetSourceID();
+    const auto& cache_map = this->cache_->neighbors_;
+    constexpr InnerIdType invalid_id = std::numeric_limits<InnerIdType>::max();
     const auto prepare_meta_begin = build_cache_now_us();
     for (uint64_t cur = 0; cur < plan.valid_indices.size(); ++cur) {
         const auto i = plan.valid_indices[cur];
@@ -1788,10 +1945,19 @@ HGraph::cache_setup_metadata_serial(const DatasetPtr& data, BuildCachePlan& plan
         this->label_table_->Insert(inner_id, label);
         if (source_ids != nullptr && not source_ids[i].empty()) {
             this->label_table_->InsertSourceId(inner_id, source_ids[i]);
-            plan.source_id_to_new_inner.emplace(source_ids[i], inner_id);
+            const auto cached = cache_map.find(source_ids[i]);
+            if (cached != cache_map.end() && not cached->second.empty()) {
+                const auto old_inner = cached->second.front();
+                if (static_cast<uint64_t>(old_inner) < plan.old_to_new_inner.size()) {
+                    if (plan.old_to_new_inner[old_inner] == invalid_id) {
+                        plan.old_to_new_inner[old_inner] = inner_id;
+                    }
+                    plan.cached_neighbor_rows[cur] = &cached->second;
+                }
+            }
         }
         plan.inserted_inner_ids.push_back(inner_id);
-        plan.inner_id_to_input_idx.emplace(inner_id, static_cast<uint32_t>(i));
+        plan.inner_id_to_input_idx[inner_id] = static_cast<uint32_t>(i);
 
         const auto level = this->get_random_level() - 1;
         if (level >= 0) {
@@ -1826,31 +1992,71 @@ HGraph::cache_encode_codes_parallel(const DatasetPtr& data, BuildCachePlan& plan
         this->thread_pool_ != nullptr && this->build_thread_count_ > 1;
     auto& valid_indices = plan.valid_indices;
     auto& inner_ids = plan.inner_ids;
+    const bool reuse_cached_codes = plan.reuse_cached_codes;
+    const bool reuse_cached_code_rows = plan.reuse_cached_code_rows;
+    std::atomic<uint64_t> copied_code_rows{0};
+    auto prepare_range = [this,
+                          &plan,
+                          &valid_indices,
+                          &inner_ids,
+                          data,
+                          extra_infos,
+                          attr_sets,
+                          reuse_cached_codes,
+                          reuse_cached_code_rows,
+                          &copied_code_rows](uint64_t lo, uint64_t hi) {
+        std::vector<uint8_t> base_buffer;
+        std::vector<uint8_t> precise_buffer;
+        if (reuse_cached_code_rows) {
+            base_buffer.resize(cached_basic_flatten_codes_->GetQuantizerCodeSize());
+            if (cached_high_precise_codes_ != nullptr) {
+                precise_buffer.resize(cached_high_precise_codes_->GetQuantizerCodeSize());
+            }
+        }
+        for (uint64_t cur = lo; cur < hi; ++cur) {
+            const auto i = valid_indices[cur];
+            const auto inner_id = inner_ids.at(cur);
+            bool copied = false;
+            const auto* cached_row = plan.cached_neighbor_rows[cur];
+            if (reuse_cached_code_rows && cached_row != nullptr && not cached_row->empty()) {
+                const auto old_inner_id = cached_row->front();
+                copied =
+                    cached_basic_flatten_codes_->GetCodesById(old_inner_id, base_buffer.data()) &&
+                    basic_flatten_codes_->InsertEncodedCode(base_buffer.data(), inner_id);
+                if (copied && cached_high_precise_codes_ != nullptr) {
+                    copied =
+                        cached_high_precise_codes_->GetCodesById(old_inner_id,
+                                                                 precise_buffer.data()) &&
+                        high_precise_codes_->InsertEncodedCode(precise_buffer.data(), inner_id);
+                }
+            }
+            if (not reuse_cached_codes && not copied) {
+                // Build owns an empty index and every worker writes a distinct, preallocated ID.
+                // Match the cold-build batch path by avoiding the mutation-time global code lock.
+                this->insert_persistent_codes_unlocked(get_data(data, static_cast<uint32_t>(i)),
+                                                       inner_id);
+            }
+            if (copied) {
+                copied_code_rows.fetch_add(1, std::memory_order_relaxed);
+            }
+            if (this->extra_infos_ != nullptr && extra_infos != nullptr) {
+                this->extra_infos_->InsertExtraInfo(extra_infos + i * extra_info_size_, inner_id);
+            }
+            if (attr_sets != nullptr && this->use_attribute_filter_) {
+                this->attr_filter_index_->Insert(attr_sets[i], inner_id);
+            }
+        }
+    };
     if (use_parallel_prepare) {
-        const uint64_t num_threads = this->build_thread_count_;
         const uint64_t total_jobs = valid_indices.size();
-        const uint64_t block_size =
-            std::max<uint64_t>(1, (total_jobs + num_threads - 1) / num_threads);
+        // Cache misses are commonly appended as a contiguous suffix. Small tasks let the pool
+        // spread their substantially more expensive quantization work across all build threads.
+        constexpr uint64_t block_size = 1024;
         std::vector<std::future<void>> futures;
-        futures.reserve(num_threads);
+        futures.reserve((total_jobs + block_size - 1) / block_size);
         for (uint64_t lo = 0; lo < total_jobs; lo += block_size) {
             const uint64_t hi = std::min<uint64_t>(lo + block_size, total_jobs);
-            futures.emplace_back(this->thread_pool_->GeneralEnqueue(
-                [this, lo, hi, &valid_indices, &inner_ids, data, extra_infos, attr_sets]() {
-                    for (uint64_t cur = lo; cur < hi; ++cur) {
-                        const auto i = valid_indices[cur];
-                        const auto inner_id = inner_ids.at(cur);
-                        this->insert_persistent_codes(get_data(data, static_cast<uint32_t>(i)),
-                                                      inner_id);
-                        if (this->extra_infos_ != nullptr && extra_infos != nullptr) {
-                            this->extra_infos_->InsertExtraInfo(extra_infos + i * extra_info_size_,
-                                                                inner_id);
-                        }
-                        if (attr_sets != nullptr && this->use_attribute_filter_) {
-                            this->attr_filter_index_->Insert(attr_sets[i], inner_id);
-                        }
-                    }
-                }));
+            futures.emplace_back(this->thread_pool_->GeneralEnqueue(prepare_range, lo, hi));
         }
         // CRITICAL: drain ALL futures even if one throws. Background tasks
         // capture valid_indices/inner_ids by reference; early return on first
@@ -1871,18 +2077,10 @@ HGraph::cache_encode_codes_parallel(const DatasetPtr& data, BuildCachePlan& plan
             std::rethrow_exception(prepare_ex);
         }
     } else {
-        for (uint64_t cur = 0; cur < valid_indices.size(); ++cur) {
-            const auto i = valid_indices[cur];
-            const auto inner_id = inner_ids.at(cur);
-            this->insert_persistent_codes(get_data(data, static_cast<uint32_t>(i)), inner_id);
-            if (this->extra_infos_ != nullptr && extra_infos != nullptr) {
-                this->extra_infos_->InsertExtraInfo(extra_infos + i * extra_info_size_, inner_id);
-            }
-            if (attr_sets != nullptr && this->use_attribute_filter_) {
-                this->attr_filter_index_->Insert(attr_sets[i], inner_id);
-            }
-        }
+        prepare_range(0, valid_indices.size());
     }
+    build_cache_codes_reused_ =
+        build_cache_codes_reused_ || copied_code_rows.load(std::memory_order_relaxed) > 0;
     const auto prepare_encode_elapsed = build_cache_now_us() - prepare_encode_begin;
     logger::info("[hgraph_build_cache] prepare_encode finished in {:.3f}s nodes={} parallelism={}",
                  static_cast<double>(prepare_encode_elapsed) / 1000000.0,
@@ -1894,13 +2092,11 @@ HGraph::cache_encode_codes_parallel(const DatasetPtr& data, BuildCachePlan& plan
 }
 
 // Step 2: warm_start - seed neighbours using the cache, classify nodes into
-// hit_ids (have warm seed) / missed_ids (no warm seed, need full search).
+// hit_ids (have warm seed) / missed_ids (no warm seed, need graph search).
 //
-// The cache encodes neighbours by source_id:
-//   cache_->source_ids_[old_inner_id] -> source_id (string)
-//   cache_->neighbors_[source_id]     -> [old_inner_id, neighbor_old_inner_id...]
-// We translate the old neighbour list into the new inner_id space via
-// (old neighbor inner_id) -> (old source_id) -> (new inner_id).
+// Metadata setup resolves each source_id once and records both its cached row
+// and old-inner-id -> new-inner-id mapping. This phase only performs integer
+// translation on the hot path.
 //
 // Optimisations vs. the original O(N) serial implementation:
 //   A. Replace the per-node std::unordered_set<InnerIdType> dedup
@@ -1910,31 +2106,14 @@ HGraph::cache_encode_codes_parallel(const DatasetPtr& data, BuildCachePlan& plan
 //   B. Run the outer loop in parallel via thread_pool_->GeneralEnqueue,
 //      using std::atomic<uint64_t> slots to claim positions in
 //      hit_ids/missed_ids without locking.
-//   C. Pre-build a flat Vector<InnerIdType> old_to_new_map indexed by
-//      old_inner_id, eliminating the per-edge string hash lookup
-//      (cache_source_ids[idx] -> source_id_to_new_inner.find(source_id))
-//      on the hot path. This drops the inner-loop translation cost from
-//      two string-keyed unordered_map probes to a single integer index.
+//   C. Reuse the flat old-inner-id mapping and cached-row pointers populated
+//      during metadata setup, eliminating all string hash lookups here.
 void
 HGraph::cache_warm_start_and_classify(BuildCachePlan& plan) {
     const auto warm_start_begin = build_cache_now_us();
-    const auto& cache_source_ids = this->cache_->source_ids_;
-    const auto& cache_map = this->cache_->neighbors_;
     const uint64_t max_degree = this->bottom_graph_->MaximumDegree();
-
-    // Step 2.0 (optimisation C): build old_inner_id -> new_inner_id map.
     constexpr InnerIdType invalid_id = std::numeric_limits<InnerIdType>::max();
-    Vector<InnerIdType> old_to_new_map(cache_source_ids.size(), invalid_id, allocator_);
-    for (uint64_t old_inner = 0; old_inner < cache_source_ids.size(); ++old_inner) {
-        const auto& sid = cache_source_ids[old_inner];
-        if (sid.empty()) {
-            continue;
-        }
-        auto fit = plan.source_id_to_new_inner.find(sid);
-        if (fit != plan.source_id_to_new_inner.end()) {
-            old_to_new_map[old_inner] = fit->second;
-        }
-    }
+    const auto& old_to_new_map = plan.old_to_new_inner;
 
     const uint64_t total_nodes = plan.inserted_inner_ids.size();
     auto& hit_ids = plan.hit_ids;
@@ -1958,22 +2137,15 @@ HGraph::cache_warm_start_and_classify(BuildCachePlan& plan) {
         mapped.reserve(max_degree + 8);
         for (uint64_t k = lo; k < hi; ++k) {
             const auto inner_id = plan.inserted_inner_ids[k];
-            const auto& source_id = this->label_table_->GetSourceId(inner_id);
-            if (source_id.empty()) {
+            const auto* cached_list = plan.cached_neighbor_rows[k];
+            if (cached_list == nullptr) {
                 this->bottom_graph_->InsertNeighborsById(inner_id, empty_neighbours);
                 missed_ids[missed_idx.fetch_add(1, std::memory_order_relaxed)] = inner_id;
                 continue;
             }
-            auto it = cache_map.find(source_id);
-            if (it == cache_map.end()) {
-                this->bottom_graph_->InsertNeighborsById(inner_id, empty_neighbours);
-                missed_ids[missed_idx.fetch_add(1, std::memory_order_relaxed)] = inner_id;
-                continue;
-            }
-            const auto& cached_list = it->second;
             mapped.clear();
-            for (uint64_t kk = 1; kk < cached_list.size(); ++kk) {
-                const auto neighbor_old_inner = cached_list[kk];
+            for (uint64_t kk = 1; kk < cached_list->size(); ++kk) {
+                const auto neighbor_old_inner = (*cached_list)[kk];
                 if (static_cast<uint64_t>(neighbor_old_inner) >= old_to_new_map.size()) {
                     continue;
                 }
@@ -1994,9 +2166,8 @@ HGraph::cache_warm_start_and_classify(BuildCachePlan& plan) {
             if (mapped.empty()) {
                 // Nodes whose cached neighbours could not be translated into
                 // the current index have no warm-start signal. Treat them as
-                // cold-start nodes so they receive the full missed-refine
-                // budget (global entry-point search + more rounds) instead of
-                // the cheap hit-refine path.
+                // cold-start nodes so they use global entry-point search
+                // instead of the cached-hit path.
                 hit_empty_seed_atomic.fetch_add(1, std::memory_order_relaxed);
                 missed_ids[missed_idx.fetch_add(1, std::memory_order_relaxed)] = inner_id;
             } else {
@@ -2057,16 +2228,13 @@ HGraph::cache_warm_start_and_classify(BuildCachePlan& plan) {
         hit_rate);
 }
 
-// Step 3: refine missed nodes (global entry) first, then hit nodes.
-// Rationale: running missed_refine first lets cold-start nodes install
-// both their own forward neighbours and their reverse-edge contributions
-// back into hit-node adjacency lists before hit_refine kicks in. The
-// subsequent hit_refine therefore sees a richer local frontier (warm
-// seed merged with reverse edges produced by missed_refine) and can
-// still exploit the cheap self-entry path on nodes whose neighbour list
-// remains non-empty.
+// Step 3: refine missed nodes (global entry) first. NSW also refines cache
+// hits, while PiPNN preserves the restored rows: searching every hit would
+// replace its batch build with a slower per-node graph build and discard the
+// main benefit of a high-overlap cache. Miss refinement still installs
+// reverse edges into restored hit rows, connecting new points to the old graph.
 //
-// Hit nodes whose neighbour list is empty when hit_refine starts
+// NSW hit nodes whose neighbour list is empty when hit_refine starts
 // (either because warm_start could not map any cached neighbour, or
 // because every warm seed was evicted by the missed_refine reverse
 // pruning) will automatically fall back to the global entry point via
@@ -2081,19 +2249,27 @@ HGraph::cache_run_refine_two_phase(const DatasetPtr& data, BuildCachePlan& plan)
     if (this->has_precise_reorder()) {
         flatten_codes = this->high_precise_codes_;
     }
-    logger::debug(
-        "[DIAG] refine flatten_codes quantizer = {} (basic={}, high_precise={})",
-        flatten_codes->GetQuantizerName(),
-        this->basic_flatten_codes_ ? this->basic_flatten_codes_->GetQuantizerName() : "null",
-        this->high_precise_codes_ ? this->high_precise_codes_->GetQuantizerName() : "null");
+    const uint64_t missed_refine_ef =
+        graph_type_ == GRAPH_TYPE_VALUE_PIPNN
+            ? std::min<uint64_t>(this->ef_construct_,
+                                 static_cast<uint64_t>(bottom_graph_->MaximumDegree()) * 2)
+            : 0;
+    const auto route_entry_point = entry_point_id_;
+    if (graph_type_ == GRAPH_TYPE_VALUE_PIPNN && not plan.hit_ids.empty()) {
+        entry_point_id_ = *std::min_element(plan.hit_ids.begin(), plan.hit_ids.end());
+    }
     this->refine_nodes_two_phase(data,
                                  plan.missed_ids,
                                  "missed_refine",
                                  1,
-                                 0,  // 0 means use ef_construct_
+                                 missed_refine_ef,  // 0 means use ef_construct_
                                  /*use_self_as_entry=*/false,
                                  flatten_codes,
                                  plan.inner_id_to_input_idx);
+    if (graph_type_ == GRAPH_TYPE_VALUE_PIPNN) {
+        entry_point_id_ = route_entry_point;
+        return;
+    }
     this->refine_nodes_two_phase(data,
                                  plan.hit_ids,
                                  "hit_refine",
@@ -2104,27 +2280,56 @@ HGraph::cache_run_refine_two_phase(const DatasetPtr& data, BuildCachePlan& plan)
                                  plan.inner_id_to_input_idx);
 }
 
-// Step 4: rebuild route graphs via ODescent.
+// Step 4: rebuild route graphs. PiPNN cache builds use batch construction here
+// as well; ODescent's iterative route build was the largest remaining fixed
+// cost after restoring the bottom graph.
 void
-HGraph::cache_rebuild_route_graphs(BuildCachePlan& plan) {
+HGraph::cache_rebuild_route_graphs(const DatasetPtr& data, BuildCachePlan& plan) {
     this->route_graphs_.clear();
     if (plan.route_graph_ids.empty()) {
         return;
     }
     const auto route_graph_begin = build_cache_now_us();
-    if (this->odescent_param_ == nullptr) {
-        this->odescent_param_ = std::make_shared<ODescentParameter>();
-    }
-    auto build_data =
-        this->has_precise_reorder() ? this->high_precise_codes_ : this->basic_flatten_codes_;
-    for (auto& route_graph_id : plan.route_graph_ids) {
-        odescent_param_->max_degree = bottom_graph_->MaximumDegree() / 2;
-        ODescent sparse_odescent_builder(
-            odescent_param_, build_data, allocator_, this->thread_pool_.get());
-        auto graph = this->generate_one_route_graph();
-        sparse_odescent_builder.Build(route_graph_id);
-        sparse_odescent_builder.SaveGraph(graph);
-        this->route_graphs_.emplace_back(graph);
+    if (graph_type_ == GRAPH_TYPE_VALUE_PIPNN) {
+        PiPNNGraphBuilderParameter pipnn_parameter;
+        pipnn_parameter.alpha = this->alpha_;
+        PiPNNGraphBuilder pipnn_builder(pipnn_parameter,
+                                        static_cast<uint64_t>(this->dim_),
+                                        this->metric_,
+                                        this->allocator_,
+                                        this->thread_pool_.get(),
+                                        this->build_thread_count_);
+        for (const auto& route_graph_id : plan.route_graph_ids) {
+            Vector<const float*> route_rows(allocator_);
+            route_rows.reserve(route_graph_id.size());
+            for (const auto inner_id : route_graph_id) {
+                CHECK_ARGUMENT(static_cast<uint64_t>(inner_id) < plan.inner_id_to_input_idx.size(),
+                               fmt::format("missing route input row for inner_id {}", inner_id));
+                const auto input_idx = plan.inner_id_to_input_idx[inner_id];
+                CHECK_ARGUMENT(input_idx != std::numeric_limits<uint32_t>::max(),
+                               fmt::format("missing route input row for inner_id {}", inner_id));
+                route_rows.emplace_back(static_cast<const float*>(get_data(data, input_idx)));
+            }
+            auto graph = this->generate_one_route_graph();
+            graph->SetMaxCapacity(this->total_count_.load());
+            pipnn_builder.Build(graph, route_graph_id, route_rows);
+            this->route_graphs_.emplace_back(std::move(graph));
+        }
+    } else {
+        if (this->odescent_param_ == nullptr) {
+            this->odescent_param_ = std::make_shared<ODescentParameter>();
+        }
+        auto build_data =
+            this->has_precise_reorder() ? this->high_precise_codes_ : this->basic_flatten_codes_;
+        for (auto& route_graph_id : plan.route_graph_ids) {
+            odescent_param_->max_degree = bottom_graph_->MaximumDegree() / 2;
+            ODescent sparse_odescent_builder(
+                odescent_param_, build_data, allocator_, this->thread_pool_.get());
+            auto graph = this->generate_one_route_graph();
+            sparse_odescent_builder.Build(route_graph_id);
+            sparse_odescent_builder.SaveGraph(graph);
+            this->route_graphs_.emplace_back(std::move(graph));
+        }
     }
     const auto route_graph_elapsed = build_cache_now_us() - route_graph_begin;
     logger::info("[hgraph_build_cache] route_graph_build finished in {:.3f}s levels={}",

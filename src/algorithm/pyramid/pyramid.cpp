@@ -22,6 +22,8 @@
 #include <exception>
 #include <limits>
 #include <nlohmann/json.hpp>
+#include <string_view>
+#include <unordered_map>
 
 #include "algorithm/inner_index_interface.h"
 #include "analyzer/analyzer.h"
@@ -49,6 +51,9 @@
 #include "utils/util_functions.h"
 namespace vsag {
 namespace {
+
+constexpr uint64_t PYRAMID_BUILD_CACHE_MAGIC = 0x5059434143484532ULL;
+constexpr uint32_t PYRAMID_BUILD_CACHE_VERSION = 1;
 
 void
 drain_futures(Vector<std::future<void>>& futures, std::exception_ptr first_exception = nullptr) {
@@ -684,15 +689,6 @@ Pyramid::build_by_batch_graph(const DatasetPtr& base) {
                                             allocator_,
                                             this->thread_pool_.get(),
                                             this->build_thread_count_);
-            auto local_odescent_param = std::make_shared<ODescentParameter>(*odescent_param_);
-            local_odescent_param->alpha = hierarchy->alpha;
-            ODescent odescent_builder(local_odescent_param,
-                                      codes,
-                                      allocator_,
-                                      this->thread_pool_.get(),
-                                      true,
-                                      data_vectors,
-                                      data_num);
             GraphBuildFunc build_graph =
                 [&](GraphInterfacePtr& graph, const Vector<InnerIdType>& ids, uint32_t level) {
                     if (level == 0) {
@@ -700,19 +696,13 @@ Pyramid::build_by_batch_graph(const DatasetPtr& base) {
                         pipnn_builder.Build(graph, ids, rows);
                         return;
                     }
-                    if (support_duplicate_) {
-                        Vector<const float*> node_rows(allocator_);
-                        node_rows.reserve(ids.size());
-                        for (const auto id : ids) {
-                            node_rows.emplace_back(rows[id]);
-                        }
-                        graph->SetMaxCapacity(static_cast<InnerIdType>(data_num));
-                        pipnn_builder.Build(graph, ids, node_rows);
-                        return;
+                    Vector<const float*> node_rows(allocator_);
+                    node_rows.reserve(ids.size());
+                    for (const auto id : ids) {
+                        node_rows.emplace_back(rows[id]);
                     }
-                    odescent_builder.SetMaxDegree(static_cast<int32_t>(graph->MaximumDegree()));
-                    odescent_builder.Build(ids);
-                    odescent_builder.SaveGraph(graph);
+                    graph->SetMaxCapacity(static_cast<InnerIdType>(data_num));
+                    pipnn_builder.Build(graph, ids, node_rows);
                 };
             hierarchy->root->Build(build_graph);
 
@@ -2124,7 +2114,9 @@ std::vector<int64_t>
 Pyramid::Build(const DatasetPtr& base) {
     CHECK_ARGUMENT(GetNumElements() == 0, "index is not empty");
     const auto data_num = base->GetNumElements();
-    if (graph_type_ == GRAPH_TYPE_VALUE_NSW && not support_duplicate_ && has_loaded_cache() &&
+    const bool supports_build_cache =
+        graph_type_ == GRAPH_TYPE_VALUE_NSW || graph_type_ == GRAPH_TYPE_VALUE_PIPNN;
+    if (supports_build_cache && not support_duplicate_ && has_loaded_cache() &&
         base->GetSourceID() != nullptr) {
         UnorderedSet<std::string> source_ids(allocator_);
         UnorderedSet<LabelType> labels(allocator_);
@@ -2141,7 +2133,8 @@ Pyramid::Build(const DatasetPtr& base) {
             }
         }
         if (unique) {
-            constexpr uint64_t minimum_cache_hit_percent = 80;
+            const uint64_t minimum_cache_hit_percent =
+                graph_type_ == GRAPH_TYPE_VALUE_PIPNN ? 90 : 80;
             const uint64_t matched =
                 cache_->CountMatchedSourceIds(source_id_data, static_cast<uint64_t>(data_num));
             if (matched * 100 >= static_cast<uint64_t>(data_num) * minimum_cache_hit_percent) {
@@ -2155,6 +2148,10 @@ Pyramid::Build(const DatasetPtr& base) {
                 "[pyramid_build_cache] duplicate source_id or label; falling back to cold build");
         }
     }
+    // Avoid retaining a second snapshot of encoded rows throughout a rejected cold build.
+    cached_code_source_ids_.clear();
+    cached_base_codes_.reset();
+    cached_precise_codes_.reset();
     if (graph_type_ == GRAPH_TYPE_VALUE_NSW) {
         populate_hierarchy_trees(base);
         return this->Add(base);
@@ -2662,6 +2659,7 @@ Pyramid::GetStats() const {
         stats["build_cache_hit_memberships"].SetUint64(build_cache_hit_memberships_);
         stats["build_cache_missed_memberships"].SetUint64(build_cache_missed_memberships_);
         stats["build_cache_restored_edges"].SetUint64(build_cache_restored_edges_);
+        stats["build_cache_codes_reused"].SetBool(build_cache_codes_reused_);
     } else {
         stats["build_cache_hit_rate"]["skipped_reason"].SetString(
             "index was not built from an imported cache");
@@ -2798,13 +2796,107 @@ Pyramid::ExportCache(std::ostream& out_stream) const {
             "[pyramid_build_cache] skip export because duplicate "
             "labels are enabled");
     }
+    StreamWriter::WriteObj(writer, PYRAMID_BUILD_CACHE_MAGIC);
+    StreamWriter::WriteObj(writer, PYRAMID_BUILD_CACHE_VERSION);
     cache_snapshot.Serialize(writer);
+
+    Vector<std::string> source_ids(allocator_);
+    const auto& source_id_table = label_table_->GetSourceIdTableRef();
+    if (not cache_snapshot.Empty() &&
+        source_id_table.size() == static_cast<uint64_t>(cur_element_count_)) {
+        source_ids.assign(source_id_table.begin(), source_id_table.end());
+        if (std::any_of(source_ids.begin(), source_ids.end(), [](const std::string& source_id) {
+                return source_id.empty();
+            })) {
+            source_ids.clear();
+        }
+    }
+    SerializeBuildCacheSourceIds(writer, source_ids);
+    SerializeBuildCacheCodes(writer, current_build_cache_codes(), source_ids.size());
 }
 
 void
 Pyramid::ImportCache(std::istream& in_stream) {
     IOStreamReader reader(in_stream);
+    const auto begin = reader.GetCursor();
+    uint64_t magic = 0;
+    StreamReader::ReadObj(reader, magic);
+    if (magic != PYRAMID_BUILD_CACHE_MAGIC) {
+        reader.Seek(begin);
+        this->cache_->Deserialize(reader);
+        cached_code_source_ids_.clear();
+        cached_base_codes_.reset();
+        cached_precise_codes_.reset();
+        return;
+    }
+
+    uint32_t version = 0;
+    StreamReader::ReadObj(reader, version);
+    CHECK_ARGUMENT(version == PYRAMID_BUILD_CACHE_VERSION,
+                   "unsupported Pyramid build cache version");
     this->cache_->Deserialize(reader);
+    DeserializeBuildCacheSourceIds(reader, cached_code_source_ids_);
+    auto cached_codes = create_build_cache_codes();
+    const bool loaded = DeserializeBuildCacheCodes(
+        reader, cached_codes, static_cast<uint64_t>(cached_code_source_ids_.size()));
+    if (loaded) {
+        cached_base_codes_ = cached_codes[0];
+        cached_precise_codes_ = cached_codes.size() > 1 ? cached_codes[1] : nullptr;
+    } else {
+        cached_code_source_ids_.clear();
+        cached_base_codes_.reset();
+        cached_precise_codes_.reset();
+    }
+}
+
+bool
+Pyramid::supports_encoded_build_cache() const {
+    return graph_type_ == GRAPH_TYPE_VALUE_PIPNN && base_codes_ != nullptr &&
+           base_codes_->GetQuantizerName() != QUANTIZATION_TYPE_VALUE_FP32 &&
+           raw_vector_ == nullptr;
+}
+
+std::vector<FlattenInterfacePtr>
+Pyramid::current_build_cache_codes() const {
+    if (not supports_encoded_build_cache()) {
+        return {};
+    }
+    std::vector<FlattenInterfacePtr> result{base_codes_};
+    if (has_precise_reorder()) {
+        result.push_back(precise_codes_);
+    }
+    return result;
+}
+
+std::vector<FlattenInterfacePtr>
+Pyramid::create_build_cache_codes() const {
+    if (not supports_encoded_build_cache()) {
+        return {};
+    }
+    const auto pyramid_param = std::dynamic_pointer_cast<PyramidParameters>(create_param_ptr_);
+    CHECK_ARGUMENT(pyramid_param != nullptr, "invalid Pyramid build cache parameters");
+    std::vector<FlattenInterfacePtr> result;
+    result.push_back(
+        FlattenInterface::MakeInstance(pyramid_param->base_codes_param, common_param_));
+    if (has_precise_reorder()) {
+        result.push_back(
+            FlattenInterface::MakeInstance(pyramid_param->precise_codes_param, common_param_));
+    }
+    return result;
+}
+
+void
+Pyramid::adopt_build_cache_codes() {
+    CHECK_ARGUMENT(cached_base_codes_ != nullptr, "Pyramid encoded build cache is not loaded");
+    base_codes_ = std::move(cached_base_codes_);
+    if (has_precise_reorder()) {
+        CHECK_ARGUMENT(cached_precise_codes_ != nullptr,
+                       "Pyramid precise encoded build cache is not loaded");
+        precise_codes_ = std::move(cached_precise_codes_);
+    }
+    if (use_reorder_) {
+        reorder_ = std::make_shared<FlattenReorder>(get_reorder_codes(), allocator_);
+    }
 }
 
 std::vector<int64_t>
@@ -2815,6 +2907,7 @@ Pyramid::build_with_cache(const DatasetPtr& base) {
     build_cache_hit_memberships_ = 0;
     build_cache_missed_memberships_ = 0;
     build_cache_restored_edges_ = 0;
+    build_cache_codes_reused_ = false;
 
     auto start = std::chrono::steady_clock::now();
     int64_t data_num = base->GetNumElements();
@@ -2825,7 +2918,32 @@ Pyramid::build_with_cache(const DatasetPtr& base) {
     CHECK_ARGUMENT(source_ids != nullptr, "build_with_cache requires dataset with source_ids");
     CHECK_ARGUMENT(not support_duplicate_, "build_with_cache does not support duplicate labels");
 
-    this->Train(base);
+    const bool has_cached_code_rows = cached_base_codes_ != nullptr;
+    const bool reuse_cached_codes =
+        has_cached_code_rows &&
+        BuildCacheSourceIdsMatch(
+            cached_code_source_ids_, source_ids, static_cast<uint64_t>(data_num));
+    if (reuse_cached_codes) {
+        adopt_build_cache_codes();
+        build_cache_codes_reused_ = true;
+        cached_code_source_ids_.clear();
+    }
+
+    bool copy_cached_code_rows = has_cached_code_rows && not reuse_cached_codes;
+    if (copy_cached_code_rows) {
+        cached_base_codes_->ExportModel(base_codes_);
+        copy_cached_code_rows = base_codes_->PrepareEncodedCodeInsertion(data_num);
+        if (copy_cached_code_rows && has_precise_reorder()) {
+            cached_precise_codes_->ExportModel(precise_codes_);
+            copy_cached_code_rows = precise_codes_->PrepareEncodedCodeInsertion(data_num);
+        }
+    }
+    if (not reuse_cached_codes && not copy_cached_code_rows) {
+        this->Train(base);
+        cached_code_source_ids_.clear();
+        cached_base_codes_.reset();
+        cached_precise_codes_.reset();
+    }
     resize(data_num);
     for (int64_t i = 0; i < data_num; ++i) {
         auto inner_id = static_cast<InnerIdType>(i);
@@ -2833,9 +2951,81 @@ Pyramid::build_with_cache(const DatasetPtr& base) {
         label_table_->Insert(inner_id, data_ids[i]);
         label_table_->InsertSourceId(inner_id, source_ids[i]);
     }
-    base_codes_->BatchInsertVector(data_vectors, data_num);
-    if (has_precise_reorder()) {
-        precise_codes_->BatchInsertVector(data_vectors, data_num);
+    const auto insert_codes = [&](const FlattenInterfacePtr& codes) {
+        ParallelBatchInsertVector(
+            codes,
+            static_cast<InnerIdType>(data_num),
+            nullptr,
+            thread_pool_.get(),
+            build_thread_count_,
+            [=](InnerIdType begin) { return data_vectors + static_cast<uint64_t>(begin) * dim_; });
+    };
+    if (not reuse_cached_codes && not copy_cached_code_rows) {
+        insert_codes(base_codes_);
+        if (has_precise_reorder()) {
+            insert_codes(precise_codes_);
+        }
+        if (raw_vector_ != nullptr) {
+            insert_codes(raw_vector_);
+        }
+    } else if (copy_cached_code_rows) {
+        std::unordered_map<std::string_view, InnerIdType> old_inner_ids;
+        old_inner_ids.reserve(cached_code_source_ids_.size());
+        for (uint64_t i = 0; i < cached_code_source_ids_.size(); ++i) {
+            old_inner_ids.emplace(cached_code_source_ids_[i], static_cast<InnerIdType>(i));
+        }
+
+        std::atomic<uint64_t> copied_rows{0};
+        auto copy_or_encode_range = [this, &old_inner_ids, &copied_rows, data_vectors, source_ids](
+                                        uint64_t begin, uint64_t end) {
+            std::vector<uint8_t> base_buffer(cached_base_codes_->GetQuantizerCodeSize());
+            std::vector<uint8_t> precise_buffer;
+            if (cached_precise_codes_ != nullptr) {
+                precise_buffer.resize(cached_precise_codes_->GetQuantizerCodeSize());
+            }
+            for (uint64_t i = begin; i < end; ++i) {
+                const auto new_inner_id = static_cast<InnerIdType>(i);
+                const auto old = old_inner_ids.find(source_ids[i]);
+                bool copied = false;
+                if (old != old_inner_ids.end()) {
+                    copied = cached_base_codes_->GetCodesById(old->second, base_buffer.data()) &&
+                             base_codes_->InsertEncodedCode(base_buffer.data(), new_inner_id);
+                    if (copied && cached_precise_codes_ != nullptr) {
+                        copied =
+                            cached_precise_codes_->GetCodesById(old->second,
+                                                                precise_buffer.data()) &&
+                            precise_codes_->InsertEncodedCode(precise_buffer.data(), new_inner_id);
+                    }
+                }
+                if (copied) {
+                    copied_rows.fetch_add(1, std::memory_order_relaxed);
+                    continue;
+                }
+                const auto* vector = data_vectors + i * dim_;
+                base_codes_->InsertVector(vector, new_inner_id);
+                if (has_precise_reorder()) {
+                    precise_codes_->InsertVector(vector, new_inner_id);
+                }
+            }
+        };
+
+        const auto count = static_cast<uint64_t>(data_num);
+        constexpr uint64_t block_size = 1024;
+        Vector<std::future<void>> futures(allocator_);
+        if (thread_pool_ != nullptr && build_thread_count_ > 1) {
+            futures.reserve((count + block_size - 1) / block_size);
+            for (uint64_t begin = 0; begin < count; begin += block_size) {
+                futures.push_back(thread_pool_->GeneralEnqueue(
+                    copy_or_encode_range, begin, std::min<uint64_t>(begin + block_size, count)));
+            }
+            drain_futures(futures, nullptr);
+        } else {
+            copy_or_encode_range(0, count);
+        }
+        build_cache_codes_reused_ = copied_rows.load(std::memory_order_relaxed) > 0;
+        cached_code_source_ids_.clear();
+        cached_base_codes_.reset();
+        cached_precise_codes_.reset();
     }
     cur_element_count_ = data_num;
 
@@ -2859,17 +3049,52 @@ Pyramid::build_with_cache(const DatasetPtr& base) {
 
     auto codes = construction_codes();
     std::vector<bool> global_hits(static_cast<size_t>(data_num), false);
+    auto rebuild_pipnn_routing = [this, data_num, data_vectors](
+                                     const Hierarchy& hierarchy,
+                                     IndexNode& node,
+                                     const Vector<InnerIdType>& member_ids) {
+        node.routing_->graphs.clear();
+        auto route_levels = sample_route_levels(node, member_ids.size());
+        const auto max_route = std::max_element(route_levels.begin(), route_levels.end());
+        const int max_route_level = max_route == route_levels.end() ? -1 : *max_route;
+        if (max_route_level < 0) {
+            return;
+        }
+        node.entry_point_ =
+            member_ids[static_cast<uint64_t>(std::distance(route_levels.begin(), max_route))];
+        node.routing_->graphs.reserve(static_cast<uint64_t>(max_route_level) + 1);
+
+        PiPNNGraphBuilderParameter pipnn_parameter;
+        pipnn_parameter.alpha = hierarchy.alpha;
+        PiPNNGraphBuilder pipnn_builder(pipnn_parameter,
+                                        static_cast<uint64_t>(dim_),
+                                        common_param_.metric_,
+                                        allocator_,
+                                        thread_pool_.get(),
+                                        build_thread_count_);
+        for (int level = 0; level <= max_route_level; ++level) {
+            Vector<InnerIdType> route_ids(allocator_);
+            Vector<const float*> route_rows(allocator_);
+            for (uint64_t offset = 0; offset < member_ids.size(); ++offset) {
+                if (route_levels[offset] >= level) {
+                    const auto inner_id = member_ids[offset];
+                    route_ids.emplace_back(inner_id);
+                    route_rows.emplace_back(data_vectors + static_cast<uint64_t>(inner_id) * dim_);
+                }
+            }
+            auto route_graph = node.make_route_graph();
+            route_graph->SetMaxCapacity(static_cast<InnerIdType>(data_num));
+            pipnn_builder.Build(route_graph, route_ids, route_rows);
+            node.routing_->graphs.emplace_back(std::move(route_graph));
+        }
+    };
 
     for (const auto& [hname, h_ptr] : hierarchies_) {
         std::vector<std::pair<std::string, IndexNode*>> graph_nodes;
         collect_graph_nodes(h_ptr->root.get(), std::string{}, graph_nodes);
         std::vector<bool> hierarchy_hits(static_cast<size_t>(data_num), false);
-
-        UnorderedMap<std::string, InnerIdType> source_id_to_inner(allocator_);
-        source_id_to_inner.reserve(data_num);
-        for (InnerIdType id = 0; id < static_cast<InnerIdType>(data_num); ++id) {
-            source_id_to_inner[source_ids[id]] = id;
-        }
+        Vector<uint32_t> member_epoch(static_cast<uint64_t>(data_num), 0, allocator_);
+        uint32_t current_member_epoch = 0;
 
         for (const auto& [node_path, gnode] : graph_nodes) {
             Vector<InnerIdType> node_member_ids(allocator_);
@@ -2883,21 +3108,29 @@ Pyramid::build_with_cache(const DatasetPtr& base) {
             auto* graph_cache = cache_->GetGraphCache(hname, node_path);
             if (graph_cache != nullptr) {
                 std::unique_lock lock(gnode->mutex_);
-                UnorderedSet<InnerIdType> node_ids(allocator_);
-                node_ids.reserve(node_member_ids.size());
+                ++current_member_epoch;
+                if (current_member_epoch == 0) {
+                    std::fill(member_epoch.begin(), member_epoch.end(), 0);
+                    current_member_epoch = 1;
+                }
                 for (auto inner_id : node_member_ids) {
-                    node_ids.insert(inner_id);
+                    member_epoch[inner_id] = current_member_epoch;
                 }
 
                 constexpr InnerIdType invalid_id = std::numeric_limits<InnerIdType>::max();
                 Vector<InnerIdType> old_to_new(
                     graph_cache->source_ids_.size(), invalid_id, allocator_);
-                for (uint64_t old_inner = 0; old_inner < graph_cache->source_ids_.size();
-                     ++old_inner) {
-                    const auto& cached_source_id = graph_cache->source_ids_[old_inner];
-                    auto current = source_id_to_inner.find(cached_source_id);
-                    if (current != source_id_to_inner.end()) {
-                        old_to_new[old_inner] = current->second;
+                Vector<const Vector<InnerIdType>*> cached_rows(
+                    node_member_ids.size(), nullptr, allocator_);
+                for (uint64_t offset = 0; offset < node_member_ids.size(); ++offset) {
+                    const auto inner_id = node_member_ids[offset];
+                    const auto* cached = graph_cache->FindNeighborInnerIds(source_ids[inner_id]);
+                    if (cached != nullptr && not cached->empty()) {
+                        const auto old_inner = cached->front();
+                        if (static_cast<uint64_t>(old_inner) < old_to_new.size()) {
+                            old_to_new[old_inner] = inner_id;
+                            cached_rows[offset] = cached;
+                        }
                     }
                 }
 
@@ -2921,8 +3154,7 @@ Pyramid::build_with_cache(const DatasetPtr& base) {
                         if (inner_id >= static_cast<InnerIdType>(data_num)) {
                             continue;
                         }
-                        const auto* cached =
-                            graph_cache->FindNeighborInnerIds(source_ids[inner_id]);
+                        const auto* cached = cached_rows[offset];
                         if (cached == nullptr || cached->size() <= 1) {
                             node_missed_ids[miss_count.fetch_add(1, std::memory_order_relaxed)] =
                                 inner_id;
@@ -2938,7 +3170,7 @@ Pyramid::build_with_cache(const DatasetPtr& base) {
                             }
                             const auto new_neighbor = old_to_new[old_neighbor];
                             if (new_neighbor != invalid_id && new_neighbor != inner_id &&
-                                node_ids.find(new_neighbor) != node_ids.end()) {
+                                member_epoch[new_neighbor] == current_member_epoch) {
                                 new_neighbors.push_back(new_neighbor);
                             }
                         }
@@ -3041,12 +3273,41 @@ Pyramid::build_with_cache(const DatasetPtr& base) {
 
             build_cache_hit_memberships_ += node_hit_ids.size();
             build_cache_missed_memberships_ += node_missed_ids.size();
-            refine_nodes(node_missed_ids, h_ptr->ef_construction, false);
-            if (gnode->has_routing()) {
+            if (graph_type_ == GRAPH_TYPE_VALUE_PIPNN && gnode->has_routing()) {
+                auto* hierarchy = h_ptr.get();
+                run_parallel_insertions(
+                    *graph_node,
+                    node_missed_ids.size(),
+                    [this, hierarchy, graph_node, &node_missed_ids, data_vectors](uint64_t offset,
+                                                                                  int) {
+                        const auto inner_id = node_missed_ids[offset];
+                        const uint64_t missed_refine_ef = std::min<uint64_t>(
+                            hierarchy->ef_construction,
+                            static_cast<uint64_t>(graph_node->graph_->MaximumDegree()) * 2);
+                        add_bottom_graph_point(*hierarchy,
+                                               *graph_node,
+                                               inner_id,
+                                               data_vectors + dim_ * inner_id,
+                                               missed_refine_ef,
+                                               true);
+                    });
+                rebuild_pipnn_routing(*hierarchy, *gnode, node_member_ids);
+            } else {
+                const uint64_t missed_refine_ef =
+                    graph_type_ == GRAPH_TYPE_VALUE_PIPNN
+                        ? std::min<uint64_t>(
+                              h_ptr->ef_construction,
+                              static_cast<uint64_t>(graph_node->graph_->MaximumDegree()) * 2)
+                        : h_ptr->ef_construction;
+                refine_nodes(
+                    node_missed_ids, missed_refine_ef, graph_type_ == GRAPH_TYPE_VALUE_PIPNN);
+            }
+            if (graph_type_ != GRAPH_TYPE_VALUE_PIPNN && gnode->has_routing()) {
                 // Routing overlays are not part of the build cache. Reinsert cache hits to
                 // rebuild route levels while using the restored bottom graph as their seed.
                 refine_nodes(node_hit_ids, std::max<uint64_t>(h_ptr->ef_construction / 3, 1), true);
-            } else if (node_path.empty() && not node_hit_ids.empty()) {
+            } else if (graph_type_ != GRAPH_TYPE_VALUE_PIPNN && node_path.empty() &&
+                       not node_hit_ids.empty()) {
                 // Repair single-layer root rows against a stable graph snapshot. Candidate
                 // selection runs in parallel, then forward rows are committed after a barrier.
                 // Miss insertion already installs reverse edges; rewriting reverse edges for

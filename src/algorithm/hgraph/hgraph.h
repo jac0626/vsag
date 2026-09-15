@@ -767,16 +767,29 @@ private:
     void
     fullfill_cache() const;
 
+    [[nodiscard]] bool
+    supports_encoded_build_cache() const;
+
+    [[nodiscard]] std::vector<FlattenInterfacePtr>
+    current_build_cache_codes() const;
+
+    [[nodiscard]] std::vector<FlattenInterfacePtr>
+    create_build_cache_codes() const;
+
+    void
+    adopt_build_cache_codes();
+
     // ---- Build-with-cache acceleration path ----
     // The build flow is automatically taken by Build() when ImportCache() has
     // populated cache_ before. Steps:
     //   (1) warm_start: seed each new node's neighbors from the cached
     //       neighbors keyed by source_id, classify nodes into hit/missed.
-    //   (2) refine hit nodes (use_self_as_entry=true), then missed nodes
-    //       (use_self_as_entry=false). Each refine round is two-phase:
-    //       parallel search+select then serial writeback, plus a sharded
-    //       reverse-edge install with distance-reuse and O(M) dedup.
-    //   (3) build route graphs via ODescent over the sampled level ids.
+    //   (2) refine missed nodes (use_self_as_entry=false). NSW additionally
+    //       refines hits; PiPNN preserves restored hit rows. Each refine round
+    //       is two-phase: parallel search+select then serial writeback, plus a
+    //       sharded reverse-edge install with distance-reuse and O(M) dedup.
+    //   (3) rebuild route graphs over the sampled level ids. PiPNN cache builds
+    //       use the same batch graph builder as the bottom graph.
     bool
     has_loaded_cache() const {
         return this->cache_ != nullptr && not this->cache_->neighbors_.empty();
@@ -795,15 +808,22 @@ private:
         Vector<InnerIdType> inner_ids;                // allocated inner ids per valid input
         Vector<Vector<InnerIdType>> route_graph_ids;  // ids assigned to each route graph level
         std::vector<InnerIdType> inserted_inner_ids;  // all successfully inserted ids
-        std::unordered_map<InnerIdType, uint32_t> inner_id_to_input_idx;  // inner_id -> input index
-        std::unordered_map<std::string, InnerIdType>
-            source_id_to_new_inner;           // source_id -> inner_id
-        std::vector<int64_t> failed_ids;      // ids that failed insertion
+        Vector<uint32_t> inner_id_to_input_idx;       // inner_id -> input index
+        Vector<InnerIdType> old_to_new_inner;         // cached inner_id -> current inner_id
+        Vector<const Vector<InnerIdType>*> cached_neighbor_rows;  // one cached row per inserted id
+        std::vector<int64_t> failed_ids;                          // ids that failed insertion
         std::vector<InnerIdType> hit_ids;     // nodes with cache hit (warm-started)
         std::vector<InnerIdType> missed_ids;  // nodes without cache hit
+        bool reuse_cached_codes{false};       // exact source-id order restored encoded rows
+        bool reuse_cached_code_rows{false};   // copy matching rows, encode only misses
 
         BuildCachePlan(Allocator* allocator)
-            : valid_indices(allocator), inner_ids(allocator), route_graph_ids(allocator) {
+            : valid_indices(allocator),
+              inner_ids(allocator),
+              route_graph_ids(allocator),
+              inner_id_to_input_idx(allocator),
+              old_to_new_inner(allocator),
+              cached_neighbor_rows(allocator) {
         }
     };
 
@@ -815,7 +835,7 @@ private:
     void
     cache_setup_metadata_serial(const DatasetPtr& data, BuildCachePlan& plan);
 
-    /// Phase 3: encode all codes in parallel.
+    /// Phase 3: encode all codes in parallel unless an exact ordered code cache was restored.
     void
     cache_encode_codes_parallel(const DatasetPtr& data, BuildCachePlan& plan);
 
@@ -827,9 +847,9 @@ private:
     void
     cache_run_refine_two_phase(const DatasetPtr& data, BuildCachePlan& plan);
 
-    /// Phase 6: rebuild route (upper-layer) graphs via ODescent.
+    /// Phase 6: rebuild route (upper-layer) graphs.
     void
-    cache_rebuild_route_graphs(BuildCachePlan& plan);
+    cache_rebuild_route_graphs(const DatasetPtr& data, BuildCachePlan& plan);
 
     /// Collect refine candidates for a single node via graph search.
     DistHeapPtr
@@ -860,7 +880,7 @@ private:
                            uint32_t refine_ef,
                            bool use_self_as_entry,
                            const FlattenInterfacePtr& flatten_codes,
-                           const std::unordered_map<InnerIdType, uint32_t>& inner_id_to_input_idx);
+                           const Vector<uint32_t>& inner_id_to_input_idx);
 
     struct MCIHybridSearchResult {
         MCIHybridSearchResult(const HGraphSearchParameters& params, const FilterPtr& filter);
@@ -981,9 +1001,12 @@ private:
     bool persist_source_id_{false};  // whether to persist source_id in serialization
 
     std::unique_ptr<BuildCache> cache_{nullptr};  // neighbor cache for warm-start build
+    FlattenInterfacePtr cached_basic_flatten_codes_{nullptr};
+    FlattenInterfacePtr cached_high_precise_codes_{nullptr};
 
     float build_cache_hit_rate_{-1.0F};     // cache hit rate from last cache-based build
     uint64_t build_cache_hit_nodes_{0};     // number of nodes with cache hit
     uint64_t build_cache_missed_nodes_{0};  // number of nodes without cache hit
+    bool build_cache_codes_reused_{false};  // encoded rows reused by the last cache build
 };
 }  // namespace vsag

@@ -74,7 +74,8 @@ public:
           support_duplicate_(pyramid_param->support_duplicate),
           persist_source_id_(pyramid_param->persist_source_id),
           store_paths_(pyramid_param->store_paths),
-          cache_(std::make_unique<PyramidBuildCache>(common_param.allocator_.get())) {
+          cache_(std::make_unique<PyramidBuildCache>(common_param.allocator_.get())),
+          cached_code_source_ids_(common_param.allocator_.get()) {
         if (graph_type_ == GRAPH_TYPE_VALUE_PIPNN and
             common_param.data_type_ != DataTypes::DATA_TYPE_FLOAT) {
             throw VsagException(ErrorType::INVALID_ARGUMENT,
@@ -548,6 +549,18 @@ private:
     void
     fulfill_cache(PyramidBuildCache& cache_snapshot) const;
 
+    [[nodiscard]] bool
+    supports_encoded_build_cache() const;
+
+    [[nodiscard]] std::vector<FlattenInterfacePtr>
+    current_build_cache_codes() const;
+
+    [[nodiscard]] std::vector<FlattenInterfacePtr>
+    create_build_cache_codes() const;
+
+    void
+    adopt_build_cache_codes();
+
     std::vector<int64_t>
     build_with_cache(const DatasetPtr& base);
 
@@ -590,6 +603,9 @@ private:
     bool store_paths_{false};        // whether to retain paths for ID-based retrieval
 
     std::unique_ptr<PyramidBuildCache> cache_{nullptr};  // per-graph caches for warm-start build
+    Vector<std::string> cached_code_source_ids_;         // global code-row order from cache
+    FlattenInterfacePtr cached_base_codes_{nullptr};
+    FlattenInterfacePtr cached_precise_codes_{nullptr};
 
     float build_cache_hit_rate_{-1.0F};           // cache hit rate from last cache-based build
     uint64_t build_cache_hit_nodes_{0};           // number of nodes with cache hit
@@ -597,6 +613,7 @@ private:
     uint64_t build_cache_hit_memberships_{0};     // cache-hit hierarchy graph memberships
     uint64_t build_cache_missed_memberships_{0};  // cache-miss hierarchy graph memberships
     uint64_t build_cache_restored_edges_{0};      // outgoing edges loaded before refinement
+    bool build_cache_codes_reused_{false};        // encoded rows reused by the last cache build
 };
 
 }  // namespace vsag

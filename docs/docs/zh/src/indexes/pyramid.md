@@ -159,7 +159,7 @@ Pyramid 使用 split code 的 code-code 距离完成增量 FLAT→GRAPH 晋升�
 
 ## 构建缓存
 
-`ExportCache` 会保存每个层级、每个节点的 NSW 图种子，`ImportCache` 可在后续 `Build` 中复用。缓存数据使用索引缓存 payload 格式，而非 streaming 索引序列化格式。需要复用缓存的索引通过 footer 序列化前应设置 `persist_source_id: true`，并且两次构建中的每个向量都必须提供唯一的 `Dataset::SourceID`。缓存预热仅适用于 `graph_type: "nsw"`；ODescent、重复 ID 模式、缺少 source ID 或 source ID 重复时会自动回退到普通冷构建。`ef_construction` 不作为缓存路径的准入条件。输入数据中至少 80% 的 source ID 必须与导入缓存重合；低于该比例时会回退到普通冷构建。缓存未命中的节点仍按正常流程构建。single-layer root 的命中节点会执行低成本、分块并行的出边修复，较小的标签子图则保留恢复后的缓存行。由于 Build Cache 不保存 route graph，multi-layer 节点仍会重建 routing overlay。`GetStats()` 除向量命中/未命中数量外，还会报告图成员关系的命中/未命中数量和恢复的边数量。
+`ExportCache` 会保存每个层级、每个节点的图种子，`ImportCache` 可在后续 `Build` 中复用。缓存数据使用索引缓存 payload 格式，而非 streaming 索引序列化格式。需要复用缓存的索引通过 footer 序列化前应设置 `persist_source_id: true`，并且两次构建中的每个向量都必须提供唯一的 `Dataset::SourceID`。缓存预热支持 `graph_type: "nsw"` 和 `graph_type: "pipnn"`；ODescent、重复 ID 模式、缺少 source ID 或 source ID 重复时会自动回退到普通冷构建。`ef_construction` 不作为缓存路径的准入条件。NSW 至少需要 80% 的 source ID 重合，PiPNN 至少需要 90%；低于对应比例时会回退到普通冷构建。NSW 保持现有的命中修复流程；PiPNN 保留恢复后的命中邻居行，以最高两倍 `max_degree` 的搜索预算连接未命中节点。由于 Build Cache 不保存 route graph，PiPNN 会批量重建 multi-layer routing overlay。未单独保存原始向量的量化 PiPNN 缓存还会按 source ID 复用编码行，输入顺序可以变化。`GetStats()` 除向量命中/未命中数量外，还会报告编码复用、图成员关系的命中/未命中数量和恢复的边数量。
 
 ## 检索参数
 

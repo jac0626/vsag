@@ -67,8 +67,15 @@ next_index->Build(next_base).value();
 
 `Build()` automatically takes the cache-assisted path after `ImportCache()`. Source IDs found in
 both snapshots are warm-started from cached neighbors; unmatched records are treated as cache
-misses and refined by the normal build path. Calling cache-assisted `Build()` without
-`Dataset::SourceID` returns an invalid-argument error.
+misses. With `graph_type: "nsw"`, cache hits and misses use the existing refine path. With
+`graph_type: "pipnn"`, at least 95% of the source IDs must overlap the cache. PiPNN preserves
+restored hit rows, connects misses with a search budget of up to twice `max_degree`, and
+batch-rebuilds its routing graphs with PiPNN; lower overlap falls back to a normal cold PiPNN
+build. For quantized PiPNN indexes without separate raw-vector storage, the cache also contains the
+quantizer model and encoded rows. Matching source IDs reuse those rows even if their input order
+changes, while only cache misses are encoded. This makes the cache larger; `GetStats()` reports
+whether any encoded rows were reused in `build_cache_codes_reused`. Calling cache-assisted
+`Build()` without `Dataset::SourceID` returns an invalid-argument error.
 
 ## Persisting source IDs with the index
 
@@ -103,6 +110,7 @@ After the warm-started build, call `GetStats()` and inspect:
 | `build_cache_hit_rate` | Fraction of nodes warm-started from the imported cache |
 | `build_cache_hit_nodes` | Matched node count |
 | `build_cache_missed_nodes` | Nodes built without a matching cache entry |
+| `build_cache_codes_reused` | Whether the build reused any cached encoded rows |
 
 When no imported cache participated in the last build, the statistics include a
 `skipped_reason` instead. See [Index Analysis](../resources/analyze_index.md) for the rest of the

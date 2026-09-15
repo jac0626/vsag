@@ -693,6 +693,7 @@ HGraph::GetStats() const {
         stats["build_cache_hit_rate"].SetFloat(this->build_cache_hit_rate_);
         stats["build_cache_hit_nodes"].SetUint64(this->build_cache_hit_nodes_);
         stats["build_cache_missed_nodes"].SetUint64(this->build_cache_missed_nodes_);
+        stats["build_cache_codes_reused"].SetBool(this->build_cache_codes_reused_);
     } else {
         stats["build_cache_hit_rate"]["skipped_reason"].SetString(
             "index was not built from an imported cache");

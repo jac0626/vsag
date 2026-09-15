@@ -70,6 +70,17 @@ public:
     InsertVector(const void* vector, InnerIdType idx) override;
 
     bool
+    InsertEncodedCode(const uint8_t* codes, InnerIdType idx) override;
+
+    bool
+    PrepareEncodedCodeInsertion(InnerIdType capacity) override {
+        this->layout_->Resize(capacity);
+        this->max_capacity_ = std::max(this->max_capacity_, capacity);
+        this->total_count_ = std::max(this->total_count_, capacity);
+        return true;
+    }
+
+    bool
     UpdateVector(const void* vector,
                  InnerIdType idx = std::numeric_limits<InnerIdType>::max()) override;
 
@@ -274,6 +285,16 @@ FlattenDataCell<QuantTmpl, LayoutTmpl>::InsertVector(const void* vector, InnerId
     ByteBuffer codes(static_cast<uint64_t>(code_size_), allocator_);
     quantizer_->EncodeOne(static_cast<const float*>(vector), codes.data);
     layout_->Write(idx, codes.data);
+}
+
+template <typename QuantTmpl, typename LayoutTmpl>
+bool
+FlattenDataCell<QuantTmpl, LayoutTmpl>::InsertEncodedCode(const uint8_t* codes, InnerIdType idx) {
+    if (codes == nullptr || idx >= this->total_count_) {
+        return false;
+    }
+    layout_->Write(idx, codes);
+    return true;
 }
 
 template <typename QuantTmpl, typename LayoutTmpl>
