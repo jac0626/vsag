@@ -20,6 +20,7 @@
 #include <cmath>
 #include <nlohmann/json.hpp>
 
+#include "impl/allocator/safe_allocator.h"
 #include "index_common_param.h"
 #include "parameter_test.h"
 #include "pyramid.h"
@@ -857,6 +858,23 @@ TEST_CASE("Pyramid validates root graph type and hierarchy overrides", "[ut][Pyr
     })");
     REQUIRE_THROWS(
         vsag::Pyramid::CheckAndMappingExternalParam(invalid_hierarchy_degree, common_param));
+}
+
+TEST_CASE("Pyramid PiPNN rejects non-dense input representations", "[ut][pipnn][pyramid]") {
+    vsag::IndexCommonParam common_param;
+    common_param.dim_ = 128;
+    common_param.data_type_ = vsag::DataTypes::DATA_TYPE_FLOAT;
+    common_param.repr_ = vsag::RecordRepr::MULTI_VECTOR;
+    common_param.allocator_ = vsag::SafeAllocator::FactoryDefaultAllocator();
+    const auto external = vsag::JsonType::Parse(R"({
+        "base_quantization_type": "fp32",
+        "graph_type": "pipnn",
+        "max_degree": 32,
+        "ef_construction": 64
+    })");
+    const auto mapped = vsag::Pyramid::CheckAndMappingExternalParam(external, common_param);
+
+    REQUIRE_THROWS(std::make_shared<vsag::Pyramid>(mapped, common_param));
 }
 
 TEST_CASE("Pyramid validates explicit factor", "[ut][PyramidParameters]") {

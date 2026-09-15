@@ -38,12 +38,13 @@ MemoryPeakMonitor::~MemoryPeakMonitor() {
 void
 MemoryPeakMonitor::sample() {
     std::lock_guard<std::mutex> lock(record_mutex_);
-    uint64_t val1, val2;
-    this->infile_ >> val1 >> val2;
+    uint64_t total_pages = 0;
+    uint64_t resident_pages = 0;
+    const bool sampled = static_cast<bool>(this->infile_ >> total_pages >> resident_pages);
     this->infile_.clear();
     this->infile_.seekg(0, std::ios::beg);
-    if (max_memory_ < val2) {
-        max_memory_ = val2;
+    if (sampled and resident_pages <= total_pages and max_memory_ < resident_pages) {
+        max_memory_ = resident_pages;
     }
 }
 

@@ -87,7 +87,7 @@ auto result = index->KnnSearch(
 | `tq_chain` | string | — | `base_quantization_type` 为 `tq` 时使用的变换链，例如 `"mrle, rabitq"`。 |
 | `mrle_dim` | int | `0` | MRLE 保留的前缀维度；`0` 表示保持输入维度。 |
 | `max_degree` | int | `64` | 子图内节点的最大出度 |
-| `graph_type` | string | `"nsw"` | `nsw`、`odescent` 或 `pipnn`。PiPNN 构建 hierarchy 根图，后代节点通常使用 ODescent；开启重复支持时，后代图使用共享 PiPNN 构建器以保留重复组语义。 |
+| `graph_type` | string | `"nsw"` | `nsw`、`odescent` 或 `pipnn`。PiPNN 批量构建每棵 hierarchy 中所有实际构建的图，包括 `multi_layer` 根节点的 routing 层。 |
 | `graph_storage_type` | string | `"flat"` | `multi_layer` 根节点的底图存储：`flat` 偏向构建和检索速度，`compressed` 减少图内存。压缩存储要求 `max_degree <= 255`。单层根图、路由图和子图仍使用 Sparse。 |
 | `ef_construction` | int | `400` | `nsw` 构图时的候选集大小 |
 | `alpha` | float | `1.2` | 构图剪枝系数 |
@@ -111,11 +111,9 @@ auto result = index->KnnSearch(
 | `hierarchies` | array | `[]` | 命名层级定义。每个元素可以是字符串（继承全部顶层参数）或对象（含 `name` 及可选覆盖参数：`max_degree`、`ef_construction`、`alpha`、`no_build_levels`、`index_min_size`、`root_graph_type`）。设置后激活多层级模式，每个层级维护独立的路径树。 |
 
 PiPNN 支持 `dtype: "float32"`，并支持 `metric_type: "l2"`、`"ip"` 或 `"cosine"` 的 Pyramid
-构建。它使用共享 PiPNN 构建器生成每棵 hierarchy 的第 0 层图；设置
-`root_graph_type: "multi_layer"` 时，所有 root routing 层也由 PiPNN 批量构建。后代路径节点图
-继续使用 ODescent。开启 `support_duplicate` 时，后代图也使用共享 PiPNN 构建器，从而保持
-标准的路径重复组可见性语义。搜索、增量 `Add`、删除、精排和序列化保持标准 Pyramid 行为；
-`no_build_levels` 中列出的层级仍会跳过构图。
+构建。它批量构建每棵 hierarchy 中所有实际构建的图；设置
+`root_graph_type: "multi_layer"` 时，也包括所有 root routing 层。搜索、增量 `Add`、删除、
+重复处理、精排和序列化保持标准 Pyramid 行为；`no_build_levels` 中列出的层级仍会跳过构图。
 
 ### RaBitQ split 配置
 

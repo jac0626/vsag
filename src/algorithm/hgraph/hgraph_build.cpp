@@ -368,6 +368,27 @@ HGraph::build_by_batch_graph(const DatasetPtr& data, bool use_pipnn) {
         }
     }
 
+    if (this->rabitq_fused_datacell_ != nullptr and all_rows_are_valid) {
+        constexpr InnerIdType BATCH_SIZE = 4096;
+        const auto batch_count = (static_cast<InnerIdType>(total) + BATCH_SIZE - 1) / BATCH_SIZE;
+        std::vector<std::future<void>> futures;
+        HGraphBuildTaskGuard future_guard(futures, static_cast<uint64_t>(batch_count));
+        for (InnerIdType begin = 0; begin < total; begin += BATCH_SIZE) {
+            const auto end = std::min<InnerIdType>(begin + BATCH_SIZE, total);
+            auto publish_batch = [this, data, &inner_ids, begin, end]() {
+                for (InnerIdType i = begin; i < end; ++i) {
+                    this->sync_fused_node_codes(inner_ids[i], get_data(data, i));
+                }
+            };
+            if (this->thread_pool_ != nullptr and this->build_thread_count_ > 1) {
+                futures.emplace_back(this->thread_pool_->GeneralEnqueue(std::move(publish_batch)));
+            } else {
+                publish_batch();
+            }
+        }
+        wait_all_futures(futures);
+    }
+
     auto build_data = (has_precise_reorder() and not build_by_base_) ? this->high_precise_codes_
                                                                      : this->basic_flatten_codes_;
     if (need_sq8_build_data) {

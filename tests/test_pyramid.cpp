@@ -1724,7 +1724,7 @@ TEST_CASE("Multi-Hierarchy: Serialize and Deserialize", "[ft][pyramid][multi_hie
 
 TEST_CASE("Multi-Hierarchy: Multiple paths per vector",
           "[ft][pyramid][multi_hierarchy][multi_path]") {
-    const std::string graph_type = GENERATE("nsw", "odescent");
+    const std::string graph_type = GENERATE("nsw", "odescent", "pipnn");
     CAPTURE(graph_type);
     auto index = vsag::Factory::CreateIndex("pyramid", MultiPathFixture::build_param(graph_type));
     REQUIRE(index.has_value());
@@ -1766,7 +1766,9 @@ TEST_CASE("Multi-Hierarchy: Multiple paths per vector",
 
 TEST_CASE("Multi-Hierarchy: Multiple paths survive serialization",
           "[ft][pyramid][multi_hierarchy][multi_path][serialization]") {
-    const auto param = MultiPathFixture::build_param("nsw");
+    const std::string graph_type = GENERATE("nsw", "pipnn");
+    CAPTURE(graph_type);
+    const auto param = MultiPathFixture::build_param(graph_type);
     auto index = vsag::Factory::CreateIndex("pyramid", param);
     REQUIRE(index.has_value());
     REQUIRE(index.value()->Build(MultiPathFixture::make_base()).has_value());
@@ -1787,7 +1789,7 @@ TEST_CASE("Multi-Hierarchy: Multiple paths survive serialization",
 
 TEST_CASE("Multi-Hierarchy: Multiple paths below an unbuilt prefix are deduplicated",
           "[ft][pyramid][multi_hierarchy][multi_path]") {
-    const std::string graph_type = GENERATE("nsw", "odescent");
+    const std::string graph_type = GENERATE("nsw", "odescent", "pipnn");
     CAPTURE(graph_type);
     auto index =
         vsag::Factory::CreateIndex("pyramid", MultiPathFixture::build_param(graph_type, true));
@@ -1805,7 +1807,9 @@ TEST_CASE("Multi-Hierarchy: Multiple paths below an unbuilt prefix are deduplica
 
 TEST_CASE("Multi-Hierarchy: Add accepts multiple paths per vector",
           "[ft][pyramid][multi_hierarchy][multi_path]") {
-    auto index = vsag::Factory::CreateIndex("pyramid", MultiPathFixture::build_param("nsw"));
+    const std::string graph_type = GENERATE("nsw", "pipnn");
+    CAPTURE(graph_type);
+    auto index = vsag::Factory::CreateIndex("pyramid", MultiPathFixture::build_param(graph_type));
     REQUIRE(index.has_value());
 
     auto* base_vector = new float[4]{1.0F, 0.0F, 0.0F, 0.0F};
