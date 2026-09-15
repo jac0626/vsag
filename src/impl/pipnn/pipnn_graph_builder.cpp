@@ -55,6 +55,8 @@ constexpr uint64_t PARTITION_SEED = 1000;
 constexpr uint64_t MIN_PARALLEL_PARTITION_POINTS = 4096;
 constexpr uint64_t SMALL_LEAF_NEIGHBOR_LIMIT = 16;
 constexpr uint64_t MIN_UNDERSIZED_LEAF_NEIGHBOR_COUNT = 4;
+constexpr uint64_t CONCERNING_PARTITION_LEVEL = 2;
+constexpr double MIN_PARTITION_SHRINK_RATIO = 0.8;
 
 void
 require_argument(bool condition, const std::string& message) {
@@ -608,7 +610,16 @@ PiPNNPipeline::split_work_item(const WorkItem& item,
             continue;
         }
 
-        if (cluster.size() == item.points.size() and fanout == 1) {
+        const bool did_not_shrink = cluster.size() == item.points.size() and fanout == 1;
+        const bool shrank_too_slowly =
+            item.level > CONCERNING_PARTITION_LEVEL &&
+            static_cast<double>(cluster.size()) >
+                static_cast<double>(item.points.size()) * MIN_PARTITION_SHRINK_RATIO;
+        if (did_not_shrink or shrank_too_slowly) {
+            if (shrank_too_slowly) {
+                std::mt19937_64 random(mix_seed(item.seed, cluster.size()));
+                std::shuffle(cluster.begin(), cluster.end(), random);
+            }
             uint64_t begin = 0;
             while (begin < cluster.size()) {
                 Leaf fallback(allocator_);

@@ -701,15 +701,6 @@ Pyramid::build_by_batch_graph(const DatasetPtr& base) {
                                             allocator_,
                                             this->thread_pool_.get(),
                                             this->build_thread_count_);
-            auto local_odescent_param = std::make_shared<ODescentParameter>(*odescent_param_);
-            local_odescent_param->alpha = hierarchy->alpha;
-            ODescent odescent_builder(local_odescent_param,
-                                      codes,
-                                      allocator_,
-                                      this->thread_pool_.get(),
-                                      true,
-                                      data_vectors,
-                                      data_num);
             GraphBuildFunc build_graph =
                 [&](GraphInterfacePtr& graph, const Vector<InnerIdType>& ids, uint32_t level) {
                     if (level == 0) {
@@ -717,19 +708,13 @@ Pyramid::build_by_batch_graph(const DatasetPtr& base) {
                         pipnn_builder.Build(graph, ids, rows);
                         return;
                     }
-                    if (support_duplicate_) {
-                        Vector<const float*> node_rows(allocator_);
-                        node_rows.reserve(ids.size());
-                        for (const auto id : ids) {
-                            node_rows.emplace_back(rows[id]);
-                        }
-                        graph->SetMaxCapacity(static_cast<InnerIdType>(data_num));
-                        pipnn_builder.Build(graph, ids, node_rows);
-                        return;
+                    Vector<const float*> node_rows(allocator_);
+                    node_rows.reserve(ids.size());
+                    for (const auto id : ids) {
+                        node_rows.emplace_back(rows[id]);
                     }
-                    odescent_builder.SetMaxDegree(static_cast<int32_t>(graph->MaximumDegree()));
-                    odescent_builder.Build(ids);
-                    odescent_builder.SaveGraph(graph);
+                    graph->SetMaxCapacity(static_cast<InnerIdType>(data_num));
+                    pipnn_builder.Build(graph, ids, node_rows);
                 };
             hierarchy->root->Build(build_graph);
 
