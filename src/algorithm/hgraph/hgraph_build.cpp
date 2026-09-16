@@ -369,12 +369,12 @@ HGraph::build_by_batch_graph(const DatasetPtr& data, bool use_pipnn) {
     }
 
     if (this->rabitq_fused_datacell_ != nullptr and all_rows_are_valid) {
-        constexpr InnerIdType BATCH_SIZE = 4096;
-        const auto batch_count = (static_cast<InnerIdType>(total) + BATCH_SIZE - 1) / BATCH_SIZE;
+        constexpr InnerIdType batch_size = 4096;
+        const auto batch_count = (static_cast<InnerIdType>(total) + batch_size - 1) / batch_size;
         std::vector<std::future<void>> futures;
         HGraphBuildTaskGuard future_guard(futures, static_cast<uint64_t>(batch_count));
-        for (InnerIdType begin = 0; begin < total; begin += BATCH_SIZE) {
-            const auto end = std::min<InnerIdType>(begin + BATCH_SIZE, total);
+        for (InnerIdType begin = 0; begin < total; begin += batch_size) {
+            const auto end = std::min<InnerIdType>(begin + batch_size, total);
             auto publish_batch = [this, data, &inner_ids, begin, end]() {
                 for (InnerIdType i = begin; i < end; ++i) {
                     this->sync_fused_node_codes(inner_ids[i], get_data(data, i));

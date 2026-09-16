@@ -96,7 +96,7 @@ public:
     operator=(const UninitializedFloatBuffer&) = delete;
 
     [[nodiscard]] float*
-    data() const {
+    Data() const {
         return data_;
     }
 
@@ -512,7 +512,7 @@ PiPNNPipeline::partition() const {
             // estimate than point_count alone when leader sampling has not reached its cap.
             auto estimated_assignment_work = [&](uint64_t item) {
                 const uint64_t point_count = work[item].points.size();
-                const uint64_t sampled = static_cast<uint64_t>(
+                const auto sampled = static_cast<uint64_t>(
                     std::ceil(static_cast<double>(point_count) * parameter_.leader_sample_rate));
                 const uint64_t leader_count =
                     std::min<uint64_t>(point_count, std::clamp<uint64_t>(sampled, 2, LEADER_CAP));
@@ -691,7 +691,7 @@ PiPNNPipeline::assign_to_leaders(const WorkItem& item,
         const auto* source = vector_by_local_id(leaders[leader]);
         std::copy(source,
                   source + static_cast<int64_t>(dimensions_),
-                  leader_values.data() + static_cast<int64_t>(leader * dimensions_));
+                  leader_values.Data() + static_cast<int64_t>(leader * dimensions_));
     }
 
     if (allow_parallelism and thread_pool_ != nullptr and thread_count_ > 1 and
@@ -745,7 +745,7 @@ PiPNNPipeline::assign_to_leaders(const WorkItem& item,
                         const auto* source = vector_by_local_id(item.points[begin + point]);
                         std::copy(source,
                                   source + static_cast<int64_t>(dimensions_),
-                                  point_values.data() + static_cast<int64_t>(point * dimensions_));
+                                  point_values.Data() + static_cast<int64_t>(point * dimensions_));
                     }
 
                     BlasFunction::Sgemm(BlasFunction::RowMajor,
@@ -755,12 +755,12 @@ PiPNNPipeline::assign_to_leaders(const WorkItem& item,
                                         static_cast<int32_t>(leaders.size()),
                                         static_cast<int32_t>(dimensions_),
                                         1.0F,
-                                        point_values.data(),
+                                        point_values.Data(),
                                         static_cast<int32_t>(dimensions_),
-                                        leader_values.data(),
+                                        leader_values.Data(),
                                         static_cast<int32_t>(dimensions_),
                                         0.0F,
-                                        dots.data(),
+                                        dots.Data(),
                                         static_cast<int32_t>(leaders.size()));
 
                     for (uint64_t point = 0; point < stripe_size; ++point) {
@@ -771,7 +771,7 @@ PiPNNPipeline::assign_to_leaders(const WorkItem& item,
                             const float distance =
                                 distance_from_dot(local_id,
                                                   leaders[leader],
-                                                  dots.data()[point * leaders.size() + leader]);
+                                                  dots.Data()[point * leaders.size() + leader]);
                             candidates.emplace_back(distance, static_cast<uint32_t>(leader));
                         }
                         auto comparator = [&](const auto& lhs, const auto& rhs) {
@@ -842,7 +842,7 @@ PiPNNPipeline::assign_to_leaders(const WorkItem& item,
             const auto* source = vector_by_local_id(item.points[begin + point]);
             std::copy(source,
                       source + static_cast<int64_t>(dimensions_),
-                      point_values.data() + static_cast<int64_t>(point * dimensions_));
+                      point_values.Data() + static_cast<int64_t>(point * dimensions_));
         }
 
         BlasFunction::Sgemm(BlasFunction::RowMajor,
@@ -852,12 +852,12 @@ PiPNNPipeline::assign_to_leaders(const WorkItem& item,
                             static_cast<int32_t>(leaders.size()),
                             static_cast<int32_t>(dimensions_),
                             1.0F,
-                            point_values.data(),
+                            point_values.Data(),
                             static_cast<int32_t>(dimensions_),
-                            leader_values.data(),
+                            leader_values.Data(),
                             static_cast<int32_t>(dimensions_),
                             0.0F,
-                            dots.data(),
+                            dots.Data(),
                             static_cast<int32_t>(leaders.size()));
 
         for (uint64_t point = 0; point < stripe_size; ++point) {
@@ -865,7 +865,7 @@ PiPNNPipeline::assign_to_leaders(const WorkItem& item,
             candidates.clear();
             for (uint64_t leader = 0; leader < leaders.size(); ++leader) {
                 const float distance = distance_from_dot(
-                    local_id, leaders[leader], dots.data()[point * leaders.size() + leader]);
+                    local_id, leaders[leader], dots.Data()[point * leaders.size() + leader]);
                 candidates.emplace_back(distance, static_cast<uint32_t>(leader));
             }
             auto comparator = [&](const auto& lhs, const auto& rhs) {
@@ -956,7 +956,7 @@ PiPNNPipeline::build_leaf(const Leaf& leaf) {
         const auto* source = vector_by_local_id(leaf[point]);
         std::copy(source,
                   source + static_cast<int64_t>(dimensions_),
-                  matrix.data() + static_cast<int64_t>(point * dimensions_));
+                  matrix.Data() + static_cast<int64_t>(point * dimensions_));
     }
     BlasFunction::Ssyrk(BlasFunction::RowMajor,
                         BlasFunction::CblasLower,
@@ -964,10 +964,10 @@ PiPNNPipeline::build_leaf(const Leaf& leaf) {
                         static_cast<int32_t>(point_count),
                         static_cast<int32_t>(dimensions_),
                         1.0F,
-                        matrix.data(),
+                        matrix.Data(),
                         static_cast<int32_t>(dimensions_),
                         0.0F,
-                        distances.data(),
+                        distances.Data(),
                         static_cast<int32_t>(point_count));
 
     const uint64_t requested_neighbor_count =
@@ -1002,7 +1002,7 @@ PiPNNPipeline::build_leaf(const Leaf& leaf) {
                 const uint64_t row = std::max(source, target);
                 const uint64_t column = std::min(source, target);
                 const float distance = distance_from_dot(
-                    leaf[source], leaf[target], distances.data()[row * point_count + column]);
+                    leaf[source], leaf[target], distances.Data()[row * point_count + column]);
                 const auto candidate = std::make_pair(distance, static_cast<uint32_t>(target));
 
                 if (retained < neighbor_count) {
@@ -1046,7 +1046,7 @@ PiPNNPipeline::build_leaf(const Leaf& leaf) {
             const uint64_t row = std::max(source, target);
             const uint64_t column = std::min(source, target);
             const float distance = distance_from_dot(
-                leaf[source], leaf[target], distances.data()[row * point_count + column]);
+                leaf[source], leaf[target], distances.Data()[row * point_count + column]);
             candidates.emplace_back(distance, static_cast<uint32_t>(target));
         }
         const uint64_t retained = std::min<uint64_t>(neighbor_count, candidates.size());

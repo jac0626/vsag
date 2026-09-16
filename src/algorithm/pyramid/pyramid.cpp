@@ -22,6 +22,7 @@
 #include <exception>
 #include <limits>
 #include <nlohmann/json.hpp>
+#include <numeric>
 #include <unordered_set>
 
 #include "algorithm/inner_index_interface.h"
@@ -285,14 +286,22 @@ Pyramid::search_graph_for_add(const GraphInterfacePtr& graph,
                               const float* vector,
                               InnerSearchParam& search_param) {
     VisitedListGuard vl_guard(pool_.get());
-    if (vector != nullptr) {
+    if (vector != nullptr and optimized_build_codes_ == nullptr) {
         return searcher_->Search(
             graph, codes, vl_guard.get(), vector, search_param, (LabelTablePtr) nullptr, nullptr);
     }
 
-    FlattenIdDistanceProvider distance_provider(codes, inner_id);
-    auto results =
-        searcher_->Search(graph, distance_provider, vl_guard.get(), search_param, nullptr, nullptr);
+    DistHeapPtr results;
+    if (optimized_build_codes_ != nullptr) {
+        FlattenDistanceProvider distance_provider(
+            codes, optimized_build_codes_->FactoryComputerForBuild(vector, inner_id));
+        results = searcher_->Search(
+            graph, distance_provider, vl_guard.get(), search_param, nullptr, nullptr);
+    } else {
+        FlattenIdDistanceProvider distance_provider(codes, inner_id);
+        results = searcher_->Search(
+            graph, distance_provider, vl_guard.get(), search_param, nullptr, nullptr);
+    }
     if (not search_param.find_duplicate || results->Empty()) {
         return results;
     }
@@ -625,6 +634,13 @@ Pyramid::build_by_batch_graph(const DatasetPtr& base) {
     }
     const auto data_num = static_cast<int64_t>(input_indices.size());
 
+    // A datacell's initial logical capacity may not have physical backing yet. As in
+    // prepare_add_batch(), parallel writes are safe only after Resize actually grows each store.
+    const bool storage_preallocated =
+        data_num > static_cast<int64_t>(base_codes_->max_capacity_) and
+        (not has_precise_reorder() or
+         data_num > static_cast<int64_t>(precise_codes_->max_capacity_)) and
+        (raw_vector_ == nullptr or data_num > static_cast<int64_t>(raw_vector_->max_capacity_));
     resize(data_num);
     for (InnerIdType inner_id = 0; inner_id < data_num; ++inner_id) {
         const auto input_index = input_indices[inner_id];
@@ -634,28 +650,37 @@ Pyramid::build_by_batch_graph(const DatasetPtr& base) {
         }
     }
 
-    const auto insert_codes = [&](const FlattenInterfacePtr& codes) {
-        if (data_num == input_count) {
-            ParallelBatchInsertVector(codes,
-                                      static_cast<InnerIdType>(data_num),
-                                      nullptr,
-                                      this->thread_pool_.get(),
-                                      this->build_thread_count_,
-                                      [=](InnerIdType begin) {
-                                          return data_vectors + static_cast<uint64_t>(begin) * dim_;
-                                      });
-            return;
+    if (optimized_build_codes_ != nullptr) {
+        AddBatch batch(allocator_);
+        batch.storage_preallocated = storage_preallocated;
+        batch.input_indices.resize(data_num);
+        std::iota(batch.input_indices.begin(), batch.input_indices.end(), 0);
+        encode_add_batch(base, batch);
+    } else {
+        const auto insert_codes = [&](const FlattenInterfacePtr& codes) {
+            if (data_num == input_count) {
+                ParallelBatchInsertVector(codes,
+                                          static_cast<InnerIdType>(data_num),
+                                          nullptr,
+                                          this->thread_pool_.get(),
+                                          this->build_thread_count_,
+                                          [=](InnerIdType begin) {
+                                              return data_vectors +
+                                                     static_cast<uint64_t>(begin) * dim_;
+                                          });
+                return;
+            }
+            for (InnerIdType inner_id = 0; inner_id < data_num; ++inner_id) {
+                codes->InsertVector(data_vectors + input_indices[inner_id] * dim_, inner_id);
+            }
+        };
+        insert_codes(base_codes_);
+        if (has_precise_reorder()) {
+            insert_codes(precise_codes_);
         }
-        for (InnerIdType inner_id = 0; inner_id < data_num; ++inner_id) {
-            codes->InsertVector(data_vectors + input_indices[inner_id] * dim_, inner_id);
+        if (raw_vector_ != nullptr) {
+            insert_codes(raw_vector_);
         }
-    };
-    insert_codes(base_codes_);
-    if (has_precise_reorder()) {
-        insert_codes(precise_codes_);
-    }
-    if (raw_vector_ != nullptr) {
-        insert_codes(raw_vector_);
     }
     if (store_paths_) {
         for (const auto& [hierarchy_name, hierarchy] : hierarchies_) {
@@ -685,12 +710,15 @@ Pyramid::build_by_batch_graph(const DatasetPtr& base) {
         }
     }
     auto codes = construction_codes();
+    // Scalar RaBitQ codes already provide symmetric SIMD distances; do not create SQ8 copies.
+    const auto* build_vectors = optimized_build_codes_ == nullptr ? data_vectors : nullptr;
 
     if (graph_type_ == GRAPH_TYPE_VALUE_PIPNN) {
         Vector<const float*> rows(allocator_);
         rows.reserve(static_cast<uint64_t>(data_num));
         for (const auto input_index : input_indices) {
-            rows.emplace_back(data_vectors + input_index * dim_);
+            rows.emplace_back((build_vectors == nullptr ? data_vectors : build_vectors) +
+                              input_index * dim_);
         }
         for (const auto& [hname, hierarchy] : hierarchies_) {
             auto pipnn_parameter = pipnn_param_;
@@ -754,32 +782,37 @@ Pyramid::build_by_batch_graph(const DatasetPtr& base) {
             }
         }
     } else if (thread_pool_ != nullptr && hierarchies_.size() > 1) {
-        auto build_flatten = ODescent::CreateBuildFlatten(codes, data_vectors, data_num);
+        auto build_flatten = ODescent::CreateBuildFlatten(codes, build_vectors, data_num);
         Vector<std::future<void>> futures(allocator_);
-        for (const auto& [hname, h_ptr] : hierarchies_) {
-            auto* hierarchy = h_ptr.get();
-            futures.push_back(thread_pool_->GeneralEnqueue([&, codes, build_flatten, hierarchy]() {
-                ODescent builder(odescent_param_,
-                                 codes,
-                                 allocator_,
-                                 nullptr,
-                                 true,
-                                 data_vectors,
-                                 data_num,
-                                 build_flatten);
-                hierarchy->root->Build(builder);
-            }));
+        futures.reserve(hierarchies_.size());
+        std::exception_ptr submit_exception = nullptr;
+        try {
+            for (const auto& [hname, h_ptr] : hierarchies_) {
+                auto* hierarchy = h_ptr.get();
+                futures.push_back(
+                    thread_pool_->GeneralEnqueue([&, codes, build_flatten, hierarchy]() {
+                        ODescent builder(odescent_param_,
+                                         codes,
+                                         allocator_,
+                                         nullptr,
+                                         true,
+                                         build_vectors,
+                                         data_num,
+                                         build_flatten);
+                        hierarchy->root->Build(builder);
+                    }));
+            }
+        } catch (...) {
+            submit_exception = std::current_exception();
         }
-        for (auto& f : futures) {
-            f.get();
-        }
+        drain_futures(futures, submit_exception);
     } else {
         ODescent graph_builder(odescent_param_,
                                codes,
                                allocator_,
                                this->thread_pool_.get(),
                                true,
-                               data_vectors,
+                               build_vectors,
                                data_num);
         for (const auto& [hname, h_ptr] : hierarchies_) {
             h_ptr->root->Build(graph_builder);
@@ -2199,15 +2232,36 @@ Pyramid::Build(const DatasetPtr& base) {
                 "[pyramid_build_cache] duplicate source_id or label; falling back to cold build");
         }
     }
-    if (graph_type_ == GRAPH_TYPE_VALUE_NSW) {
-        populate_hierarchy_trees(base);
-        return this->Add(base);
-    }
     if (graph_type_ != GRAPH_TYPE_VALUE_PIPNN) {
         populate_hierarchy_trees(base);
     }
-    this->Train(base);
-    return this->build_by_batch_graph(base);
+    auto optimized_codes =
+        std::dynamic_pointer_cast<FlattenOptimizedBuildInterface>(construction_codes());
+    if (optimized_codes != nullptr and
+        optimized_codes->BeginOptimizedBuild({thread_pool_, build_thread_count_})) {
+        optimized_build_codes_ = std::move(optimized_codes);
+    }
+    try {
+        std::vector<int64_t> result;
+        if (graph_type_ == GRAPH_TYPE_VALUE_NSW) {
+            result = this->Add(base);
+        } else {
+            this->Train(base);
+            result = this->build_by_batch_graph(base);
+        }
+        if (optimized_build_codes_ != nullptr) {
+            optimized_build_codes_->FinalizeOptimizedBuild();
+            optimized_build_codes_.reset();
+        }
+        return result;
+    } catch (...) {
+        // All build workers must be drained before releasing their temporary scalar codes.
+        if (optimized_build_codes_ != nullptr) {
+            optimized_build_codes_->AbortOptimizedBuild();
+            optimized_build_codes_.reset();
+        }
+        throw;
+    }
 }
 
 void
