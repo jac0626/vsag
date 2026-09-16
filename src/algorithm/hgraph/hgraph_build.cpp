@@ -222,7 +222,7 @@ std::vector<int64_t>
 HGraph::build_by_batch_graph(const DatasetPtr& data, bool use_pipnn) {
     std::vector<int64_t> failed_ids;
 
-    PiPNNGraphBuilderParameter pipnn_parameter;
+    auto pipnn_parameter = this->pipnn_param_;
     if (use_pipnn) {
         pipnn_parameter.alpha = this->alpha_;
         pipnn_parameter.Validate(bottom_graph_->MaximumDegree());
@@ -467,6 +467,12 @@ HGraph::build_by_batch_graph(const DatasetPtr& data, bool use_pipnn) {
 
 std::vector<int64_t>
 HGraph::Add(const DatasetPtr& data) {
+    if (graph_type_ == GRAPH_TYPE_VALUE_PIPNN) {
+        std::unique_lock<std::mutex> initial_build_lock(pipnn_initial_build_mutex_);
+        if (this->total_count_.load() == 0) {
+            return this->Build(data);
+        }
+    }
     return this->add_impl(data);
 }
 

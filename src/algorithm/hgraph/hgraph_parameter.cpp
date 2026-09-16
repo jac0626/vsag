@@ -147,6 +147,11 @@ HGraphParameter::FromJson(const JsonType& json) {
             odescent_param = std::make_shared<ODescentParameter>();
             odescent_param->FromJson(graph_json);
         }
+        if (graph_type == GRAPH_TYPE_VALUE_PIPNN) {
+            pipnn_param.FromJson(graph_json);
+            pipnn_param.alpha = this->alpha;
+            pipnn_param.Validate(this->bottom_graph_param->max_degree_);
+        }
     }
 
     if (json.Contains(SUPPORT_DUPLICATE)) {
@@ -292,7 +297,12 @@ HGraphParameter::ToJson() const {
     json[HGRAPH_RABITQ_FUSED_DATACELL_KEY].SetBool(this->rabitq_fused_datacell);
     json[REORDER_SOURCE_KEY].SetString(this->reorder_source);
     json[BASE_CODES_KEY].SetJson(this->base_codes_param->ToJson());
-    json[GRAPH_KEY].SetJson(this->bottom_graph_param->ToJson());
+    auto graph_json = this->bottom_graph_param->ToJson();
+    if (this->graph_type == GRAPH_TYPE_VALUE_PIPNN) {
+        graph_json[GRAPH_TYPE_KEY].SetString(this->graph_type);
+        graph_json.UpdateJson(this->pipnn_param.ToJson());
+    }
+    json[GRAPH_KEY].SetJson(graph_json);
     json[EF_CONSTRUCTION_KEY].SetUint64(this->ef_construction);
     json[RESIZE_INCREASE_COUNT_BIT].SetUint64(this->resize_increase_count_bit);
     json[ALPHA_KEY].SetFloat(this->alpha);

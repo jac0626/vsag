@@ -148,6 +148,38 @@ TEST_CASE("HGraph PiPNN keeps configured ODescent routing parameters", "[ut][pip
     REQUIRE(typed->odescent_param->block_size == 73);
 }
 
+TEST_CASE("HGraph exposes PiPNN build parameters", "[ut][pipnn][hgraph][parameter]") {
+    auto parameter = MakePiPNNHGraphParam();
+    parameter[vsag::PIPNN_PARAMETER_MAX_LEAF_SIZE].SetUint64(256);
+    parameter[vsag::PIPNN_PARAMETER_MIN_LEAF_SIZE].SetUint64(32);
+    parameter[vsag::PIPNN_PARAMETER_LEADER_SAMPLE_RATE].SetFloat(0.02F);
+    *parameter[vsag::PIPNN_PARAMETER_FANOUT].GetInnerJson() = {5, 3, 1};
+    parameter[vsag::PIPNN_PARAMETER_LEAF_NEIGHBOR_COUNT].SetUint64(6);
+    parameter[vsag::PIPNN_PARAMETER_HASH_PLANE_COUNT].SetUint64(4);
+    parameter[vsag::PIPNN_PARAMETER_RESERVOIR_SIZE].SetUint64(12);
+
+    auto mapped = vsag::HGraph::CheckAndMappingExternalParam(parameter, MakePiPNNCommonParam(8));
+    auto typed = std::dynamic_pointer_cast<vsag::HGraphParameter>(mapped);
+    REQUIRE(typed != nullptr);
+    REQUIRE(typed->pipnn_param.max_leaf_size == 256);
+    REQUIRE(typed->pipnn_param.min_leaf_size == 32);
+    REQUIRE(typed->pipnn_param.leader_sample_rate == 0.02F);
+    REQUIRE(typed->pipnn_param.fanout == std::vector<uint64_t>{5, 3, 1});
+    REQUIRE(typed->pipnn_param.leaf_neighbor_count == 6);
+    REQUIRE(typed->pipnn_param.hash_plane_count == 4);
+    REQUIRE(typed->pipnn_param.reservoir_size == 12);
+
+    const auto serialized = typed->ToJson();
+    const auto graph_json = serialized[vsag::GRAPH_KEY];
+    REQUIRE(graph_json[vsag::PIPNN_PARAMETER_LEAF_NEIGHBOR_COUNT].GetUint64() == 6);
+    REQUIRE(graph_json[vsag::PIPNN_PARAMETER_HASH_PLANE_COUNT].GetUint64() == 4);
+
+    parameter[vsag::PIPNN_PARAMETER_LEAF_NEIGHBOR_COUNT].SetUint64(0);
+    REQUIRE_THROWS(vsag::HGraph::CheckAndMappingExternalParam(parameter, MakePiPNNCommonParam(8)));
+    parameter[vsag::PIPNN_PARAMETER_LEAF_NEIGHBOR_COUNT].SetInt(-1);
+    REQUIRE_THROWS(vsag::HGraph::CheckAndMappingExternalParam(parameter, MakePiPNNCommonParam(8)));
+}
+
 TEST_CASE("HGraph PiPNN keeps duplicate-label and entry-point semantics", "[ut][pipnn][hgraph]") {
     constexpr int64_t dimensions = 4;
     auto index = MakePiPNNIndex(MakePiPNNHGraphParam(), MakePiPNNCommonParam(dimensions));

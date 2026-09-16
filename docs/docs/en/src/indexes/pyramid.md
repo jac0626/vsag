@@ -96,9 +96,16 @@ Build-time parameters live under `index_param`.
 | `graph_type` | string | `"nsw"` | `nsw`, `odescent`, or `pipnn`. PiPNN batch-builds every constructed graph in each hierarchy, including root routing layers for `multi_layer` roots. |
 | `graph_storage_type` | string | `"flat"` | Bottom-graph storage for a `multi_layer` root: `flat` favors construction and search speed, while `compressed` reduces graph memory. Compressed storage requires `max_degree <= 255`. Single-layer roots, routing graphs, and child graphs remain sparse. |
 | `ef_construction` | int | `400` | Candidate list size for `nsw` builds. |
-| `alpha` | float | `1.2` | Pruning factor during graph construction. |
+| `alpha` | float | `1.2` | Pruning factor during graph construction; PiPNN requires a finite value at least `1.0`. |
 | `graph_iter_turn` | int | — | ODescent iterations (effective with `graph_type: "odescent"`). |
 | `neighbor_sample_rate` | float | — | ODescent neighbor sampling rate. |
+| `pipnn_max_leaf_size` | int | `1024` | Maximum PiPNN partition leaf size. |
+| `pipnn_min_leaf_size` | int | `64` | Target used when PiPNN merges undersized leaves. |
+| `pipnn_leader_sample_rate` | float | `0.005` | Fraction sampled as leaders; each partition uses `2` to `1000`, bounded by its point count. |
+| `pipnn_fanout` | int[] | `[10, 2]` | Nearest leader partitions joined at successive PiPNN partition levels. |
+| `pipnn_leaf_neighbor_count` | int | `5` | Nearest candidates contributed per point and leaf; the primary PiPNN quality/build-work knob. Undersized leaves use at least `4`. |
+| `pipnn_hash_plane_count` | int | `12` | Direction-hash bits, in `[1, 15]`; `max_degree <= 2^pipnn_hash_plane_count`. |
+| `pipnn_reservoir_size` | int | `64` | Candidate slots retained per point before final pruning; effective capacity is at least `max_degree`. |
 | `no_build_levels` | int[] | `[]` | Tree levels that skip graph construction (0-indexed from the root). |
 | `use_reorder` | bool | `false` | Keep a high-precision copy for rescoring. |
 | `precise_quantization_type` | string | `"fp32"` | Quantizer for reordering. Use `"rabitq"` with `rabitq_bits_per_dim_precise` to enable RaBitQ x+y split reorder from base storage. |
@@ -121,6 +128,9 @@ PiPNN supports Pyramid builds with `dtype: "float32"` and `metric_type` set to `
 `root_graph_type: "multi_layer"`, this also includes every root routing layer. Search, incremental
 `Add`, removal, duplicate handling, reorder, and serialization retain the standard Pyramid
 behavior. Levels in `no_build_levels` are still skipped.
+The `pipnn_*` values are global to the Pyramid index; hierarchy objects may continue to override
+`max_degree` and `alpha`, and those overrides are applied when PiPNN builds that hierarchy.
+`ef_construction` does not tune PiPNN.
 
 ### RaBitQ split configuration
 

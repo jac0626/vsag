@@ -25,6 +25,7 @@
 #include <iterator>
 #include <limits>
 #include <memory>
+#include <nlohmann/json.hpp>
 #include <numeric>
 #include <random>
 #include <string>
@@ -1315,6 +1316,57 @@ PiPNNPipeline::parallel_for(uint64_t total,
 }
 
 }  // namespace
+
+void
+PiPNNGraphBuilderParameter::FromJson(const JsonType& json) {
+    auto read_uint = [&](const char* key, uint64_t& target) {
+        if (not json.Contains(key)) {
+            return;
+        }
+        require_argument(json[key].IsNumberUnsigned(),
+                         fmt::format("PiPNN {} must be a non-negative integer", key));
+        target = json[key].GetUint64();
+    };
+    read_uint(PIPNN_PARAMETER_MAX_LEAF_SIZE, max_leaf_size);
+    read_uint(PIPNN_PARAMETER_MIN_LEAF_SIZE, min_leaf_size);
+    read_uint(PIPNN_PARAMETER_LEAF_NEIGHBOR_COUNT, leaf_neighbor_count);
+    read_uint(PIPNN_PARAMETER_HASH_PLANE_COUNT, hash_plane_count);
+    read_uint(PIPNN_PARAMETER_RESERVOIR_SIZE, reservoir_size);
+
+    if (json.Contains(PIPNN_PARAMETER_LEADER_SAMPLE_RATE)) {
+        require_argument(json[PIPNN_PARAMETER_LEADER_SAMPLE_RATE].IsNumber(),
+                         "PiPNN pipnn_leader_sample_rate must be a number");
+        leader_sample_rate = json[PIPNN_PARAMETER_LEADER_SAMPLE_RATE].GetFloat();
+    }
+    if (json.Contains(PIPNN_PARAMETER_FANOUT)) {
+        const auto fanout_json = json[PIPNN_PARAMETER_FANOUT];
+        require_argument(fanout_json.IsArray(), "PiPNN pipnn_fanout must be an array");
+        fanout.clear();
+        for (const auto& value : *fanout_json.GetInnerJson()) {
+            const bool is_positive_signed = value.is_number_integer() and
+                                            not value.is_number_unsigned() and
+                                            value.get<int64_t>() > 0;
+            const bool is_positive_unsigned =
+                value.is_number_unsigned() and value.get<uint64_t>() > 0;
+            require_argument(is_positive_signed or is_positive_unsigned,
+                             "PiPNN pipnn_fanout values must be positive integers");
+            fanout.emplace_back(value.get<uint64_t>());
+        }
+    }
+}
+
+JsonType
+PiPNNGraphBuilderParameter::ToJson() const {
+    JsonType json;
+    json[PIPNN_PARAMETER_MAX_LEAF_SIZE].SetUint64(max_leaf_size);
+    json[PIPNN_PARAMETER_MIN_LEAF_SIZE].SetUint64(min_leaf_size);
+    json[PIPNN_PARAMETER_LEADER_SAMPLE_RATE].SetFloat(leader_sample_rate);
+    *json[PIPNN_PARAMETER_FANOUT].GetInnerJson() = fanout;
+    json[PIPNN_PARAMETER_LEAF_NEIGHBOR_COUNT].SetUint64(leaf_neighbor_count);
+    json[PIPNN_PARAMETER_HASH_PLANE_COUNT].SetUint64(hash_plane_count);
+    json[PIPNN_PARAMETER_RESERVOIR_SIZE].SetUint64(reservoir_size);
+    return json;
+}
 
 void
 PiPNNGraphBuilderParameter::Validate(uint64_t max_degree) const {

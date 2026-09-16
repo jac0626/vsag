@@ -149,6 +149,40 @@ TEST_CASE("Pyramid accepts PiPNN as a batch graph builder", "[ut][PyramidParamet
     REQUIRE_THROWS(param->FromJson(vsag::JsonType::Parse(generate_pyramid(index_param))));
 }
 
+TEST_CASE("Pyramid exposes PiPNN build parameters", "[ut][PyramidParameters][pipnn]") {
+    vsag::IndexCommonParam common_param;
+    common_param.dim_ = 128;
+    common_param.data_type_ = vsag::DataTypes::DATA_TYPE_FLOAT;
+    common_param.allocator_ = vsag::SafeAllocator::FactoryDefaultAllocator();
+    const auto external = vsag::JsonType::Parse(R"({
+        "base_quantization_type": "fp32",
+        "graph_type": "pipnn",
+        "max_degree": 32,
+        "pipnn_max_leaf_size": 256,
+        "pipnn_min_leaf_size": 32,
+        "pipnn_leader_sample_rate": 0.02,
+        "pipnn_fanout": [5, 3, 1],
+        "pipnn_leaf_neighbor_count": 6,
+        "pipnn_hash_plane_count": 6,
+        "pipnn_reservoir_size": 80
+    })");
+    auto mapped = vsag::Pyramid::CheckAndMappingExternalParam(external, common_param);
+    auto param = std::dynamic_pointer_cast<vsag::PyramidParameters>(mapped);
+    REQUIRE(param != nullptr);
+    REQUIRE(param->pipnn_param.max_leaf_size == 256);
+    REQUIRE(param->pipnn_param.min_leaf_size == 32);
+    REQUIRE(param->pipnn_param.leader_sample_rate == 0.02F);
+    REQUIRE(param->pipnn_param.fanout == std::vector<uint64_t>{5, 3, 1});
+    REQUIRE(param->pipnn_param.leaf_neighbor_count == 6);
+    REQUIRE(param->pipnn_param.hash_plane_count == 6);
+    REQUIRE(param->pipnn_param.reservoir_size == 80);
+
+    const auto serialized = param->ToJson();
+    const auto restored_graph_json = serialized[vsag::GRAPH_KEY];
+    REQUIRE(restored_graph_json[vsag::PIPNN_PARAMETER_MAX_LEAF_SIZE].GetUint64() == 256);
+    REQUIRE(restored_graph_json[vsag::PIPNN_PARAMETER_RESERVOIR_SIZE].GetUint64() == 80);
+}
+
 std::shared_ptr<vsag::PyramidParameters>
 ParsePyramidWithHierarchies(const nlohmann::json& hierarchies) {
     PyramidDefaultParam index_param;

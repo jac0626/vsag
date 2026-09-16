@@ -693,7 +693,7 @@ Pyramid::build_by_batch_graph(const DatasetPtr& base) {
             rows.emplace_back(data_vectors + input_index * dim_);
         }
         for (const auto& [hname, hierarchy] : hierarchies_) {
-            PiPNNGraphBuilderParameter pipnn_parameter;
+            auto pipnn_parameter = pipnn_param_;
             pipnn_parameter.alpha = hierarchy->alpha;
             PiPNNGraphBuilder pipnn_builder(pipnn_parameter,
                                             static_cast<uint64_t>(dim_),
@@ -2124,6 +2124,12 @@ Pyramid::CheckAndMappingExternalParam(const JsonType& external_param,
             inner_json[GRAPH_KEY][ODESCENT_PARAMETER_GRAPH_ITER_TURN].SetJson(value);
         } else if (key == ODESCENT_PARAMETER_NEIGHBOR_SAMPLE_RATE) {
             inner_json[GRAPH_KEY][ODESCENT_PARAMETER_NEIGHBOR_SAMPLE_RATE].SetJson(value);
+        } else if (key == PIPNN_PARAMETER_MAX_LEAF_SIZE or key == PIPNN_PARAMETER_MIN_LEAF_SIZE or
+                   key == PIPNN_PARAMETER_LEADER_SAMPLE_RATE or key == PIPNN_PARAMETER_FANOUT or
+                   key == PIPNN_PARAMETER_LEAF_NEIGHBOR_COUNT or
+                   key == PIPNN_PARAMETER_HASH_PLANE_COUNT or
+                   key == PIPNN_PARAMETER_RESERVOIR_SIZE) {
+            inner_json[GRAPH_KEY][key].SetJson(value);
         } else if (key == PYRAMID_INDEX_MIN_SIZE) {
             inner_json[INDEX_MIN_SIZE].SetJson(value);
         } else if (key == PYRAMID_ROOT_GRAPH_TYPE) {

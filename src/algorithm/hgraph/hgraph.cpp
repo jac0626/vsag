@@ -71,6 +71,7 @@ HGraph::HGraph(const HGraphParameterPtr& hgraph_param, const vsag::IndexCommonPa
       duplicate_distance_threshold_(hgraph_param->duplicate_distance_threshold),
       support_force_remove_(hgraph_param->support_force_remove),
       odescent_param_(hgraph_param->odescent_param),
+      pipnn_param_(hgraph_param->pipnn_param),
       graph_type_(hgraph_param->graph_type),
       hierarchical_datacell_param_(hgraph_param->hierarchical_graph_param),
       mci_parameters_(hgraph_param->mci_parameters),

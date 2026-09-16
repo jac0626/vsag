@@ -66,6 +66,7 @@ public:
           common_param_(common_param),
           hierarchies_(common_param.allocator_.get()),
           odescent_param_(pyramid_param->odescent_param),
+          pipnn_param_(pyramid_param->pipnn_param),
           index_min_size_(pyramid_param->index_min_size),
           graph_type_(pyramid_param->graph_type),
           default_rabitq_one_bit_search_(pyramid_param->use_reorder and
@@ -581,6 +582,7 @@ private:
     mutable std::shared_mutex resize_mutex_;             // guards flatten storage resize/write/read
     mutable std::mutex cur_element_count_mutex_;         // guards cur_element_count_ updates
     std::string graph_type_{GRAPH_TYPE_VALUE_NSW};       // graph algorithm type
+    PiPNNGraphBuilderParameter pipnn_param_{};           // PiPNN build parameters
     bool default_rabitq_one_bit_search_{false};          // default split lower-bound search
 
     std::mutex random_generator_mutex_;

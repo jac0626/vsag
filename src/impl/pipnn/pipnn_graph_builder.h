@@ -17,6 +17,7 @@
 #include <cstdint>
 #include <vector>
 
+#include "json_wrapper.h"
 #include "metric_type.h"
 #include "typing.h"
 #include "utils/pointer_define.h"
@@ -33,10 +34,16 @@ struct PiPNNGraphBuilderParameter {
     uint64_t min_leaf_size{64};
     float leader_sample_rate{0.005F};
     std::vector<uint64_t> fanout{10, 2};
-    uint64_t leaf_neighbor_count{2};
+    uint64_t leaf_neighbor_count{5};
     uint64_t hash_plane_count{12};
     uint64_t reservoir_size{64};
     float alpha{1.0F};
+
+    void
+    FromJson(const JsonType& json);
+
+    JsonType
+    ToJson() const;
 
     void
     Validate(uint64_t max_degree) const;

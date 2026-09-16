@@ -278,6 +278,10 @@ PyramidParameters::FromJson(const JsonType& json) {
         this->graph_type == GRAPH_TYPE_VALUE_PIPNN) {
         this->odescent_param = std::make_shared<ODescentParameter>();
         this->odescent_param->FromJson(graph_json);
+        if (this->graph_type == GRAPH_TYPE_VALUE_PIPNN) {
+            this->pipnn_param.FromJson(graph_json);
+            this->pipnn_param.alpha = this->alpha;
+        }
     } else if (json.Contains(EF_CONSTRUCTION_KEY)) {
         this->ef_construction = json[EF_CONSTRUCTION_KEY].GetUint64();
         CHECK_ARGUMENT(this->ef_construction > 0, "ef_construction must be positive");
@@ -357,6 +361,14 @@ PyramidParameters::FromJson(const JsonType& json) {
             this->hierarchies.emplace_back(std::move(hierarchy));
         }
     }
+    if (this->graph_type == GRAPH_TYPE_VALUE_PIPNN) {
+        this->pipnn_param.Validate(static_cast<uint64_t>(this->max_degree));
+        for (const auto& hierarchy : this->hierarchies) {
+            auto hierarchy_param = this->pipnn_param;
+            hierarchy_param.alpha = hierarchy.alpha;
+            hierarchy_param.Validate(static_cast<uint64_t>(hierarchy.max_degree));
+        }
+    }
 }
 JsonType
 PyramidParameters::ToJson() const {
@@ -372,6 +384,9 @@ PyramidParameters::ToJson() const {
     if (this->graph_type == GRAPH_TYPE_VALUE_ODESCENT or
         this->graph_type == GRAPH_TYPE_VALUE_PIPNN) {
         graph_json.UpdateJson(odescent_param->ToJson());
+        if (this->graph_type == GRAPH_TYPE_VALUE_PIPNN) {
+            graph_json.UpdateJson(pipnn_param.ToJson());
+        }
     } else {
         json[EF_CONSTRUCTION_KEY].SetUint64(this->ef_construction);
     }
