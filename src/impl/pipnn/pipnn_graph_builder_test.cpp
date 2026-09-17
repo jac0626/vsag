@@ -372,3 +372,56 @@ TEST_CASE("PiPNN graph builder applies all supported metrics", "[ut][pipnn][metr
     const auto expected = metric == vsag::MetricType::METRIC_TYPE_L2SQR ? 2 : 1;
     REQUIRE(neighbors.front() == expected);
 }
+
+TEST_CASE("PiPNN builds a connected L2 graph with a sane average degree", "[ut][pipnn][l2]") {
+    // Guards the squared-L2 branch of `distance_from_dot`, which converts a dot product with
+    // `norms[lhs] + norms[rhs] - 2 * dot`. If that term is lost (observed with optimized builds
+    // on some toolchains, where the `2.0F` constant did not survive the BLAS calls it was live
+    // across), every pair distance collapses to `norms[lhs] + norms[rhs]`, leaf candidates
+    // degenerate to id-adjacent ties, and the graph shatters into tiny components with an
+    // average degree of exactly one. Keep this check structural so it also fails in optimized
+    // builds, not only in debug.
+    constexpr uint64_t dimensions = 128;
+    constexpr uint64_t count = 600;
+    constexpr uint64_t max_degree = 32;
+    auto common_param = MakeCommonParam(dimensions);
+    auto vectors = MakeVectors(count, dimensions);
+    vsag::Vector<vsag::InnerIdType> ids(common_param.allocator_.get());
+    ids.reserve(count);
+    for (uint64_t id = 0; id < count; ++id) {
+        ids.emplace_back(static_cast<vsag::InnerIdType>(id));
+    }
+    auto rows = MakeRows(vectors, ids, dimensions, common_param.allocator_.get());
+    auto graph = MakeGraph(common_param, count, max_degree);
+    vsag::PiPNNGraphBuilder({}, dimensions, common_param.metric_, common_param.allocator_.get())
+        .Build(graph, ids, rows);
+
+    uint64_t degree_sum = 0;
+    uint64_t isolated = 0;
+    for (const auto id : ids) {
+        const auto size = graph->GetNeighborSize(id);
+        degree_sum += size;
+        isolated += size == 0 ? 1 : 0;
+    }
+    REQUIRE(isolated == 0);
+    REQUIRE(degree_sum >= 2 * count);
+
+    std::vector<char> visited(count, 0);
+    std::vector<vsag::InnerIdType> stack{ids.front()};
+    visited[ids.front()] = 1;
+    uint64_t reached = 0;
+    while (not stack.empty()) {
+        const auto current = stack.back();
+        stack.pop_back();
+        ++reached;
+        vsag::Vector<vsag::InnerIdType> neighbors(common_param.allocator_.get());
+        graph->GetNeighbors(current, neighbors);
+        for (const auto neighbor : neighbors) {
+            if (visited[neighbor] == 0) {
+                visited[neighbor] = 1;
+                stack.emplace_back(neighbor);
+            }
+        }
+    }
+    REQUIRE(reached == count);
+}

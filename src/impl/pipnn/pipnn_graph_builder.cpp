@@ -1192,7 +1192,8 @@ PiPNNPipeline::pair_distance(uint32_t lhs, uint32_t rhs) const {
 float
 PiPNNPipeline::distance_from_dot(uint32_t lhs, uint32_t rhs, float dot) const {
     if (metric_ == MetricType::METRIC_TYPE_L2SQR) {
-        return std::max(0.0F, sanitize_distance(norms_[lhs] + norms_[rhs] - 2.0F * dot));
+        const float sum = norms_[lhs] + norms_[rhs];
+        return std::max(0.0F, sanitize_distance(sum - dot - dot));
     }
     if (metric_ == MetricType::METRIC_TYPE_IP) {
         return sanitize_distance(1.0F - dot);
