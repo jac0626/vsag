@@ -4629,6 +4629,75 @@ TEST_CASE("HGraph returns non-finite duplicate labels within ef",
     }
 }
 
+TEST_CASE("HGraph returns non-finite duplicate labels at the entry point within ef",
+          "[ft][hgraph][duplicate][nonfinite]") {
+    // Both labels hold the same non-finite-distance vector, so the expectation does not depend on
+    // which label owns the entry point (level sampling is platform dependent).
+    const auto params = R"({
+        "dtype":"float32", "metric_type":"ip", "dim":1,
+        "index_param":{"base_quantization_type":"fp32","max_degree":16,
+        "ef_construction":32,"use_reorder":false,"support_duplicate":true,
+        "deduplicate_storage":true}
+    })";
+    auto index = vsag::Factory::CreateIndex("hgraph", params).value();
+    std::vector<float> vectors = {std::numeric_limits<float>::max(),
+                                  std::numeric_limits<float>::max()};
+    std::vector<int64_t> ids = {10, 20};
+    auto base = vsag::Dataset::Make();
+    base->NumElements(2)->Dim(1)->Ids(ids.data())->Float32Vectors(vectors.data())->Owner(false);
+    REQUIRE(index->Build(base).has_value());
+
+    const float query_vector = std::numeric_limits<float>::max();
+    auto query = vsag::Dataset::Make();
+    query->NumElements(1)->Dim(1)->Float32Vectors(&query_vector)->Owner(false);
+    for (const int64_t thread_count : {1, 2}) {
+        const auto search_params = fmt::format(
+            R"({{"hgraph":{{"ef_search":2,"parallel_search_thread_count":{}}}}})", thread_count);
+        auto result = index->KnnSearch(query, 2, search_params);
+        REQUIRE(result.has_value());
+        REQUIRE(result.value()->GetDim() == 2);
+        std::set<int64_t> result_ids(result.value()->GetIds(),
+                                     result.value()->GetIds() + result.value()->GetDim());
+        REQUIRE(result_ids == std::set<int64_t>{10, 20});
+        REQUIRE(std::isinf(result.value()->GetDistances()[0]));
+        REQUIRE(std::isinf(result.value()->GetDistances()[1]));
+    }
+}
+
+TEST_CASE("HGraph returns finite duplicate labels at the entry point within ef",
+          "[ft][hgraph][duplicate]") {
+    // Mirror of the non-finite case: the entry point's duplicate labels must be expanded when its
+    // own distance is finite as well.
+    const auto params = R"({
+        "dtype":"float32", "metric_type":"l2", "dim":1,
+        "index_param":{"base_quantization_type":"fp32","max_degree":16,
+        "ef_construction":32,"use_reorder":false,"support_duplicate":true,
+        "deduplicate_storage":true}
+    })";
+    auto index = vsag::Factory::CreateIndex("hgraph", params).value();
+    std::vector<float> vectors = {0.5F, 0.5F};
+    std::vector<int64_t> ids = {10, 20};
+    auto base = vsag::Dataset::Make();
+    base->NumElements(2)->Dim(1)->Ids(ids.data())->Float32Vectors(vectors.data())->Owner(false);
+    REQUIRE(index->Build(base).has_value());
+
+    const float query_vector = 0.5F;
+    auto query = vsag::Dataset::Make();
+    query->NumElements(1)->Dim(1)->Float32Vectors(&query_vector)->Owner(false);
+    for (const int64_t thread_count : {1, 2}) {
+        const auto search_params = fmt::format(
+            R"({{"hgraph":{{"ef_search":2,"parallel_search_thread_count":{}}}}})", thread_count);
+        auto result = index->KnnSearch(query, 2, search_params);
+        REQUIRE(result.has_value());
+        REQUIRE(result.value()->GetDim() == 2);
+        std::set<int64_t> result_ids(result.value()->GetIds(),
+                                     result.value()->GetIds() + result.value()->GetDim());
+        REQUIRE(result_ids == std::set<int64_t>{10, 20});
+        REQUIRE(result.value()->GetDistances()[0] <= 1e-6F);
+        REQUIRE(result.value()->GetDistances()[1] <= 1e-6F);
+    }
+}
+
 TEST_CASE("HGraph ExportCache + ImportCache + Build acceleration smoke test",
           "[ft][hgraph][cache][pr]") {
     // End-to-end smoke test for the cache-accelerated Build path:
