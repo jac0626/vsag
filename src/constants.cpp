@@ -196,6 +196,7 @@ const char* const HGRAPH_MCI_CLIQUE_MAX = "mci_clique_max";
 const char* const HGRAPH_MCI_ALPHA = "mci_alpha";
 const char* const HGRAPH_MCI_SEED_RATIO = "mci_seed_ratio";
 const char* const HGRAPH_MCI_HGRAPH_VALID_RATIO_THRESHOLD = "hgraph_valid_ratio_threshold";
+const char* const HGRAPH_PARAMETER_MAX_DUPLICATES_PER_GROUP = "max_duplicates_per_group";
 const char* const HGRAPH_EXTRA_INFO_SIZE = "extra_info_size";
 const char* const HGRAPH_SUPPORT_DUPLICATE = "support_duplicate";
 const char* const HGRAPH_DUPLICATE_DISTANCE_THRESHOLD = "duplicate_distance_threshold";
