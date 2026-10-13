@@ -28,8 +28,9 @@
 #include "datacell/hgraph_rabitq_fused_datacell.h"
 #include "datacell/rabitq_split_datacell.h"
 #include "dataset_impl.h"
-#include "hgraph.h"  // IWYU pragma: keep
+#include "hgraph.h"
 #include "hgraph_fast_build.h"
+#include "hgraph_mci_add.h"  // IWYU pragma: keep
 #include "impl/heap/standard_heap.h"
 #include "impl/logger/logger.h"
 #include "impl/odescent/odescent_graph_builder.h"
@@ -511,14 +512,8 @@ HGraph::add_impl(const DatasetPtr& data) {
             force_remove_rlock.unlock();
         }
         if (had_mci_clique_index) {
-            logger::info("hgraph mci incremental add started, added={}", batch.rows.size());
-            for (const auto& row : batch.rows) {
-                this->incremental_update_mci_clique(row.inner_id, get_data(data, row.input_idx));
-                this->maybe_compact_mci(1);
-            }
+            MciIncrementalAddExecutor(*this).Run(batch, data);
             this->mci_cliques_->MarkAvailable(this->total_count_.load());
-            logger::info("hgraph mci incremental add finished, total={}",
-                         this->total_count_.load());
         } else {
             const void* vectors = nullptr;
             if (mci_start_total == 0 and batch.failed_ids.empty()) {
