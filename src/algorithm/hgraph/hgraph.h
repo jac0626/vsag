@@ -186,6 +186,9 @@ public:
     std::string
     GetStats() const override;
 
+    [[nodiscard]] AnalyzerBasePtr
+    CreateAnalyzer(const AnalyzerParam& param) const override;
+
     void
     GetVectorByInnerId(InnerIdType inner_id, float* data) const override;
 
