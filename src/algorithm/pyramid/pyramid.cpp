@@ -3317,7 +3317,6 @@ Pyramid::SetImmutable() {
     if (this->immutable_.load(std::memory_order_acquire)) {
         return;
     }
-    label_table_->SetImmutable();
     this->points_mutex_.reset();
     this->points_mutex_ = std::make_shared<EmptyMutex>();
     this->searcher_->SetMutexArray(this->points_mutex_);
