@@ -38,6 +38,7 @@
 #include "impl/pruning_strategy.h"
 #include "impl/searcher/basic_searcher.h"
 #include "io/memory_io/memory_io_parameter.h"
+#include "pipnn_storage_build.h"
 #include "quantization/scalar_quantization/scalar_quantizer_parameter.h"
 #include "storage/stream_reader.h"
 #include "storage/stream_writer.h"
@@ -321,9 +322,9 @@ HGraph::build_by_batch_graph(const DatasetPtr& data, bool use_pipnn) {
         batch_insert_flatten_codes(temporary_sq8_build_data);
         temporary_codes_batched = true;
     }
-    // Every code page of the batch is written at this point (or by the per-row loop below when
-    // rows were skipped), so the batch can be published exactly like a sequence of Add() calls.
-    this->PublishThroughTotalCount();
+    if (not this->using_dedup_storage()) {
+        this->PublishThroughTotalCount();
+    }
     Vector<std::pair<InnerIdType, int64_t>> deferred_code_ids(allocator_);
     Vector<const float*> pipnn_vectors(allocator_);
     if (use_pipnn) {
@@ -341,7 +342,7 @@ HGraph::build_by_batch_graph(const DatasetPtr& data, bool use_pipnn) {
         }
         if (defer_persistent_codes) {
             deferred_code_ids.emplace_back(inner_id, i);
-        } else if (not persistent_codes_batched) {
+        } else if (not persistent_codes_batched and not this->using_dedup_storage()) {
             this->insert_persistent_codes(get_data(data, i), inner_id);
         }
         if (temporary_sq8_build_data != nullptr and not temporary_codes_batched) {
@@ -398,6 +399,20 @@ HGraph::build_by_batch_graph(const DatasetPtr& data, bool use_pipnn) {
     if (need_sq8_build_data) {
         build_data = raw_vector_ != nullptr ? raw_vector_ : temporary_sq8_build_data;
     }
+    auto materialize_storage = [this, data, &inner_ids, &valid_indices]() {
+        materialize_pipnn_storage(
+            inner_ids,
+            valid_indices,
+            bottom_graph_,
+            *code_slot_map_,
+            allocator_,
+            thread_pool_.get(),
+            build_thread_count_,
+            [this](CodeSlotIdType capacity) { this->ensure_physical_code_capacity(capacity); },
+            [this, data](int64_t row, CodeSlotIdType slot) {
+                this->insert_persistent_codes_to_slot(get_data(data, row), slot);
+            });
+    };
     if (use_pipnn) {
         PiPNNGraphBuilder pipnn_builder(pipnn_parameter,
                                         static_cast<uint64_t>(this->dim_),
@@ -406,6 +421,9 @@ HGraph::build_by_batch_graph(const DatasetPtr& data, bool use_pipnn) {
                                         this->thread_pool_.get(),
                                         this->build_thread_count_);
         pipnn_builder.Build(bottom_graph_, inner_ids, pipnn_vectors);
+        if (this->using_dedup_storage() and not defer_persistent_codes) {
+            materialize_storage();
+        }
         if (this->support_duplicate_) {
             entry_point_id_ = bottom_graph_->GetGroupId(entry_point_id_);
             for (auto& route_graph_id : route_graph_ids) {
@@ -458,13 +476,19 @@ HGraph::build_by_batch_graph(const DatasetPtr& data, bool use_pipnn) {
         if (this->rabitq_fused_datacell_ == nullptr) {
             this->train_codes_with_dataset(this->sample_train_dataset(data));
         }
-        if (all_rows_are_valid) {
+        if (this->using_dedup_storage()) {
+            materialize_storage();
+        } else if (all_rows_are_valid) {
             batch_insert_persistent_codes();
         } else {
             for (const auto& [inner_id, local_idx] : deferred_code_ids) {
                 this->insert_persistent_codes(get_data(data, local_idx), inner_id);
             }
         }
+    }
+    if (this->using_dedup_storage()) {
+        // All logical IDs now have complete codes and a published slot mapping.
+        this->PublishThroughTotalCount();
     }
     return failed_ids;
 }
