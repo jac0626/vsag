@@ -39,6 +39,7 @@
 #include "impl/blas/blas_function.h"
 #include "impl/thread_pool/safe_thread_pool.h"
 #include "pipnn_adaptive_pruning.h"
+#include "simd/basic_func.h"
 #include "simd/bf16_simd.h"
 #include "simd/fp32_simd.h"
 #include "utils/lock_strategy.h"
@@ -318,7 +319,7 @@ private:
 
     template <MetricType metric>
     void
-    build_small_leaf(const Leaf& leaf, const float* dots, uint64_t neighbor_count);
+    build_small_leaf(const Leaf& leaf, float* matrix, uint64_t neighbor_count);
 
     void
     insert_candidate(uint32_t source, uint32_t target, float distance);
@@ -994,15 +995,30 @@ PiPNNPipeline::build_leaf(const Leaf& leaf) {
 
     const uint64_t point_count = leaf.size();
     const uint64_t matrix_values = checked_product(point_count, dimensions_, "leaf matrix");
-    const uint64_t distance_values = checked_product(point_count, point_count, "leaf distances");
     UninitializedFloatBuffer matrix(matrix_values, allocator_, "leaf matrix");
-    UninitializedFloatBuffer distances(distance_values, allocator_, "leaf distances");
+    const uint64_t requested_neighbor_count =
+        point_count < parameter_.min_leaf_size
+            ? std::max(parameter_.leaf_neighbor_count, MIN_UNDERSIZED_LEAF_NEIGHBOR_COUNT)
+            : parameter_.leaf_neighbor_count;
+    const uint64_t neighbor_count = std::min<uint64_t>(requested_neighbor_count, point_count - 1);
+    if (neighbor_count <= SMALL_TOP_K_LIMIT) {
+        if (metric_ == MetricType::METRIC_TYPE_L2SQR) {
+            build_small_leaf<MetricType::METRIC_TYPE_L2SQR>(leaf, matrix.Data(), neighbor_count);
+            return;
+        }
+        if (metric_ == MetricType::METRIC_TYPE_IP) {
+            build_small_leaf<MetricType::METRIC_TYPE_IP>(leaf, matrix.Data(), neighbor_count);
+            return;
+        }
+    }
     for (uint64_t point = 0; point < point_count; ++point) {
         const auto* source = vector_by_local_id(leaf[point]);
         std::copy(source,
                   source + static_cast<int64_t>(dimensions_),
                   matrix.Data() + static_cast<int64_t>(point * dimensions_));
     }
+    const uint64_t distance_values = checked_product(point_count, point_count, "leaf distances");
+    UninitializedFloatBuffer distances(distance_values, allocator_, "leaf distances");
     BlasFunction::Ssyrk(BlasFunction::RowMajor,
                         BlasFunction::CblasLower,
                         BlasFunction::NoTrans,
@@ -1015,20 +1031,7 @@ PiPNNPipeline::build_leaf(const Leaf& leaf) {
                         distances.Data(),
                         static_cast<int32_t>(point_count));
 
-    const uint64_t requested_neighbor_count =
-        point_count < parameter_.min_leaf_size
-            ? std::max(parameter_.leaf_neighbor_count, MIN_UNDERSIZED_LEAF_NEIGHBOR_COUNT)
-            : parameter_.leaf_neighbor_count;
-    const uint64_t neighbor_count = std::min<uint64_t>(requested_neighbor_count, point_count - 1);
     if (neighbor_count <= SMALL_TOP_K_LIMIT) {
-        if (metric_ == MetricType::METRIC_TYPE_L2SQR) {
-            build_small_leaf<MetricType::METRIC_TYPE_L2SQR>(leaf, distances.Data(), neighbor_count);
-            return;
-        }
-        if (metric_ == MetricType::METRIC_TYPE_IP) {
-            build_small_leaf<MetricType::METRIC_TYPE_IP>(leaf, distances.Data(), neighbor_count);
-            return;
-        }
         std::array<std::pair<float, uint32_t>, SMALL_TOP_K_LIMIT> nearest{};
         for (uint64_t source = 0; source < point_count; ++source) {
             const auto source_id = ids_[leaf[source]];
@@ -1131,12 +1134,11 @@ PiPNNPipeline::build_leaf(const Leaf& leaf) {
 
 template <MetricType metric>
 void
-PiPNNPipeline::build_small_leaf(const Leaf& leaf, const float* dots, uint64_t neighbor_count) {
+PiPNNPipeline::build_small_leaf(const Leaf& leaf, float* matrix, uint64_t neighbor_count) {
     static_assert(metric == MetricType::METRIC_TYPE_L2SQR || metric == MetricType::METRIC_TYPE_IP);
     const uint64_t count = leaf.size();
     Vector<std::pair<float, uint32_t>> nearest(
         checked_product(count, neighbor_count, "leaf candidates"), allocator_);
-    Vector<uint64_t> sizes(count, 0, allocator_);
     Vector<uint64_t> farthest(count, 0, allocator_);
     Vector<InnerIdType> ids(count, allocator_);
     Vector<float> norms(count, 0.0F, allocator_);
@@ -1154,54 +1156,122 @@ PiPNNPipeline::build_small_leaf(const Leaf& leaf, const float* dots, uint64_t ne
         const auto right_gap = id_gap(ids[source], ids[rhs.second]);
         return left_gap != right_gap ? left_gap < right_gap : ids[lhs.second] < ids[rhs.second];
     };
-    auto offer = [&](uint64_t source, uint32_t target, float distance) {
-        auto* row = nearest.data() + source * neighbor_count;
-        const auto candidate = std::make_pair(distance, target);
-        auto& size = sizes[source];
-        auto& worst = farthest[source];
-        if (size < neighbor_count) {
-            row[size] = candidate;
-            if (size == 0 || less(source, row[worst], candidate)) {
-                worst = size;
-            }
-            ++size;
-            return;
+    auto from_dot = [&](uint64_t source, uint64_t target, float dot) {
+        if constexpr (metric == MetricType::METRIC_TYPE_L2SQR) {
+            return std::max(0.0F, sanitize_distance(norms[source] + norms[target] - dot - dot));
+        } else {
+            return sanitize_distance(1.0F - dot);
         }
-        if (not less(source, candidate, row[worst])) {
-            return;
-        }
-        row[worst] = candidate;
-        worst = 0;
-        for (uint64_t point = 1; point < size; ++point) {
+    };
+    auto find_farthest = [&](uint64_t source, const auto* row) {
+        uint64_t worst = 0;
+        for (uint64_t point = 1; point < neighbor_count; ++point) {
             if (less(source, row[worst], row[point])) {
                 worst = point;
             }
         }
+        return worst;
     };
-    // Consume SYRK's lower triangle sequentially. Each unordered pair is read once;
-    // its symmetric distance updates both endpoint lists in ascending target order.
-    for (uint64_t row = 1; row < count; ++row) {
-        const auto* dot_row = dots + row * count;
-        for (uint64_t column = 0; column < row; ++column) {
-            float distance;
-            if constexpr (metric == MetricType::METRIC_TYPE_L2SQR) {
-                const auto dot = dot_row[column];
-                distance =
-                    std::max(0.0F, sanitize_distance(norms[row] + norms[column] - dot - dot));
-            } else {
-                distance = sanitize_distance(1.0F - dot_row[column]);
+    auto offer = [&](uint64_t source, uint32_t target, float distance) {
+        auto* row = nearest.data() + source * neighbor_count;
+        const auto candidate = std::make_pair(distance, target);
+        auto& worst = farthest[source];
+        if (not less(source, candidate, row[worst])) {
+            return;
+        }
+        row[worst] = candidate;
+        worst = find_farthest(source, row);
+    };
+    constexpr uint64_t strip_rows = 64;
+    static_assert(strip_rows > SMALL_TOP_K_LIMIT);
+    UninitializedFloatBuffer dot_buffer(
+        checked_product(std::min(count, strip_rows), count, "leaf dot strip"),
+        allocator_,
+        "leaf dot strip");
+    for (uint64_t row_begin = 0; row_begin < count; row_begin += strip_rows) {
+        const auto row_end = std::min(count, row_begin + strip_rows);
+        for (uint64_t point = row_begin; point < row_end; ++point) {
+            const auto* source = vector_by_local_id(leaf[point]);
+            std::copy(source, source + dimensions_, matrix + point * dimensions_);
+        }
+        const auto* dots = dot_buffer.Data();
+        if (row_begin == 0) {
+            BlasFunction::Ssyrk(BlasFunction::RowMajor,
+                                BlasFunction::CblasLower,
+                                BlasFunction::NoTrans,
+                                static_cast<int32_t>(row_end),
+                                static_cast<int32_t>(dimensions_),
+                                1.0F,
+                                matrix,
+                                static_cast<int32_t>(dimensions_),
+                                0.0F,
+                                dot_buffer.Data(),
+                                static_cast<int32_t>(count));
+            // Seed the first K+1 lists from their lower triangle. All later offers see
+            // full lists, and every endpoint keeps ascending target order.
+            for (uint64_t row = 1; row <= neighbor_count; ++row) {
+                for (uint64_t column = 0; column < row; ++column) {
+                    const auto distance = from_dot(row, column, dots[row * count + column]);
+                    nearest[row * neighbor_count + column] = {distance,
+                                                              static_cast<uint32_t>(column)};
+                    nearest[column * neighbor_count + row - 1] = {distance,
+                                                                  static_cast<uint32_t>(row)};
+                }
             }
-            offer(row, static_cast<uint32_t>(column), distance);
-            offer(column, static_cast<uint32_t>(row), distance);
+            for (uint64_t source = 0; source <= neighbor_count; ++source) {
+                farthest[source] = find_farthest(source, nearest.data() + source * neighbor_count);
+            }
+        } else {
+            BlasFunction::Sgemm(BlasFunction::RowMajor,
+                                BlasFunction::NoTrans,
+                                BlasFunction::Trans,
+                                static_cast<int32_t>(row_end - row_begin),
+                                static_cast<int32_t>(row_end),
+                                static_cast<int32_t>(dimensions_),
+                                1.0F,
+                                matrix + row_begin * dimensions_,
+                                static_cast<int32_t>(dimensions_),
+                                matrix,
+                                static_cast<int32_t>(dimensions_),
+                                0.0F,
+                                dot_buffer.Data(),
+                                static_cast<int32_t>(count));
+        }
+        for (uint64_t row = std::max(row_begin, neighbor_count + 1); row < row_end; ++row) {
+            const auto* dot_row = dots + (row - row_begin) * count;
+            std::array<std::pair<float, uint32_t>, SMALL_TOP_K_LIMIT> current;
+            for (uint64_t column = 0; column < neighbor_count; ++column) {
+                const auto distance = from_dot(row, column, dot_row[column]);
+                current[column] = {distance, static_cast<uint32_t>(column)};
+                offer(column, static_cast<uint32_t>(row), distance);
+            }
+            auto worst = find_farthest(row, current.data());
+            for (uint64_t column = neighbor_count; column < row; ++column) {
+                const auto distance = from_dot(row, column, dot_row[column]);
+                const auto column_worst = farthest[column];
+                // Equal distances must still reach the ID tie-breaker.
+                if (distance > std::max(current[worst].first,
+                                        nearest[column * neighbor_count + column_worst].first)) {
+                    continue;
+                }
+                const auto candidate = std::make_pair(distance, static_cast<uint32_t>(column));
+                if (less(row, candidate, current[worst])) {
+                    current[worst] = candidate;
+                    worst = find_farthest(row, current.data());
+                }
+                offer(column, static_cast<uint32_t>(row), distance);
+            }
+            std::copy_n(current.data(), neighbor_count, nearest.data() + row * neighbor_count);
+            farthest[row] = worst;
         }
     }
     // Preserve source/target emission order and the existing bidirectional reservoir policy.
     for (uint64_t source = 0; source < count; ++source) {
         auto* row = nearest.data() + source * neighbor_count;
-        std::sort(row, row + sizes[source], [&](const auto& lhs, const auto& rhs) {
+        std::sort(row, row + neighbor_count, [&](const auto& lhs, const auto& rhs) {
             return less(source, lhs, rhs);
         });
-        for (uint64_t candidate = 0; candidate < sizes[source]; ++candidate) {
+        for (uint64_t candidate = 0; candidate < neighbor_count; ++candidate) {
             const auto [distance, target] = row[candidate];
             insert_candidate(leaf[source], leaf[target], distance);
             insert_candidate(leaf[target], leaf[source], distance);
@@ -1380,7 +1450,16 @@ PiPNNPipeline::robust_prune(uint32_t source,
         return;
     }
     selected.reserve(std::min<uint64_t>(ordered.size(), max_degree));
-    for (const auto& [source_distance, candidate] : ordered) {
+    for (uint64_t candidate_index = 0; candidate_index < ordered.size(); ++candidate_index) {
+        constexpr uint64_t prefetch_distance = 4;
+        if (candidate_index + prefetch_distance < ordered.size()) {
+            const auto* future =
+                vector_by_local_id(ordered[candidate_index + prefetch_distance].second);
+            for (uint64_t dim = 0; dim < dimensions_; dim += 16) {
+                Prefetch(future + dim);
+            }
+        }
+        const auto& [source_distance, candidate] = ordered[candidate_index];
         bool keep = true;
         for (const auto neighbor : selected) {
             if (parameter_.alpha * pair_distance(neighbor, candidate) < source_distance) {
